@@ -1,0 +1,159 @@
+name: repo-sanity
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  repo-sanity:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify repository-init invariants
+        shell: bash
+        run: |
+          set -euo pipefail
+          die() { echo "repo-sanity: $*" >&2; exit 1; }
+
+          required=(
+            README.md
+            .gitignore
+            .gitattributes
+            .editorconfig
+            docs/PRD.md
+            docs/ARCHITECTURE.md
+            docs/DATA_MODEL.md
+            docs/API_CONTRACTS.md
+            docs/PRIVACY.md
+            docs/AI_EVALUATION.md
+            docs/ADR/README.md
+            .github/workflows/repo-sanity.yml
+          )
+          for path in "${required[@]}"; do
+            [ -f "$path" ] || die "missing required Phase-zero file: $path"
+          done
+
+          stubs=(
+            docs/ARCHITECTURE.md
+            docs/DATA_MODEL.md
+            docs/API_CONTRACTS.md
+            docs/PRIVACY.md
+            docs/AI_EVALUATION.md
+          )
+          for path in "${stubs[@]}"; do
+            grep -q 'Status: deferred.' "$path" || die "stub missing 'Status: deferred.': $path"
+          done
+
+          prd_size=$(wc -c < docs/PRD.md | tr -d ' ')
+          [ "$prd_size" -ge 5000 ] || die "docs/PRD.md is not substantive (${prd_size} bytes; need >= 5000)"
+          grep -q 'Executive Summary' docs/PRD.md || die "docs/PRD.md missing 'Executive Summary'"
+
+          grep -q 'ai-fashion-vault' README.md || die "README.md missing 'ai-fashion-vault'"
+          grep -q 'Phase-zero' README.md || die "README.md missing 'Phase-zero'"
+          grep -q 'Target topology' README.md || die "README.md missing 'Target topology'"
+          grep -q 'docs/PRD.md' README.md || die "README.md missing docs/PRD.md reference"
+
+          docs_links=(
+            docs/PRD.md
+            docs/ARCHITECTURE.md
+            docs/DATA_MODEL.md
+            docs/API_CONTRACTS.md
+            docs/PRIVACY.md
+            docs/AI_EVALUATION.md
+            docs/ADR/README.md
+          )
+          for path in "${docs_links[@]}"; do
+            [ -f "$path" ] || die "Phase-zero documentation link does not resolve: $path"
+          done
+
+          grep -q 'eol=lf' .gitattributes || die ".gitattributes must contain eol=lf"
+
+          advanced=0
+          if [ -f mobile/package.json ] || [ -d mobile/android ] || [ -d mobile/ios ] || [ -d mobile/src ]; then
+            advanced=1
+          fi
+          if [ -f backend/pom.xml ] || [ -d backend/src ]; then
+            advanced=1
+          fi
+          if [ -f compose.yaml ] || [ -f docker-compose.yml ]; then
+            advanced=1
+          fi
+          if [ -d infra ] && find infra -type f ! -name '.gitkeep' -print -quit | grep -q .; then
+            advanced=1
+          fi
+
+          if [ "$advanced" -eq 0 ]; then
+            forbidden=(
+              mobile/package.json
+              mobile/android/
+              mobile/ios/
+              backend/pom.xml
+              backend/src/
+              compose.yaml
+              docker-compose.yml
+            )
+            for path in "${forbidden[@]}"; do
+              [ ! -e "$path" ] || die "greenfield-forbidden premature path: $path"
+            done
+          else
+            echo "ADVANCED repository detected; skipping greenfield-forbidden path failures"
+          fi
+
+          secret_hits=0
+          while IFS= read -r path; do
+            [ -n "$path" ] || continue
+            base="${path##*/}"
+            base_lc=$(printf '%s' "$base" | tr '[:upper:]' '[:lower:]')
+            reject=0
+            if [ "$base_lc" = '.env' ]; then
+              reject=1
+            elif [ "${base_lc#.env.}" != "$base_lc" ] && [ "$base_lc" != '.env.example' ]; then
+              reject=1
+            fi
+            case "$base_lc" in
+              *.pem|*.key|*.p12|*.pfx|*.jks|*.keystore|*.tfstate) reject=1 ;;
+              *.tfvars.example) ;;
+              *.tfvars) reject=1 ;;
+              id_rsa|id_dsa|id_ecdsa|id_ed25519) reject=1 ;;
+            esac
+            if [ "$base_lc" = 'credentials' ]; then
+              reject=1
+            fi
+            if [ "$reject" -eq 1 ]; then
+              echo "repo-sanity: tracked secret-prone path: $path" >&2
+              secret_hits=1
+            fi
+          done < <(git ls-files)
+          [ "$secret_hits" -eq 0 ] || die "tracked secret-prone filenames are rejected"
+
+          empty_tree=$(git hash-object -t tree /dev/null)
+          git --no-pager diff --check "$empty_tree" HEAD -- . ':(exclude)*.md'
+
+          crlf_hits=0
+          while IFS= read -r -d '' path; do
+            if grep -q $'\r' "$path"; then
+              echo "repo-sanity: CRLF in tracked file: $path" >&2
+              crlf_hits=1
+            fi
+          done < <(git ls-files -z -- '*.sh' '*.bash' '*.yml' '*.md' '*.py')
+          [ "$crlf_hits" -eq 0 ] || die "tracked *.sh/*.bash/*.yml/*.md/*.py must use LF"
+
+          if [ -f compose.yaml ] || [ -f docker-compose.yml ]; then
+            if ! docker compose version >/dev/null 2>&1; then
+              die "Compose file exists but Docker Compose is unavailable"
+            fi
+            if [ -f compose.yaml ]; then
+              docker compose -f compose.yaml config >/dev/null
+            fi
+            if [ -f docker-compose.yml ]; then
+              docker compose -f docker-compose.yml config >/dev/null
+            fi
+          else
+            echo "Compose validation: N/A (no Compose file)"
+          fi
+
+      - name: Repo-init idempotency seam
+        shell: bash
+        run: python3 scripts/test_repo_init.py
