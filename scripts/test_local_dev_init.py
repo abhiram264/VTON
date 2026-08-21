@@ -500,6 +500,11 @@ ai-fashion-vault-local-generation-work
         data = hook.read_bytes()
         self.assertTrue(data.startswith(b"#!/usr/bin/env python3\n"), data[:48])
         self.assertNotIn(b"\r\n", data)
+        self.assertRegex(
+            data.decode("utf-8"),
+            r"(?m)^main\(\)\s*$",
+            "READY hook must invoke main() at module level for LocalStack's Python init runner",
+        )
 
 
 if __name__ == "__main__":

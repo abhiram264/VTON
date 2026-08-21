@@ -108,5 +108,5 @@ def main() -> None:
     )
 
 
-if __name__ == "__main__":
-    main()
+# LocalStack's Python init runner may not set __name__ == "__main__".
+main()
