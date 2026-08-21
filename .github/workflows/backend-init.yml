@@ -32,4 +32,4 @@ jobs:
           distribution: temurin
           java-version: '21'
           cache: maven
-      - run: mvnw.cmd verify
+      - run: ./mvnw.cmd verify
