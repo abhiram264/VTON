@@ -137,21 +137,35 @@ jobs:
               echo "repo-sanity: CRLF in tracked file: $path" >&2
               crlf_hits=1
             fi
-          done < <(git ls-files -z -- '*.sh' '*.bash' '*.yml' '*.md' '*.py')
-          [ "$crlf_hits" -eq 0 ] || die "tracked *.sh/*.bash/*.yml/*.md/*.py must use LF"
+          done < <(git ls-files -z -- '*.sh' '*.bash' '*.yml' '*.yaml' '*.md' '*.py')
+          [ "$crlf_hits" -eq 0 ] || die "tracked *.sh/*.bash/*.yml/*.yaml/*.md/*.py must use LF"
 
-          if [ -f compose.yaml ] || [ -f docker-compose.yml ]; then
+          recognized_compose=(compose.yaml compose.yml docker-compose.yaml docker-compose.yml)
+          found_compose=()
+          for path in "${recognized_compose[@]}"; do
+            [ -f "$path" ] && found_compose+=("$path")
+          done
+          if [ "${#found_compose[@]}" -eq 0 ]; then
+            echo "Compose validation: N/A (no Compose file)"
+          elif [ "${#found_compose[@]}" -gt 1 ]; then
+            die "ambiguous Compose filenames (${found_compose[*]}); do not validate both or rely on Docker filename precedence"
+          elif [ "${found_compose[0]}" != "compose.yaml" ]; then
+            die "legacy Compose filename ${found_compose[0]}; canonical artifact is compose.yaml"
+          else
             if ! docker compose version >/dev/null 2>&1; then
               die "Compose file exists but Docker Compose is unavailable"
             fi
-            if [ -f compose.yaml ]; then
+            LOCALSTACK_AUTH_TOKEN=ci-placeholder POSTGRES_PASSWORD=ci-placeholder \
               docker compose -f compose.yaml config >/dev/null
-            fi
-            if [ -f docker-compose.yml ]; then
-              docker compose -f docker-compose.yml config >/dev/null
-            fi
+          fi
+
+      - name: Local-dev init test
+        shell: bash
+        run: |
+          if [ -f scripts/test_local_dev_init.py ]; then
+            python3 scripts/test_local_dev_init.py
           else
-            echo "Compose validation: N/A (no Compose file)"
+            echo "Local-dev init test: N/A (scripts/test_local_dev_init.py not present)"
           fi
 
       - name: Repo-init idempotency seam

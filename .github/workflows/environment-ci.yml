@@ -1,0 +1,75 @@
+name: environment-ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  environment-pr:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Verify Java 21 and Spring Boot 4.x
+        run: |
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+          pom = Path("backend/pom.xml").read_text(encoding="utf-8")
+          if "<java.version>21</java.version>" not in pom:
+              raise SystemExit("Java major version must be 21")
+          m = re.search(
+              r"<artifactId>spring-boot-starter-parent</artifactId>\s*<version>([^<]+)</version>",
+              pom,
+          )
+          if not m or not m.group(1).startswith("4."):
+              raise SystemExit("Spring Boot parent must be 4.x")
+          PY
+
+      - name: Backend tests
+        working-directory: backend
+        run: |
+          chmod +x mvnw
+          ./mvnw verify
+
+      - name: Environment policy
+        run: python3 scripts/test_environment_contract.py
+
+      - name: Content secret scan
+        run: python3 scripts/secret_content_scan.py
+
+      - name: Compose render
+        run: |
+          LOCALSTACK_AUTH_TOKEN=ci-placeholder POSTGRES_PASSWORD=ci-placeholder \
+            docker compose -f compose.yaml config >/dev/null
+
+  localstack-runtime:
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    env:
+      LOCALSTACK_AUTH_TOKEN: ${{ secrets.LOCALSTACK_AUTH_TOKEN }}
+      POSTGRES_PASSWORD: ci-placeholder
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Require LocalStack CI token
+        run: |
+          if [ -z "${LOCALSTACK_AUTH_TOKEN}" ]; then
+            echo "LOCALSTACK_AUTH_TOKEN is required for trusted runtime proof" >&2
+            exit 1
+          fi
+
+      - name: LocalStack runtime proof
+        run: python3 scripts/test_localstack_resources.py

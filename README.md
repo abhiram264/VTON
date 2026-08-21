@@ -64,7 +64,23 @@ ai-fashion-vault/
 └── README.md
 ```
 
-The intended future Compose filename is `compose.yaml`.
+Canonical Compose artifact: `compose.yaml` (now present).
+
+## Local Development Environment
+
+Commercial LocalStack entitlement is a local-development prerequisite. Set `LOCALSTACK_AUTH_TOKEN` (never commit a real token). Copy `.env.example` to an untracked `.env`.
+
+The stack is PostgreSQL and LocalStack only (no Redis). Backend and mobile stay on host toolchains; they are not Compose services.
+
+```text
+docker compose up -d
+docker compose down          # preserves named volumes
+docker compose down -v       # explicit destructive reset
+```
+
+Port conflicts and parallel worktrees: set `POSTGRES_PORT` and/or `LOCALSTACK_PORT`, and override the Compose project name. Do not edit tracked Compose files for those overrides.
+
+The generation-temp bucket is a storage-domain boundary only; this environment does not enforce 24-hour deletion.
 
 ## Documentation
 
@@ -88,12 +104,19 @@ Use repository-relative paths only. Do not commit machine-specific absolute path
 
 ## Application boot
 
-Application boot commands do not exist yet. This slice is repository initialization, not application scaffolding.
+Clean checkout (do not edit tracked Compose files):
+
+1. Copy `.env.example` to an untracked `.env`.
+2. Set `LOCALSTACK_AUTH_TOKEN` and `POSTGRES_PASSWORD` in `.env`. Do not add `DB_PASSWORD` to `.env.example`.
+3. `docker compose up -d`
+4. Verify PostgreSQL and LocalStack readiness.
+5. Launch the host-run backend: `python scripts/run_backend.py`
+
+The launcher reads only the repository-root `.env` (the same file Compose uses). `POSTGRES_PORT` and `LOCALSTACK_PORT` overrides apply to both Compose and the derived JDBC/LocalStack endpoints. `LOCALSTACK_AUTH_TOKEN` is infrastructure-only and is not passed to the JVM.
 
 ## Next slices
 
-Settled order:
+Settled remaining order:
 
 1. Backend Project Initialization
 2. Mobile Project Initialization
-3. Local Development Environment

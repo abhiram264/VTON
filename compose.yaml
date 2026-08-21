@@ -1,0 +1,42 @@
+name: ai-fashion-vault
+
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_DB: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+
+  localstack:
+    image: localstack/localstack-pro:2026.07.2
+    environment:
+      SERVICES: s3,sqs
+      PERSISTENCE: "1"
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: us-east-1
+      LOCALSTACK_AUTH_TOKEN: ${LOCALSTACK_AUTH_TOKEN:?LOCALSTACK_AUTH_TOKEN is required}
+    ports:
+      - "127.0.0.1:${LOCALSTACK_PORT:-4566}:4566"
+    volumes:
+      - localstack_data:/var/lib/localstack
+      - ./infra/docker/localstack_ready.py:/etc/localstack/init/ready.d/localstack_ready.py:ro
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import json,urllib.request; d=json.load(urllib.request.urlopen('http://127.0.0.1:4566/_localstack/init/ready')); raise SystemExit(0 if d.get('completed') is True and not any(s.get('state')=='ERROR' for s in d.get('scripts') or []) else 1)",
+        ]
+
+volumes:
+  postgres_data:
+  localstack_data:

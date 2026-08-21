@@ -1,0 +1,11 @@
+android/
+ios/
+*.kt
+*.java
+*.swift
+*.m
+*.mm
+*.gradle
+*.pbxproj
+*.xcscheme
+Pods/

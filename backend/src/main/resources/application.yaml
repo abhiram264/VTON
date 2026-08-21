@@ -1,0 +1,37 @@
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never
+
+vault:
+  env: ${APP_ENV}
+  db:
+    url: ${DB_URL}
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
+  aws:
+    region: ${AWS_REGION}
+    endpoint-url-s3: ${AWS_ENDPOINT_URL_S3:}
+    endpoint-url-sqs: ${AWS_ENDPOINT_URL_SQS:}
+    access-key-id: ${AWS_ACCESS_KEY_ID:}
+    secret-access-key: ${AWS_SECRET_ACCESS_KEY:}
+  sqs:
+    generation-queue-url: ${SQS_GENERATION_QUEUE_URL}
+  s3:
+    avatar-bucket: ${S3_AVATAR_BUCKET}
+    vault-bucket: ${S3_VAULT_BUCKET}
+    look-bucket: ${S3_LOOK_BUCKET}
+    temp-bucket: ${S3_TEMP_BUCKET}
+  fashn:
+    api-key: ${FASHN_API_KEY}
+  firebase:
+    project-id: ${FIREBASE_PROJECT_ID}
+  otel:
+    service-name: ${OTEL_SERVICE_NAME}
+    resource-attributes: ${OTEL_RESOURCE_ATTRIBUTES:}
+    exporter-otlp-endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:}
+    exporter-otlp-headers: ${OTEL_EXPORTER_OTLP_HEADERS:}

@@ -10,7 +10,7 @@ This directory is the canonical namespace for Architecture Decision Records (ADR
 - Status values: Proposed, Accepted, Superseded, Deprecated.
 - Do not open an ADR for reversible implementation details.
 
-Repository Initialization created this convention only. Section 4 architecture ADRs are recorded as the fifteen files listed below.
+Repository Initialization created this convention only. Section 4 architecture ADRs are recorded as the sixteen files listed below.
 
 ## Accepted repository-init decisions
 
@@ -53,3 +53,4 @@ Accepted Section 4 records. ADR-005 replaces the implementation plan’s suggest
 - [ADR-013-quality-gate-before-user-exposure.md](ADR-013-quality-gate-before-user-exposure.md)
 - [ADR-014-generation-attempt-cost-accounting.md](ADR-014-generation-attempt-cost-accounting.md)
 - [ADR-015-raw-images-excluded-from-telemetry.md](ADR-015-raw-images-excluded-from-telemetry.md)
+- [ADR-016-licensed-localstack-for-local-aws-emulation.md](ADR-016-licensed-localstack-for-local-aws-emulation.md)
