@@ -29,8 +29,17 @@ READY_WAIT_S = 120
 POLL_S = 2
 
 
+def _redact(text: str) -> str:
+    out = text
+    for name in ("LOCALSTACK_AUTH_TOKEN", "POSTGRES_PASSWORD"):
+        value = os.environ.get(name)
+        if value:
+            out = out.replace(value, f"<{name}>")
+    return out
+
+
 def _fail(msg: str, code: int = 1) -> None:
-    print(msg, file=sys.stderr)
+    print(_redact(msg), file=sys.stderr)
     raise SystemExit(code)
 
 
@@ -94,13 +103,39 @@ def _ready(endpoint: str) -> bool:
     return not any(s.get("state") == "ERROR" for s in scripts)
 
 
+def _init_status(endpoint: str) -> str:
+    for path in ("/_localstack/init/ready", "/_localstack/init"):
+        url = f"{endpoint}{path}"
+        try:
+            with urllib.request.urlopen(url, timeout=3) as resp:
+                body = resp.read().decode("utf-8", errors="replace")
+        except (urllib.error.URLError, TimeoutError, OSError):
+            continue
+        return f"{path}: {body.strip() or '(empty)'}"
+    return "init status unavailable"
+
+
+def _localstack_logs() -> str:
+    proc = _compose("logs", "--tail", "200", "localstack", check=False)
+    text = (proc.stdout or proc.stderr or "").strip()
+    if not text:
+        return "localstack logs unavailable"
+    return text
+
+
 def _wait_ready(endpoint: str) -> None:
     deadline = time.monotonic() + READY_WAIT_S
     while time.monotonic() < deadline:
         if _ready(endpoint):
             return
         time.sleep(POLL_S)
-    _fail("LocalStack ready signal not observed")
+    status = _init_status(endpoint)
+    logs = _localstack_logs()
+    _fail(
+        "LocalStack ready signal not observed\n"
+        f"{status}\n"
+        f"{logs}"
+    )
 
 
 def _awslocal(*args: str) -> str:
