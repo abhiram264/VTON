@@ -100,7 +100,13 @@ def _ready(endpoint: str) -> bool:
     if data.get("completed") is not True:
         return False
     scripts = data.get("scripts") or []
-    return not any(s.get("state") == "ERROR" for s in scripts)
+    if any(s.get("state") == "ERROR" for s in scripts):
+        return False
+    return any(
+        "localstack_ready.py" in str(s.get("name") or "")
+        and s.get("state") == "SUCCESSFUL"
+        for s in scripts
+    )
 
 
 def _init_status(endpoint: str) -> str:
@@ -123,19 +129,25 @@ def _localstack_logs() -> str:
     return text
 
 
+def _runtime_proof(endpoint: str) -> str:
+    return f"{_init_status(endpoint)}\n{_localstack_logs()}"
+
+
 def _wait_ready(endpoint: str) -> None:
     deadline = time.monotonic() + READY_WAIT_S
     while time.monotonic() < deadline:
         if _ready(endpoint):
             return
         time.sleep(POLL_S)
-    status = _init_status(endpoint)
-    logs = _localstack_logs()
-    _fail(
-        "LocalStack ready signal not observed\n"
-        f"{status}\n"
-        f"{logs}"
-    )
+    _fail("LocalStack ready signal not observed\n" + _runtime_proof(endpoint))
+
+
+def _verify_or_prove(endpoint: str) -> None:
+    try:
+        _verify()
+    except SystemExit:
+        print(_redact(_runtime_proof(endpoint)), file=sys.stderr)
+        raise
 
 
 def _awslocal(*args: str) -> str:
@@ -259,12 +271,12 @@ def main() -> None:
             owned = True
         try:
             _wait_ready(endpoint)
-            _verify()
+            _verify_or_prove(endpoint)
         finally:
             if owned:
                 _compose("down", check=False)
     else:
-        _verify()
+        _verify_or_prove(endpoint)
 
 
 if __name__ == "__main__":
