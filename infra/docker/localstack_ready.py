@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Idempotent LocalStack READY hook for local S3 buckets, generation-work queue, and DLQ."""
 
 import json

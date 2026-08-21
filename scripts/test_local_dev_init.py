@@ -6,7 +6,6 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import stat
 import subprocess
 import sys
 import tempfile
@@ -490,13 +489,17 @@ ai-fashion-vault-local-generation-work
                 self.assertFalse((self.root / "compose.yaml").exists())
                 self.assertFalse((self.root / ".env.example").exists())
 
-    def test_python_hook_has_no_plusx_contract(self) -> None:
-        proc = _run_init(self.root)
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        hook = self.root / "infra" / "docker" / "localstack_ready.py"
-        self.assertTrue(hook.is_file())
-        # Executable bits are not a repository contract; presence as a file is enough.
-        _ = hook.stat().st_mode & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    def test_ready_hook_is_tracked_executable(self) -> None:
+        listing = subprocess.check_output(
+            ["git", "ls-files", "-s", "--", "infra/docker/localstack_ready.py"],
+            cwd=str(SCRIPT_HOME),
+            text=True,
+        )
+        self.assertTrue(listing.startswith("100755"), listing)
+        hook = SCRIPT_HOME / "infra" / "docker" / "localstack_ready.py"
+        data = hook.read_bytes()
+        self.assertTrue(data.startswith(b"#!/usr/bin/env python3\n"), data[:48])
+        self.assertNotIn(b"\r\n", data)
 
 
 if __name__ == "__main__":
