@@ -104,3 +104,4 @@ $RECYCLE.BIN/
 
 # Working artifacts
 .scratch/
+__pycache__/

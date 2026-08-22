@@ -1,3 +1,9 @@
+spring:
+  datasource:
+    url: ${vault.db.url}
+    username: ${vault.db.username}
+    password: ${vault.db.password}
+
 management:
   endpoints:
     web:
