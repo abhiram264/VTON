@@ -46,6 +46,10 @@ ENV_NAMES = frozenset(
         "FASHN_API_KEY",
         "FIREBASE_PROJECT_ID",
         "OTEL_SERVICE_NAME",
+        "S3_AVATAR_BUCKET",
+        "S3_VAULT_BUCKET",
+        "S3_LOOK_BUCKET",
+        "S3_TEMP_BUCKET",
     }
 )
 READY_NAMES = (

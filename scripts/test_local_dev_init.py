@@ -54,6 +54,10 @@ AWS_SECRET_ACCESS_KEY=test
 FASHN_API_KEY=
 FIREBASE_PROJECT_ID=
 OTEL_SERVICE_NAME=ai-fashion-vault-api
+S3_AVATAR_BUCKET=ai-fashion-vault-local-avatar-private
+S3_VAULT_BUCKET=ai-fashion-vault-local-vault-assets
+S3_LOOK_BUCKET=ai-fashion-vault-local-look-private
+S3_TEMP_BUCKET=ai-fashion-vault-local-generation-temp
 """
 
 COMPAT_HOOK = """# custom compatible hook
@@ -203,6 +207,10 @@ class TestLocalDevInit(IsolatedTempRoot):
                 "FASHN_API_KEY",
                 "FIREBASE_PROJECT_ID",
                 "OTEL_SERVICE_NAME",
+                "S3_AVATAR_BUCKET",
+                "S3_VAULT_BUCKET",
+                "S3_LOOK_BUCKET",
+                "S3_TEMP_BUCKET",
             ],
         )
         env_norm = env_example.replace("\r\n", "\n")

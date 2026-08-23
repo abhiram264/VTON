@@ -42,6 +42,13 @@ public final class InProcessJwtFixture {
 		return mint(defaultHeader(), validClaims(Instant.now().plusSeconds(3600)), KEYS.getPrivate());
 	}
 
+	public static String bearerTokenForSubject(String subject) {
+		Map<String, Object> claims = validClaims(Instant.now().plusSeconds(3600));
+		claims.put("sub", subject);
+		claims.put("user_id", subject);
+		return mint(defaultHeader(), claims, KEYS.getPrivate());
+	}
+
 	public static String expiredBearerToken() {
 		return mint(defaultHeader(), validClaims(Instant.now().minusSeconds(3600)), KEYS.getPrivate());
 	}
