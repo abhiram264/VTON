@@ -71,8 +71,8 @@ public final class JdbcVaultStore {
 		if (filters.collection() != null) { sql.append(" AND EXISTS(SELECT 1 FROM collection_item ci JOIN collection c ON c.id=ci.collection_id WHERE ci.vault_item_id=v.id AND c.id=? AND c.user_id=?)"); args.add(filters.collection()); args.add(user.value()); }
 		if (filters.brand() != null) { sql.append(" AND lower(v.brand)=lower(?)"); args.add(filters.brand()); }
 		if (filters.color() != null) { sql.append(" AND lower(v.color)=lower(?)"); args.add(filters.color()); }
-		if (filters.search() != null) { sql.append(" AND (lower(coalesce(v.name,'')) LIKE ? ESCAPE '\\\\' OR lower(coalesce(v.brand,'')) LIKE ? ESCAPE '\\\\' OR lower(coalesce(v.category,'')) LIKE ? ESCAPE '\\\\' OR lower(coalesce(v.subcategory,'')) LIKE ? ESCAPE '\\\\' OR lower(coalesce(v.color,'')) LIKE ? ESCAPE '\\\\' OR lower(coalesce(v.pattern,'')) LIKE ? ESCAPE '\\\\')"); String q=like(filters.search()); for(int i=0;i<6;i++) args.add(q); }
-		if (filters.source() != null) { sql.append(" AND (lower(coalesce(s.retailer,'')) LIKE ? ESCAPE '\\\\' OR lower(coalesce(s.url,'')) LIKE ? ESCAPE '\\\\')"); String q=like(filters.source()); args.add(q); args.add(q); }
+		if (filters.search() != null) { sql.append(" AND (position(? in lower(coalesce(v.name,'')))>0 OR position(? in lower(coalesce(v.brand,'')))>0 OR position(? in lower(coalesce(v.category,'')))>0 OR position(? in lower(coalesce(v.subcategory,'')))>0 OR position(? in lower(coalesce(v.color,'')))>0 OR position(? in lower(coalesce(v.pattern,'')))>0)"); String q=like(filters.search()); for(int i=0;i<6;i++) args.add(q); }
+		if (filters.source() != null) { sql.append(" AND (position(? in lower(coalesce(s.retailer,'')))>0 OR position(? in lower(coalesce(s.url,'')))>0)"); String q=like(filters.source()); args.add(q); args.add(q); }
 		if (filters.createdDate() != null) { sql.append(" AND v.created_at>=? AND v.created_at<?"); args.add(Timestamp.from(filters.createdDate().atStartOfDay().toInstant(ZoneOffset.UTC))); args.add(Timestamp.from(filters.createdDate().plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC))); }
 		sql.append(" ORDER BY v.created_at DESC, v.id DESC");
 		return jdbc.query(sql.toString(), MAPPER, args.toArray());
@@ -97,14 +97,14 @@ public final class JdbcVaultStore {
 	public DeleteResult deleteForUser(VaultItemId id, UserId user) {
 		DeleteResult result=transactions.execute(status -> {
 			if (lockForDelete(id,user).isEmpty()) return DeleteResult.NOT_FOUND;
-			Boolean used=jdbc.queryForObject("SELECT EXISTS(SELECT 1 FROM studio_item WHERE vault_item_id=? UNION ALL SELECT 1 FROM look_item WHERE vault_item_id=? UNION ALL SELECT 1 FROM generation_job_item WHERE vault_item_id=? UNION ALL SELECT 1 FROM generation_render_step_item WHERE vault_item_id=?)",Boolean.class,id.value(),id.value(),id.value(),id.value());
+			Boolean used=jdbc.queryForObject("SELECT EXISTS(SELECT 1 FROM studio_item WHERE vault_item_id=? UNION ALL SELECT 1 FROM look_item WHERE vault_item_id=? UNION ALL SELECT 1 FROM generation_job_product WHERE vault_item_id=? UNION ALL SELECT 1 FROM generation_render_step_item WHERE vault_item_id=?)",Boolean.class,id.value(),id.value(),id.value(),id.value());
 			if (Boolean.TRUE.equals(used)) return DeleteResult.IN_USE;
 			return jdbc.update("DELETE FROM vault_item WHERE id=? AND user_id=?",id.value(),user.value())==1?DeleteResult.DELETED:DeleteResult.NOT_FOUND;
 		}); return result;
 	}
 
 	private static void set(List<String>s,List<Object>a,String column,JsonNullable<String> value,boolean json){ if(!value.undefined()){s.add(column+"=?");a.add(value.value());}}
-	private static String like(String value){return "%"+value.toLowerCase().replace("\\","\\\\").replace("%","\\%").replace("_","\\_")+"%";}
+	private static String like(String value){return value.toLowerCase();}
 	private static <T> Optional<T> one(List<T> rows){return rows.stream().findFirst();}
 	private static UUID value(SourceReferenceId id){return id==null?null:id.value();}
 	private static SourceReferenceId sourceId(UUID id){return id==null?null:new SourceReferenceId(id);}
