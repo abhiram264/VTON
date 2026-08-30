@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { collectionApi, type CollectionSummary } from '../features/vault/collectionApi';
 import { vaultApi, type VaultItemSummary } from '../features/vault/vaultApi';
 import type { VaultFilter } from '../navigation/RootNavigator';
 
 const FILTERS: readonly { value: VaultFilter; label: string; category?: string }[] = [
-  { value: 'ALL', label: 'All' }, { value: 'TOPS', label: 'Tops', category: 'TOPS' },
-  { value: 'BOTTOMS', label: 'Bottoms', category: 'BOTTOMS' }, { value: 'ONE_PIECES', label: 'One Pieces', category: 'ONE_PIECES' },
-  { value: 'ETHNIC', label: 'Ethnic', category: 'ETHNIC' }, { value: 'FOOTWEAR', label: 'Footwear', category: 'FOOTWEAR' },
+  { value: 'ALL', label: 'All' }, { value: 'TOPS', label: 'Tops', category: 'TOP' },
+  { value: 'BOTTOMS', label: 'Bottoms', category: 'BOTTOM' }, { value: 'ONE_PIECES', label: 'One Pieces', category: 'ONE_PIECE' },
+  { value: 'ETHNIC', label: 'Ethnic', category: 'ETHNIC_FULL_BODY' }, { value: 'FOOTWEAR', label: 'Footwear', category: 'FOOTWEAR' },
   { value: 'HEADWEAR', label: 'Headwear', category: 'HEADWEAR' }, { value: 'ACCESSORIES', label: 'Accessories', category: 'ACCESSORIES' },
   { value: 'COLLECTIONS', label: 'Collections' },
 ];
@@ -16,6 +17,8 @@ type Props = { onProfile: () => void; onSelect?: (itemId: string) => void; selec
 export default function VaultScreen({ onProfile, onSelect, selectionUnavailable = false }: Props) {
   const [filter, setFilter] = useState<VaultFilter>('ALL');
   const [items, setItems] = useState<VaultItemSummary[]>([]);
+  const [collections, setCollections] = useState<CollectionSummary[]>([]);
+  const [collectionId, setCollectionId] = useState<string | null>(null);
   const [status, setStatus] = useState<'loading' | 'ready' | 'failed'>('loading');
   const [attempt, setAttempt] = useState(0);
   const option = FILTERS.find(value => value.value === filter) ?? FILTERS[0];
@@ -23,10 +26,20 @@ export default function VaultScreen({ onProfile, onSelect, selectionUnavailable 
   useEffect(() => {
     let active = true;
     setStatus('loading');
-    const load = option.value === 'COLLECTIONS' ? Promise.resolve([]) : vaultApi.list(option.category);
-    void load.then(value => { if (active) { setItems(value); setStatus('ready'); } }, () => { if (active) { setItems([]); setStatus('failed'); } });
+    const load = option.value === 'COLLECTIONS'
+      ? collectionApi.list().then(value => { setCollections(value); setCollectionId(null); return []; })
+      : vaultApi.list(option.category);
+    void load.then(value => { if (active) { setItems(value); setStatus('ready'); } }, () => { if (active) { setItems([]); setCollections([]); setStatus('failed'); } });
     return () => { active = false; };
   }, [attempt, option.category, option.value]);
+  useEffect(() => {
+    if (!collectionId) return;
+    let active = true;
+    setStatus('loading');
+    const memberIds = new Set(collections.find(value => value.id === collectionId)?.vaultItemIds ?? []);
+    void vaultApi.list().then(value => { if (active) { setItems(value.filter(item => memberIds.has(item.id))); setStatus('ready'); } }, () => { if (active) { setItems([]); setStatus('failed'); } });
+    return () => { active = false; };
+  }, [collectionId, collections]);
 
   return <ScrollView contentContainerStyle={styles.page}>
     <View style={styles.headingRow}><Text accessibilityRole="header" style={styles.title}>Vault</Text><Action label="Profile and settings" onPress={onProfile} /></View>
@@ -38,7 +51,9 @@ export default function VaultScreen({ onProfile, onSelect, selectionUnavailable 
     <Text accessibilityRole="header" style={styles.heading}>{option.label}</Text>
     {status === 'loading' ? <Text accessibilityLiveRegion="polite">Loading Vault items…</Text> : null}
     {status === 'failed' ? <><Text accessibilityLiveRegion="polite">Could not load Vault items.</Text><Action label="Retry Vault" onPress={() => setAttempt(value => value + 1)} /></> : null}
-    {status === 'ready' && items.length === 0 ? <Text>No Vault items in {option.label}.</Text> : null}
+    {status === 'ready' && option.value === 'COLLECTIONS' && !collectionId && collections.length === 0 ? <Text>No collections yet.</Text> : null}
+    {status === 'ready' && option.value === 'COLLECTIONS' && !collectionId ? collections.map(collection => <Action key={collection.id} label={collection.name} onPress={() => setCollectionId(collection.id)} />) : null}
+    {status === 'ready' && (option.value !== 'COLLECTIONS' || collectionId) && items.length === 0 ? <Text>No Vault items in {option.label}.</Text> : null}
     {items.map(item => <Action key={item.id} label={item.name} onPress={() => onSelect?.(item.id)} disabled={!onSelect} />)}
   </ScrollView>;
 }

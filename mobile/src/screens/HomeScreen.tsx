@@ -1,6 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { choosePhoto } from '../features/my-model/photoSource';
+import { looksApi } from '../features/looks/looksApi';
+import type { LookResource } from '../features/generation/types';
 import type { SharePayload } from '../features/share/types';
 
 type Props = {
@@ -10,10 +12,17 @@ type Props = {
   onQuickTry: () => void;
 };
 
-export default function HomeScreen({ onImport, onProfile, onQuickTry }: Props) {
+export default function HomeScreen({ onImport, onOpenLook, onProfile, onQuickTry }: Props) {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [looks, setLooks] = useState<LookResource[]>([]);
+  const [looksStatus, setLooksStatus] = useState<'loading' | 'ready' | 'failed'>('loading');
 
+  useEffect(() => {
+    let active = true;
+    void looksApi.list().then(value => { if (active) { setLooks(value); setLooksStatus('ready'); } }, () => { if (active) setLooksStatus('failed'); });
+    return () => { active = false; };
+  }, []);
   async function importItem() {
     if (busy) return;
     setBusy(true);
@@ -39,7 +48,10 @@ export default function HomeScreen({ onImport, onProfile, onQuickTry }: Props) {
       <Text accessibilityRole="header" style={styles.heading}>Recent shares</Text>
       <Text>No recent shares yet.</Text>
       <Text accessibilityRole="header" style={styles.heading}>Recent Looks</Text>
-      <Text>No recent Looks yet.</Text>
+      {looksStatus === 'loading' ? <Text accessibilityLiveRegion="polite">Loading recent Looks…</Text> : null}
+      {looksStatus === 'failed' ? <Text accessibilityLiveRegion="polite">Could not load recent Looks.</Text> : null}
+      {looksStatus === 'ready' && looks.length === 0 ? <Text>No recent Looks yet.</Text> : null}
+      {looks.map(look => <Action key={look.id} label={`Recent Look ${look.id}`} onPress={() => onOpenLook(look.id)} />)}
       <Action label="Quick Try" onPress={onQuickTry} />
     </View>
   );
