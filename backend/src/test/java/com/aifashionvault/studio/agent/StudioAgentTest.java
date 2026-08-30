@@ -35,8 +35,23 @@ class StudioAgentTest {
     var many=agent.execute(actor,session,List.copyOf(Collections.nCopies(11,call("getStudioState",Map.of()))));
     assertThat(many.completed()).isFalse(); assertThat(many.results().getFirst().problem()).isEqualTo(AgentProblemCode.MALFORMED_CALL);
   }
+  @Test void mapsDependencyFailuresWithoutRelabellingProgrammerDefects() {
+    tools.failure = new org.springframework.dao.DataAccessResourceFailureException("database unavailable");
+    var dependency = agent.execute(actor, session, List.of(call("getStudioState", Map.of())));
+    assertThat(dependency.results().getFirst().problem()).isEqualTo(AgentProblemCode.DEPENDENCY_UNAVAILABLE);
+    tools.failure = new NullPointerException("programmer defect");
+    assertThatThrownBy(() -> agent.execute(actor, session, List.of(call("getStudioState", Map.of())))).isInstanceOf(NullPointerException.class);
+  }
+  @Test void rejectsPositionForSingleOccupantRemovalAndReplacement() {
+    String id = UUID.randomUUID().toString();
+    var removal = agent.execute(actor, session, List.of(call("removeItem", Map.of("slot", "HEAD", "position", 0))));
+    assertThat(removal.results().getFirst().problem()).isEqualTo(AgentProblemCode.MALFORMED_CALL);
+    var replacement = agent.execute(actor, session, List.of(call("replaceItem", Map.of("vaultItemId", id, "slot", "HEAD", "position", 0))));
+    assertThat(replacement.results().getFirst().problem()).isEqualTo(AgentProblemCode.MALFORMED_CALL);
+    assertThat(tools.invocations).isEmpty();
+  }
   static class RecordingTools implements StudioAgentTools {
-    List<String> invocations=new ArrayList<>(); String query,category,key;
+    List<String> invocations=new ArrayList<>(); String query,category,key; RuntimeException failure;
     private ToolValue ok(String n){invocations.add(n);return new VaultItemsValue(List.of());}
     public ToolValue searchVault(UserId a,StudioSessionId s,String q,String c){query=q;category=c;return ok("searchVault");}
     public ToolValue getVaultItem(UserId a,StudioSessionId s,VaultItemId i){return ok("getVaultItem");}
@@ -45,7 +60,7 @@ class StudioAgentTest {
     public ToolValue removeItem(UserId a,StudioSessionId s,StudioSlot x,Integer p){return ok("removeItem");}
     public ToolValue replaceItem(UserId a,StudioSessionId s,VaultItemId i,StudioSlot x,Integer p){return ok("replaceItem");}
     public ToolValue setAvatar(UserId a,StudioSessionId s,AvatarProfileId i){return ok("setAvatar");}
-    public ToolValue getStudioState(UserId a,StudioSessionId s){return ok("getStudioState");}
+    public ToolValue getStudioState(UserId a,StudioSessionId s){if (failure != null) throw failure; return ok("getStudioState");}
     public ToolValue generateLook(UserId a,StudioSessionId s,String k){key=k;return ok("generateLook");}
     public ToolValue saveLook(UserId a,StudioSessionId s,GenerationJobId i){return ok("saveLook");}
   }
