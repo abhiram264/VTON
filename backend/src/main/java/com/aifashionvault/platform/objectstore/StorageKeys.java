@@ -12,9 +12,18 @@ public final class StorageKeys {
 	}
 
 	public static StorageKey stagingKey(UserId userId, UploadId uploadId) {
+		return stagingKey(userId, uploadId, UploadPurpose.GENERIC);
+	}
+
+	public static StorageKey stagingKey(UserId userId, UploadId uploadId, UploadPurpose purpose) {
 		requireNonNull(userId, "userId");
 		requireNonNull(uploadId, "uploadId");
-		return new StorageKey("temp/" + userId.value() + "/uploads/" + uploadId.value());
+		requireNonNull(purpose, "purpose");
+		String folder = switch (purpose) {
+			case GENERIC -> "uploads";
+			case AVATAR -> "avatars";
+		};
+		return new StorageKey("temp/" + userId.value() + "/" + folder + "/" + uploadId.value());
 	}
 
 	public static StorageKey persistentKey(
@@ -31,7 +40,7 @@ public final class StorageKeys {
 			case AVATAR -> "avatars";
 			case VAULT -> "vault";
 			case LOOK -> "looks";
-			case TEMP -> throw new IllegalArgumentException("persistentKey is not for TEMP");
+			case GENERATION_INPUT, TEMP -> throw new IllegalArgumentException("persistentKey is not for " + boundary);
 		};
 		return new StorageKey("users/" + userId.value() + "/" + folder + "/" + stableId + extension(mediaType));
 	}
@@ -47,6 +56,13 @@ public final class StorageKeys {
 		requireNonNull(objectId, "objectId");
 		requireNonNull(mediaType, "mediaType");
 		return new StorageKey("temp/" + userId.value() + "/" + jobId + "/" + objectId + extension(mediaType));
+	}
+
+	public static StorageKey generationInputKey(UserId userId, UUID generationId, UUID mediaAssetId) {
+		requireNonNull(userId, "userId");
+		requireNonNull(generationId, "generationId");
+		requireNonNull(mediaAssetId, "mediaAssetId");
+		return new StorageKey("users/" + userId.value() + "/generation-inputs/" + generationId + "/" + mediaAssetId);
 	}
 
 	private static String extension(ImageMediaType mediaType) {

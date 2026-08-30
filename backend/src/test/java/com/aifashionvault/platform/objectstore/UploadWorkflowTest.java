@@ -9,6 +9,7 @@ import java.net.URI;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -50,6 +51,7 @@ class UploadWorkflowTest {
 			assertThat(store.presignUser).isEqualTo(USER_ID);
 			assertThat(store.presignUpload).isEqualTo(UPLOAD_ID);
 			assertThat(store.presignDeclaration).isEqualTo(declaration);
+			assertThat(store.presignPurpose).isEqualTo(UploadPurpose.GENERIC);
 			assertThat(store.headCount).isZero();
 			assertThat(store.readCount).isZero();
 			assertThat(store.deleteCount).isZero();
@@ -68,6 +70,22 @@ class UploadWorkflowTest {
 			assertThatThrownBy(() -> workflow.create(USER_ID, new MediaDeclaration("image/png", ImageMediaPolicy.MAX_BYTES + 1L)))
 				.isInstanceOf(ObjectStoreExceptions.InvalidUploadDeclarationException.class);
 			assertThat(store.presignCount).isZero();
+		}
+
+		@Test
+		void createWithAvatarPurposePresignsAvatarStaging() {
+			FakeObjectStore store = new FakeObjectStore();
+			UploadWorkflow workflow = new UploadWorkflow(store, new ImageInspector(), () -> FIXED_UPLOAD);
+			MediaDeclaration declaration = new MediaDeclaration("image/jpeg", 2048L);
+
+			UploadCapability capability = workflow.create(USER_ID, declaration, UploadPurpose.AVATAR);
+
+			assertThat(capability.id()).isEqualTo(UPLOAD_ID);
+			assertThat(store.presignCount).isEqualTo(1);
+			assertThat(store.presignPurpose).isEqualTo(UploadPurpose.AVATAR);
+			assertThat(store.presignDeclaration).isEqualTo(declaration);
+			assertThat(store.headCount).isZero();
+			assertThat(store.claimCount).isZero();
 		}
 	}
 
@@ -91,11 +109,40 @@ class UploadWorkflowTest {
 				VERSION));
 			assertThat(store.lastHead.boundary()).isEqualTo(StorageBoundary.TEMP);
 			assertThat(store.lastHead.objectKey()).isEqualTo(StorageKeys.stagingKey(USER_ID, UPLOAD_ID).value());
+			assertThat(store.lastHead.objectKey()).doesNotContain("/avatars/");
 			assertThat(store.lastRead.boundary()).isEqualTo(StorageBoundary.TEMP);
+			assertThat(store.lastRead.objectKey()).isEqualTo(StorageKeys.stagingKey(USER_ID, UPLOAD_ID).value());
 			assertThat(store.lastReadVersion).isEqualTo(VERSION);
 			assertThat(store.lastReadMaxBytes).isEqualTo(jpeg.length);
+			assertThat(store.headCount).isEqualTo(2);
 			assertThat(store.deleteCount).isZero();
 			assertThat(store.claimCount).isZero();
+		}
+
+		@Test
+		void avatarStagingIsPreferredOverGeneric() throws Exception {
+			byte[] jpeg = raster("JPEG", 15, 15);
+			FakeObjectStore store = new FakeObjectStore();
+			store.stage(UploadPurpose.AVATAR, new ObjectMetadata(jpeg.length, "image/jpeg", VERSION), jpeg);
+			UploadWorkflow workflow = workflow(store);
+
+			VerifiedUpload verified = workflow.complete(USER_ID, UPLOAD_ID);
+
+			assertThat(verified).isEqualTo(new VerifiedUpload(
+				UPLOAD_ID,
+				ImageMediaType.JPEG,
+				jpeg.length,
+				15,
+				15,
+				VERSION));
+			assertThat(store.lastHead.objectKey())
+				.isEqualTo(StorageKeys.stagingKey(USER_ID, UPLOAD_ID, UploadPurpose.AVATAR).value());
+			assertThat(store.lastRead.objectKey())
+				.isEqualTo(StorageKeys.stagingKey(USER_ID, UPLOAD_ID, UploadPurpose.AVATAR).value());
+			assertThat(store.lastHead.objectKey()).contains("/avatars/");
+			assertThat(store.lastHead.objectKey()).doesNotContain("/uploads/");
+			assertThat(store.headCount).isEqualTo(1);
+			assertThat(store.deleteCount).isZero();
 		}
 
 		@Test
@@ -176,7 +223,7 @@ class UploadWorkflowTest {
 			assertThat(first.height()).isEqualTo(15);
 			assertThat(store.deleteCount).isZero();
 			assertThat(store.claimCount).isZero();
-			assertThat(store.headCount).isEqualTo(2);
+			assertThat(store.headCount).isEqualTo(4);
 			assertThat(store.readCount).isEqualTo(2);
 		}
 	}
@@ -192,10 +239,28 @@ class UploadWorkflowTest {
 
 			workflow(store).abort(USER_ID, UPLOAD_ID);
 
-			assertDeletedTemp(store);
+			assertThat(store.deleteCount).isEqualTo(2);
+			assertThat(store.deleted.get(0).objectKey())
+				.isEqualTo(StorageKeys.stagingKey(USER_ID, UPLOAD_ID, UploadPurpose.AVATAR).value());
+			assertThat(store.lastDelete.boundary()).isEqualTo(StorageBoundary.TEMP);
+			assertThat(store.lastDelete.objectKey()).isEqualTo(StorageKeys.stagingKey(USER_ID, UPLOAD_ID).value());
 			assertThat(store.headCount).isZero();
 			assertThat(store.readCount).isZero();
 			assertThat(store.claimCount).isZero();
+		}
+
+		@Test
+		void abortDeletesAvatarStagingWithoutRequiringGeneric() {
+			FakeObjectStore store = new FakeObjectStore();
+			store.stage(UploadPurpose.AVATAR, new ObjectMetadata(8L, "image/jpeg", VERSION), new byte[] {1, 2, 3, 4, 5, 6, 7, 8});
+
+			workflow(store).abort(USER_ID, UPLOAD_ID);
+
+			assertThat(store.deleteCount).isEqualTo(1);
+			assertThat(store.lastDelete.objectKey())
+				.isEqualTo(StorageKeys.stagingKey(USER_ID, UPLOAD_ID, UploadPurpose.AVATAR).value());
+			assertThat(store.lastDelete.objectKey()).contains("/avatars/");
+			assertThat(store.lastDelete.objectKey()).doesNotContain("/uploads/");
 		}
 
 		@Test
@@ -205,8 +270,11 @@ class UploadWorkflowTest {
 
 			workflow(store).abort(USER_ID, UPLOAD_ID);
 
-			assertThat(store.deleteCount).isEqualTo(1);
+			assertThat(store.deleteCount).isEqualTo(2);
+			assertThat(store.deleted.get(0).objectKey())
+				.isEqualTo(StorageKeys.stagingKey(USER_ID, UPLOAD_ID, UploadPurpose.AVATAR).value());
 			assertThat(store.lastDelete.boundary()).isEqualTo(StorageBoundary.TEMP);
+			assertThat(store.lastDelete.objectKey()).isEqualTo(StorageKeys.stagingKey(USER_ID, UPLOAD_ID).value());
 		}
 
 		@Test
@@ -230,8 +298,7 @@ class UploadWorkflowTest {
 
 	private static FakeObjectStore staged(byte[] bytes, String contentType) {
 		FakeObjectStore store = new FakeObjectStore();
-		store.metadata = new ObjectMetadata(bytes.length, contentType, VERSION);
-		store.payload = bytes;
+		store.stage(UploadPurpose.GENERIC, new ObjectMetadata(bytes.length, contentType, VERSION), bytes);
 		return store;
 	}
 
@@ -273,6 +340,7 @@ class UploadWorkflowTest {
 		UserId presignUser;
 		UploadId presignUpload;
 		MediaDeclaration presignDeclaration;
+		UploadPurpose presignPurpose;
 		ObjectRef lastHead;
 		ObjectRef lastRead;
 		ObjectRef lastDelete;
@@ -284,13 +352,30 @@ class UploadWorkflowTest {
 		RuntimeException readFailure;
 		RuntimeException deleteFailure;
 		final List<ObjectRef> deleted = new ArrayList<>();
+		private final Map<String, StagedObject> objects = new HashMap<>();
+
+		void stage(UploadPurpose purpose, ObjectMetadata stagedMetadata, byte[] stagedPayload) {
+			objects.put(StorageKeys.stagingKey(USER_ID, UPLOAD_ID, purpose).value(),
+				new StagedObject(stagedMetadata, stagedPayload));
+		}
 
 		@Override
 		public UploadCapability presignStagingPut(UserId userId, UploadId uploadId, MediaDeclaration declaration) {
+			return presignStagingPut(userId, uploadId, declaration, UploadPurpose.GENERIC);
+		}
+
+		@Override
+		public UploadCapability presignStagingPut(
+			UserId userId,
+			UploadId uploadId,
+			MediaDeclaration declaration,
+			UploadPurpose purpose
+		) {
 			presignCount++;
 			presignUser = userId;
 			presignUpload = uploadId;
 			presignDeclaration = declaration;
+			presignPurpose = purpose;
 			return new UploadCapability(
 				uploadId,
 				"PUT",
@@ -306,10 +391,11 @@ class UploadWorkflowTest {
 			if (headFailure != null) {
 				throw headFailure;
 			}
-			if (metadata == null) {
+			ObjectMetadata found = metadataFor(object);
+			if (found == null) {
 				throw new ObjectStoreExceptions.StagedObjectMissingException("missing staged object");
 			}
-			return metadata;
+			return found;
 		}
 
 		@Override
@@ -321,10 +407,11 @@ class UploadWorkflowTest {
 			if (readFailure != null) {
 				throw readFailure;
 			}
-			if (payload == null) {
+			byte[] found = payloadFor(object);
+			if (found == null) {
 				throw new ObjectStoreExceptions.StagedObjectMissingException("missing staged object");
 			}
-			return payload;
+			return found;
 		}
 
 		@Override
@@ -335,6 +422,42 @@ class UploadWorkflowTest {
 			if (deleteFailure != null) {
 				throw deleteFailure;
 			}
+			if (objects.remove(object.objectKey()) != null) {
+				return;
+			}
+			if (metadata != null && isGenericKey(object)) {
+				metadata = null;
+				payload = null;
+				return;
+			}
+			throw new ObjectStoreExceptions.StagedObjectMissingException("missing staged object");
+		}
+
+		private ObjectMetadata metadataFor(ObjectRef object) {
+			StagedObject staged = objects.get(object.objectKey());
+			if (staged != null) {
+				return staged.metadata;
+			}
+			if (metadata != null && isGenericKey(object)) {
+				return metadata;
+			}
+			return null;
+		}
+
+		private byte[] payloadFor(ObjectRef object) {
+			StagedObject staged = objects.get(object.objectKey());
+			if (staged != null) {
+				return staged.payload;
+			}
+			if (payload != null && isGenericKey(object)) {
+				return payload;
+			}
+			return null;
+		}
+
+		private static boolean isGenericKey(ObjectRef object) {
+			return StorageKeys.stagingKey(USER_ID, UPLOAD_ID, UploadPurpose.GENERIC).value()
+				.equals(object.objectKey());
 		}
 
 		@Override
@@ -356,6 +479,9 @@ class UploadWorkflowTest {
 		@Override
 		public PresignedAccess presignGet(ObjectRef object, Duration ttl) {
 			throw new AssertionError("presignGet must not be called");
+		}
+
+		private record StagedObject(ObjectMetadata metadata, byte[] payload) {
 		}
 	}
 }

@@ -11,6 +11,7 @@ public record AvatarProfile(
 	UserId userId,
 	AvatarImageId primaryImageId,
 	String status,
+	int revision,
 	Instant createdAt,
 	Instant updatedAt) {
 
@@ -23,6 +24,12 @@ public record AvatarProfile(
 		}
 		if (status == null || status.isBlank()) {
 			throw new IllegalArgumentException("status is required");
+		}
+		if (!"ACTIVE".equals(status) && !"DELETING".equals(status)) {
+			throw new IllegalArgumentException("status must be ACTIVE or DELETING");
+		}
+		if (revision < 1) {
+			throw new IllegalArgumentException("revision must be >= 1");
 		}
 		if (createdAt == null) {
 			throw new IllegalArgumentException("createdAt is required");

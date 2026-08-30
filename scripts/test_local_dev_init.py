@@ -179,6 +179,7 @@ class TestLocalDevInit(IsolatedTempRoot):
         self.assertIn("1209600", hook)
         self.assertIn("RedrivePolicy", hook)
         self.assertIn("maxReceiveCount", hook)
+        self.assertIn('"maxReceiveCount": "5"', hook)
         self.assertIn("put_bucket_lifecycle_configuration", hook)
         self.assertIn("AbortIncompleteMultipartUpload", hook)
         lowered = hook.lower()

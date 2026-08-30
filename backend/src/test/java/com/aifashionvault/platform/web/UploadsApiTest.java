@@ -48,6 +48,7 @@ import com.aifashionvault.platform.objectstore.ObjectStoreExceptions;
 import com.aifashionvault.platform.objectstore.PresignedAccess;
 import com.aifashionvault.platform.objectstore.StorageKeys;
 import com.aifashionvault.platform.objectstore.UploadCapability;
+import com.aifashionvault.platform.objectstore.UploadPurpose;
 import com.aifashionvault.platform.objectstore.UploadWorkflow;
 import com.aifashionvault.platform.security.ExternalTokenVerifier;
 import com.aifashionvault.platform.security.InProcessJwtFixture;
@@ -146,6 +147,82 @@ class UploadsApiTest {
 		assertThat(node.get("expiresAt").isNull()).isFalse();
 		assertThat(body).contains("\"url\"");
 		assertThat(body).doesNotContain("bucket", "storageKey", "objectKey");
+	}
+
+	@Test
+	void authenticatedCreateWithAvatarPurposeStagesAvatarKey() throws Exception {
+		MvcResult result = mockMvc.perform(post("/uploads")
+				.queryParam("purpose", "avatar")
+				.header(HttpHeaders.AUTHORIZATION, bearer(InProcessJwtFixture.bearerToken()))
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(CREATE_BODY))
+			.andExpect(status().isOk())
+			.andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
+			.andReturn();
+
+		String body = result.getResponse().getContentAsString();
+		JsonNode node = MAPPER.readTree(body);
+		assertThat(node.get("id").stringValue()).isNotBlank();
+		assertThat(node.get("method").stringValue()).isEqualTo("PUT");
+		assertThat(node.get("url").stringValue()).isEqualTo("https://example.invalid/put");
+		assertThat(node.get("headers").propertyNames())
+			.contains("Content-Type", "Content-Length", "If-None-Match");
+		assertThat(node.get("expiresAt").isNull()).isFalse();
+		assertThat(body).contains("\"url\"");
+		assertThat(body).doesNotContain("bucket", "storageKey", "objectKey");
+		assertThat(this.fakeUploadStore.lastStagedKey).contains("/avatars/");
+		assertThat(this.fakeUploadStore.lastStagedKey).doesNotContain("/uploads/");
+		assertThat(this.fakeUploadStore.lastStagedKey).isEqualTo(StorageKeys.stagingKey(
+			this.fakeUploadStore.lastUserId,
+			this.fakeUploadStore.lastUploadId,
+			UploadPurpose.AVATAR).value());
+	}
+
+	@Test
+	void authenticatedCreateWithUppercaseAvatarPurposeStagesAvatarKey() throws Exception {
+		mockMvc.perform(post("/uploads")
+				.queryParam("purpose", "AVATAR")
+				.header(HttpHeaders.AUTHORIZATION, bearer(InProcessJwtFixture.bearerToken()))
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(CREATE_BODY))
+			.andExpect(status().isOk());
+
+		assertThat(this.fakeUploadStore.lastStagedKey).contains("/avatars/");
+		assertThat(this.fakeUploadStore.lastStagedKey).doesNotContain("/uploads/");
+	}
+
+	@Test
+	void authenticatedCreateWithUnknownPurposeStagesGenericKey() throws Exception {
+		mockMvc.perform(post("/uploads")
+				.queryParam("purpose", "vault")
+				.header(HttpHeaders.AUTHORIZATION, bearer(InProcessJwtFixture.bearerToken()))
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(CREATE_BODY))
+			.andExpect(status().isOk());
+
+		assertThat(this.fakeUploadStore.lastStagedKey).contains("/uploads/");
+		assertThat(this.fakeUploadStore.lastStagedKey).doesNotContain("/avatars/");
+	}
+
+	@Test
+	void completeAndAbortAvatarPurposeUploadStayOnExistingHttpContract() throws Exception {
+		String token = InProcessJwtFixture.bearerToken();
+		MvcResult created = mockMvc.perform(post("/uploads")
+				.queryParam("purpose", "avatar")
+				.header(HttpHeaders.AUTHORIZATION, bearer(token))
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(CREATE_BODY))
+			.andExpect(status().isOk())
+			.andReturn();
+		String id = MAPPER.readTree(created.getResponse().getContentAsString()).get("id").stringValue();
+
+		assertReadyWithoutStorageKeys(complete(token, id), id);
+
+		MvcResult aborted = mockMvc.perform(delete("/uploads/" + UUID.randomUUID())
+				.header(HttpHeaders.AUTHORIZATION, bearer(token)))
+			.andExpect(status().isNoContent())
+			.andReturn();
+		assertThat(aborted.getResponse().getContentAsString()).isEmpty();
 	}
 
 	@Test
@@ -347,6 +424,8 @@ class UploadsApiTest {
 		volatile UserId lastUserId;
 		volatile UploadId lastUploadId;
 		volatile UploadId lastAbortedId;
+		volatile String lastStagedKey;
+		volatile UploadPurpose lastPurpose;
 
 		void reset() {
 			this.staged.clear();
@@ -354,6 +433,8 @@ class UploadsApiTest {
 			this.lastUserId = null;
 			this.lastUploadId = null;
 			this.lastAbortedId = null;
+			this.lastStagedKey = null;
+			this.lastPurpose = null;
 		}
 
 		void failComplete(RuntimeException failure) {
@@ -362,9 +443,21 @@ class UploadsApiTest {
 
 		@Override
 		public UploadCapability presignStagingPut(UserId userId, UploadId uploadId, MediaDeclaration declaration) {
+			return presignStagingPut(userId, uploadId, declaration, UploadPurpose.GENERIC);
+		}
+
+		@Override
+		public UploadCapability presignStagingPut(
+			UserId userId,
+			UploadId uploadId,
+			MediaDeclaration declaration,
+			UploadPurpose purpose
+		) {
 			this.lastUserId = userId;
 			this.lastUploadId = uploadId;
-			this.staged.put(StorageKeys.stagingKey(userId, uploadId).value(), declaration);
+			this.lastPurpose = purpose;
+			this.lastStagedKey = StorageKeys.stagingKey(userId, uploadId, purpose).value();
+			this.staged.put(this.lastStagedKey, declaration);
 			return new UploadCapability(
 				uploadId,
 				"PUT",
@@ -378,23 +471,23 @@ class UploadsApiTest {
 
 		@Override
 		public ObjectMetadata head(ObjectRef object) {
-			if (this.completeFailure != null) {
-				throw this.completeFailure;
-			}
 			MediaDeclaration declaration = this.staged.get(object.objectKey());
 			if (declaration == null) {
 				throw new ObjectStoreExceptions.StagedObjectMissingException("missing staged object");
+			}
+			if (this.completeFailure != null) {
+				throw this.completeFailure;
 			}
 			return new ObjectMetadata(STAGED_JPEG.length, declaration.contentType(), "etag-1");
 		}
 
 		@Override
 		public byte[] readBounded(ObjectRef object, String expectedVersion, int maxBytes) {
-			if (this.completeFailure != null) {
-				throw this.completeFailure;
-			}
 			if (!this.staged.containsKey(object.objectKey())) {
 				throw new ObjectStoreExceptions.StagedObjectMissingException("missing staged object");
+			}
+			if (this.completeFailure != null) {
+				throw this.completeFailure;
 			}
 			return STAGED_JPEG;
 		}
@@ -402,6 +495,9 @@ class UploadsApiTest {
 		@Override
 		public void delete(ObjectRef object) {
 			String objectKey = object.objectKey();
+			if (!this.staged.containsKey(objectKey)) {
+				throw new ObjectStoreExceptions.StagedObjectMissingException("missing staged object");
+			}
 			int slash = objectKey.lastIndexOf('/');
 			this.lastAbortedId = new UploadId(UUID.fromString(objectKey.substring(slash + 1)));
 			this.staged.remove(objectKey);

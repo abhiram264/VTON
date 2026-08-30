@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
@@ -20,6 +21,7 @@ import com.aifashionvault.platform.objectstore.ImageMediaType;
 import com.aifashionvault.platform.objectstore.MediaDeclaration;
 import com.aifashionvault.platform.objectstore.ObjectStoreExceptions;
 import com.aifashionvault.platform.objectstore.UploadCapability;
+import com.aifashionvault.platform.objectstore.UploadPurpose;
 import com.aifashionvault.platform.objectstore.UploadWorkflow;
 import com.aifashionvault.platform.objectstore.VerifiedUpload;
 import com.aifashionvault.shared.UploadId;
@@ -40,11 +42,13 @@ public class UploadsController {
 	@PostMapping
 	public CreateUploadResponse create(
 		@AuthenticationPrincipal UserId userId,
+		@RequestParam(required = false) String purpose,
 		@RequestBody CreateUploadRequest request
 	) {
 		UploadCapability capability = workflow().create(
 			userId,
-			new MediaDeclaration(request.contentType(), request.contentLength()));
+			new MediaDeclaration(request.contentType(), request.contentLength()),
+			uploadPurpose(purpose));
 		return new CreateUploadResponse(
 			capability.id().value().toString(),
 			capability.method(),
@@ -115,6 +119,13 @@ public class UploadsController {
 			throw new ObjectStoreExceptions.ObjectStoreUnavailableException("upload workflow unavailable");
 		}
 		return workflow;
+	}
+
+	private static UploadPurpose uploadPurpose(String purpose) {
+		if (purpose != null && "avatar".equalsIgnoreCase(purpose.strip())) {
+			return UploadPurpose.AVATAR;
+		}
+		return UploadPurpose.GENERIC;
 	}
 
 	private static UploadId uploadId(String id) {

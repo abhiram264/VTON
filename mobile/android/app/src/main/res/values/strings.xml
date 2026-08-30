@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">AI Fashion Vault</string>
+    <string name="share_import_error">Couldn\'t import the shared item.</string>
 </resources>

@@ -17,6 +17,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
+import com.aifashionvault.avatar.AvatarMediaAccess;
 import com.aifashionvault.platform.environment.VaultEnvironmentProperties;
 import com.aifashionvault.shared.StorageKey;
 import com.aifashionvault.shared.UploadId;
@@ -33,6 +34,7 @@ import software.amazon.awssdk.services.s3.model.CopyObjectRequest;
 import software.amazon.awssdk.services.s3.model.CopyObjectResponse;
 import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
+import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 import software.amazon.awssdk.services.s3.model.GetObjectResponse;
 import software.amazon.awssdk.services.s3.model.HeadObjectRequest;
 import software.amazon.awssdk.services.s3.model.HeadObjectResponse;
@@ -40,6 +42,7 @@ import software.amazon.awssdk.services.s3.model.ListObjectsV2Request;
 import software.amazon.awssdk.services.s3.model.ListObjectsV2Response;
 import software.amazon.awssdk.services.s3.model.S3Exception;
 import software.amazon.awssdk.services.s3.model.S3Object;
+import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.presigner.S3Presigner;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -50,6 +53,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
 class S3ObjectStoreTest {
@@ -65,8 +69,11 @@ class S3ObjectStoreTest {
 	private static final UploadId UPLOAD_ID = new UploadId(UUID.fromString("22222222-2222-2222-2222-222222222222"));
 	private static final String USER_PREFIX = "users/11111111-1111-1111-1111-111111111111/";
 	private static final String TEMP_PREFIX = "temp/11111111-1111-1111-1111-111111111111/";
+	private static final String GENERATION_INPUT_PREFIX = "users/11111111-1111-1111-1111-111111111111/generation-inputs/";
 	private static final String STAGING_KEY =
 		"temp/11111111-1111-1111-1111-111111111111/uploads/22222222-2222-2222-2222-222222222222";
+	private static final String AVATAR_STAGING_KEY =
+		"temp/11111111-1111-1111-1111-111111111111/avatars/22222222-2222-2222-2222-222222222222";
 	private static final String DEST_KEY = "users/11111111-1111-1111-1111-111111111111/avatars/a.jpg";
 
 	private S3Presigner presigner;
@@ -88,12 +95,13 @@ class S3ObjectStoreTest {
 	class BucketMapping {
 
 		@Test
-		void fourBoundariesMapToDistinctConfiguredBuckets() {
+		void boundariesMapToConfiguredPrivateBuckets() {
 			S3ObjectStore store = store(mock(S3Client.class), (object, age) -> {
 			});
 
 			assertThat(store.bucket(StorageBoundary.AVATAR)).isEqualTo("configured-avatar");
 			assertThat(store.bucket(StorageBoundary.VAULT)).isEqualTo("configured-vault");
+			assertThat(store.bucket(StorageBoundary.GENERATION_INPUT)).isEqualTo("configured-temp");
 			assertThat(store.bucket(StorageBoundary.LOOK)).isEqualTo("configured-look");
 			assertThat(store.bucket(StorageBoundary.TEMP)).isEqualTo("configured-temp");
 			assertThat(Set.of(
@@ -215,6 +223,79 @@ class S3ObjectStoreTest {
 			assertThat(captor.getValue().key()).doesNotContain("://");
 		}
 	}
+	@Nested
+	class Listing {
+
+		@Test
+		void avatarListingPagesWithTheConfiguredBucketAndPrefixAndMapsSafeMetadata() {
+			S3Client s3 = mock(S3Client.class);
+			S3ObjectStore store = store(s3, (object, age) -> {
+			});
+			Instant firstModified = NOW.minus(Duration.ofHours(21));
+			when(s3.listObjectsV2(any(ListObjectsV2Request.class))).thenReturn(
+				ListObjectsV2Response.builder()
+					.contents(
+						obj("users/u/avatars/first.jpg", firstModified),
+						obj("", NOW),
+						obj("   ", NOW))
+					.isTruncated(true)
+					.nextContinuationToken("page-2")
+					.build(),
+				ListObjectsV2Response.builder()
+					.contents(obj("users/u/avatars/second.png", null))
+					.isTruncated(false)
+					.build());
+
+			List<StoredObject> result = store.list(StorageBoundary.AVATAR, "users/");
+
+			assertThat(result).containsExactly(
+				new StoredObject("users/u/avatars/first.jpg", firstModified),
+				new StoredObject("users/u/avatars/second.png", null));
+			ArgumentCaptor<ListObjectsV2Request> requests = ArgumentCaptor.forClass(ListObjectsV2Request.class);
+			verify(s3, times(2)).listObjectsV2(requests.capture());
+			assertThat(requests.getAllValues())
+				.extracting(ListObjectsV2Request::bucket)
+				.containsExactly("configured-avatar", "configured-avatar");
+			assertThat(requests.getAllValues())
+				.extracting(ListObjectsV2Request::prefix)
+				.containsExactly("users/", "users/");
+			assertThat(requests.getAllValues())
+				.extracting(ListObjectsV2Request::continuationToken)
+				.containsExactly(null, "page-2");
+		}
+
+		@Test
+		void listingRejectsNullBoundaryAndNullPrefixBeforeCallingS3() {
+			S3Client s3 = mock(S3Client.class);
+			S3ObjectStore store = store(s3, (object, age) -> {
+			});
+
+			assertThatThrownBy(() -> store.list(null, "users/"))
+				.isInstanceOf(IllegalArgumentException.class);
+			assertThatThrownBy(() -> store.list(StorageBoundary.AVATAR, null))
+				.isInstanceOf(IllegalArgumentException.class);
+			verifyNoInteractions(s3);
+		}
+
+		@Test
+		void avatarAdapterDelegatesToPersistentListingWithoutReadingMediaOrCreatingCapabilities() {
+			ObjectStore objectStore = mock(ObjectStore.class);
+			Instant modified = NOW.minus(Duration.ofHours(24));
+			when(objectStore.list(StorageBoundary.AVATAR, "users/")).thenReturn(List.of(
+				new StoredObject("users/u/avatars/first.jpg", modified),
+				new StoredObject("users/u/avatars/second.png", null)));
+			ObjectStoreAvatarMediaAccess access = new ObjectStoreAvatarMediaAccess(objectStore);
+
+			List<AvatarMediaAccess.PersistentObject> result = access.listPersistentAvatars();
+
+			assertThat(result).containsExactly(
+				new AvatarMediaAccess.PersistentObject(new StorageKey("users/u/avatars/first.jpg"), modified),
+				new AvatarMediaAccess.PersistentObject(new StorageKey("users/u/avatars/second.png"), null));
+			verify(objectStore).list(StorageBoundary.AVATAR, "users/");
+			verifyNoMoreInteractions(objectStore);
+		}
+	}
+
 
 	@Nested
 	class TempCleanup {
@@ -352,6 +433,25 @@ class S3ObjectStoreTest {
 		}
 
 		@Test
+		void stagingPutWithAvatarPurposeUsesAvatarsGrammar() {
+			S3ObjectStore store = store(mock(S3Client.class), (object, age) -> {
+			});
+			MediaDeclaration declaration = new MediaDeclaration("image/jpeg", 2048L);
+
+			UploadCapability capability = store.presignStagingPut(USER_ID, UPLOAD_ID, declaration, UploadPurpose.AVATAR);
+
+			assertThat(capability.id()).isEqualTo(UPLOAD_ID);
+			assertThat(capability.method()).isEqualTo("PUT");
+			assertThat(capability.uri().toString()).contains(
+				"temp/11111111-1111-1111-1111-111111111111/avatars/22222222-2222-2222-2222-222222222222");
+			assertThat(capability.uri().toString()).contains("/avatars/");
+			assertThat(capability.uri().toString()).doesNotContain("/uploads/");
+			assertThat(header(capability.signedHeaders(), "content-type")).isEqualTo("image/jpeg");
+			assertThat(header(capability.signedHeaders(), "content-length")).isEqualTo("2048");
+			assertThat(header(capability.signedHeaders(), "if-none-match")).isEqualTo("*");
+		}
+
+		@Test
 		void putAndGetExpiryQueryRemainSixHundredAndThreeHundred() {
 			S3ObjectStore store = store(mock(S3Client.class), (object, age) -> {
 			});
@@ -465,6 +565,7 @@ class S3ObjectStoreTest {
 			S3Client s3 = mock(S3Client.class);
 			S3ObjectStore store = store(s3, (object, age) -> {
 			});
+			stubAvatarStagingMissing(s3, null);
 			when(s3.copyObject(any(CopyObjectRequest.class))).thenReturn(CopyObjectResponse.builder().build());
 
 			ClaimResult result = store.claim(command("marker-1"));
@@ -479,7 +580,38 @@ class S3ObjectStoreTest {
 			assertThat(copy.destinationKey()).isEqualTo(DEST_KEY);
 			assertThat(copy.copySourceIfMatch()).isEqualTo("source-v1");
 			assertThat(copy.metadata()).containsEntry("claim-marker", "marker-1");
-			verify(s3, never()).headObject(any(HeadObjectRequest.class));
+		}
+
+		@Test
+		void copiesFromAvatarStagingKeyWhenThatObjectExists() {
+			S3Client s3 = mock(S3Client.class);
+			S3ObjectStore store = store(s3, (object, age) -> {
+			});
+			when(s3.headObject(any(HeadObjectRequest.class))).thenReturn(HeadObjectResponse.builder()
+				.contentLength(12L)
+				.contentType("image/jpeg")
+				.eTag("avatar-etag")
+				.build());
+			when(s3.copyObject(any(CopyObjectRequest.class))).thenReturn(CopyObjectResponse.builder().build());
+
+			ClaimResult result = store.claim(command("marker-1"));
+
+			assertThat(result).isInstanceOf(ClaimResult.Copied.class);
+			ArgumentCaptor<HeadObjectRequest> head = ArgumentCaptor.forClass(HeadObjectRequest.class);
+			verify(s3).headObject(head.capture());
+			assertThat(head.getValue().bucket()).isEqualTo("configured-temp");
+			assertThat(head.getValue().key()).isEqualTo(AVATAR_STAGING_KEY);
+			ArgumentCaptor<CopyObjectRequest> captor = ArgumentCaptor.forClass(CopyObjectRequest.class);
+			verify(s3).copyObject(captor.capture());
+			CopyObjectRequest copy = captor.getValue();
+			assertThat(copy.sourceBucket()).isEqualTo("configured-temp");
+			assertThat(copy.sourceKey()).isEqualTo(AVATAR_STAGING_KEY);
+			assertThat(copy.sourceKey()).isEqualTo(
+				"temp/11111111-1111-1111-1111-111111111111/avatars/22222222-2222-2222-2222-222222222222");
+			assertThat(copy.destinationBucket()).isEqualTo("configured-avatar");
+			assertThat(copy.destinationKey()).isEqualTo(DEST_KEY);
+			assertThat(copy.copySourceIfMatch()).isEqualTo("source-v1");
+			assertThat(copy.metadata()).containsEntry("claim-marker", "marker-1");
 		}
 
 		@Test
@@ -489,7 +621,7 @@ class S3ObjectStoreTest {
 			});
 			when(s3.copyObject(any(CopyObjectRequest.class)))
 				.thenThrow(s3Error(412, "PreconditionFailed", "https://configured-avatar.s3.amazonaws.com/" + DEST_KEY));
-			when(s3.headObject(any(HeadObjectRequest.class))).thenReturn(HeadObjectResponse.builder()
+			stubAvatarStagingMissing(s3, HeadObjectResponse.builder()
 				.contentType("image/jpeg")
 				.contentLength(4L)
 				.eTag("dest-etag")
@@ -498,9 +630,11 @@ class S3ObjectStoreTest {
 
 			assertThat(store.claim(command("marker-1"))).isInstanceOf(ClaimResult.Replay.class);
 			ArgumentCaptor<HeadObjectRequest> captor = ArgumentCaptor.forClass(HeadObjectRequest.class);
-			verify(s3).headObject(captor.capture());
-			assertThat(captor.getValue().bucket()).isEqualTo("configured-avatar");
-			assertThat(captor.getValue().key()).isEqualTo(DEST_KEY);
+			verify(s3, times(2)).headObject(captor.capture());
+			assertThat(captor.getAllValues())
+				.extracting(HeadObjectRequest::key)
+				.containsExactly(AVATAR_STAGING_KEY, DEST_KEY);
+			assertThat(captor.getAllValues().get(1).bucket()).isEqualTo("configured-avatar");
 		}
 
 		@Test
@@ -510,7 +644,7 @@ class S3ObjectStoreTest {
 			});
 			when(s3.copyObject(any(CopyObjectRequest.class)))
 				.thenThrow(s3Error(412, "PreconditionFailed", "precondition"));
-			when(s3.headObject(any(HeadObjectRequest.class))).thenReturn(HeadObjectResponse.builder()
+			stubAvatarStagingMissing(s3, HeadObjectResponse.builder()
 				.contentType("image/jpeg")
 				.contentLength(4L)
 				.eTag("dest-etag")
@@ -525,6 +659,7 @@ class S3ObjectStoreTest {
 			S3Client s3 = mock(S3Client.class);
 			S3ObjectStore store = store(s3, (object, age) -> {
 			});
+			stubAvatarStagingMissing(s3, null);
 			when(s3.copyObject(any(CopyObjectRequest.class)))
 				.thenThrow(s3Error(404, "NoSuchKey", "https://configured-temp.s3.amazonaws.com/" + STAGING_KEY));
 
@@ -568,13 +703,16 @@ class S3ObjectStoreTest {
 				if ("configured-temp".equals(request.bucket()) && TEMP_PREFIX.equals(request.prefix())) {
 					return ListObjectsV2Response.builder().contents(obj("temp-1", NOW)).isTruncated(false).build();
 				}
+				if ("configured-temp".equals(request.bucket()) && GENERATION_INPUT_PREFIX.equals(request.prefix())) {
+					return ListObjectsV2Response.builder().contents(obj("gen-input-1", NOW)).isTruncated(false).build();
+				}
 				return ListObjectsV2Response.builder().isTruncated(false).build();
 			});
 
 			store.purgeUserObjects(USER_ID);
 
 			ArgumentCaptor<ListObjectsV2Request> lists = ArgumentCaptor.forClass(ListObjectsV2Request.class);
-			verify(s3, times(5)).listObjectsV2(lists.capture());
+			verify(s3, times(6)).listObjectsV2(lists.capture());
 			assertThat(lists.getAllValues())
 				.anyMatch(request -> "configured-avatar".equals(request.bucket())
 					&& USER_PREFIX.equals(request.prefix())
@@ -584,15 +722,123 @@ class S3ObjectStoreTest {
 					&& "page-2".equals(request.continuationToken()))
 				.anyMatch(request -> "configured-vault".equals(request.bucket()) && USER_PREFIX.equals(request.prefix()))
 				.anyMatch(request -> "configured-look".equals(request.bucket()) && USER_PREFIX.equals(request.prefix()))
-				.anyMatch(request -> "configured-temp".equals(request.bucket()) && TEMP_PREFIX.equals(request.prefix()));
+				.anyMatch(request -> "configured-temp".equals(request.bucket()) && TEMP_PREFIX.equals(request.prefix()))
+				.anyMatch(request -> "configured-temp".equals(request.bucket())
+					&& GENERATION_INPUT_PREFIX.equals(request.prefix()));
 
 			ArgumentCaptor<DeleteObjectRequest> deleted = ArgumentCaptor.forClass(DeleteObjectRequest.class);
-			verify(s3, times(5)).deleteObject(deleted.capture());
+			verify(s3, times(6)).deleteObject(deleted.capture());
 			assertThat(deleted.getAllValues())
 				.extracting(DeleteObjectRequest::key)
-				.containsExactly("avatar-1", "avatar-2", "vault-1", "look-1", "temp-1");
+				.containsExactly("avatar-1", "avatar-2", "gen-input-1", "vault-1", "look-1", "temp-1");
 		}
 	}
+
+	@Nested
+	class GenerationMedia {
+
+		private static final String GENERATION_TEMP_KEY =
+			"temp/11111111-1111-1111-1111-111111111111/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa/bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb.jpg";
+		private static final String GENERATION_LOOK_KEY =
+			"users/11111111-1111-1111-1111-111111111111/looks/cccccccc-cccc-cccc-cccc-cccccccccccc.jpg";
+
+		@Test
+		void implementsGenerationMediaStore() {
+			assertThat(store(mock(S3Client.class), (object, age) -> {
+			})).isInstanceOf(GenerationMediaStore.class);
+		}
+
+		@Test
+		void putBoundedWritesPrivateTempObjectWithinBoundUsingIfNoneMatch() {
+			S3Client s3 = mock(S3Client.class);
+			S3ObjectStore store = store(s3, (object, age) -> {
+			});
+			byte[] payload = {1, 2, 3, 4};
+
+			store.putBounded(new StorageKey(GENERATION_TEMP_KEY), new ByteArrayInputStream(payload), 4, "image/jpeg");
+
+			ArgumentCaptor<PutObjectRequest> captor = ArgumentCaptor.forClass(PutObjectRequest.class);
+			verify(s3).putObject(captor.capture(), any(RequestBody.class));
+			PutObjectRequest put = captor.getValue();
+			assertThat(put.bucket()).isEqualTo("configured-temp");
+			assertThat(put.key()).isEqualTo(GENERATION_TEMP_KEY);
+			assertThat(put.ifNoneMatch()).isEqualTo("*");
+			assertThat(put.contentType()).isEqualTo("image/jpeg");
+			assertThat(put.contentLength()).isEqualTo(4L);
+			assertThat(put.acl()).isNull();
+			assertThat(put.key()).doesNotContain("://");
+		}
+
+		@Test
+		void putBoundedRejectsOversizedStreamWithoutPut() {
+			S3Client s3 = mock(S3Client.class);
+			S3ObjectStore store = store(s3, (object, age) -> {
+			});
+
+			assertThatThrownBy(() -> store.putBounded(
+				new StorageKey(GENERATION_TEMP_KEY),
+				new ByteArrayInputStream(new byte[] {1, 2, 3, 4}),
+				3,
+				"image/jpeg"))
+				.isInstanceOf(IllegalArgumentException.class);
+			verify(s3, never()).putObject(any(PutObjectRequest.class), any(RequestBody.class));
+		}
+
+		@Test
+		void putBoundedTreatsExistingObjectAsReplay() {
+			S3Client s3 = mock(S3Client.class);
+			S3ObjectStore store = store(s3, (object, age) -> {
+			});
+			when(s3.putObject(any(PutObjectRequest.class), any(RequestBody.class)))
+				.thenThrow(s3Error(412, "PreconditionFailed", "https://configured-temp.s3.amazonaws.com/" + GENERATION_TEMP_KEY));
+
+			store.putBounded(
+				new StorageKey(GENERATION_TEMP_KEY),
+				new ByteArrayInputStream(new byte[] {9, 8, 7}),
+				10,
+				"image/png");
+
+			verify(s3).putObject(any(PutObjectRequest.class), any(RequestBody.class));
+		}
+
+		@Test
+		void generationClaimCopiesTempToLookThenReplays() {
+			S3Client s3 = mock(S3Client.class);
+			S3ObjectStore store = store(s3, (object, age) -> {
+			});
+			when(s3.copyObject(any(CopyObjectRequest.class)))
+				.thenReturn(CopyObjectResponse.builder().build())
+				.thenThrow(s3Error(412, "PreconditionFailed", "https://configured-look.s3.amazonaws.com/" + GENERATION_LOOK_KEY));
+			when(s3.headObject(any(HeadObjectRequest.class))).thenReturn(HeadObjectResponse.builder()
+				.contentType("image/jpeg")
+				.contentLength(4L)
+				.eTag("look-etag")
+				.metadata(Map.of("claim-marker", "gen-marker"))
+				.build());
+			GenerationClaimCommand command = new GenerationClaimCommand(
+				USER_ID,
+				new StorageKey(GENERATION_TEMP_KEY),
+				new StorageKey(GENERATION_LOOK_KEY),
+				"source-v1",
+				"gen-marker");
+
+			assertThat(store.claim(command)).isInstanceOf(ClaimResult.Copied.class);
+			assertThat(store.claim(command)).isInstanceOf(ClaimResult.Replay.class);
+
+			ArgumentCaptor<CopyObjectRequest> captor = ArgumentCaptor.forClass(CopyObjectRequest.class);
+			verify(s3, times(2)).copyObject(captor.capture());
+			CopyObjectRequest copy = captor.getAllValues().getFirst();
+			assertThat(copy.sourceBucket()).isEqualTo("configured-temp");
+			assertThat(copy.sourceKey()).isEqualTo(GENERATION_TEMP_KEY);
+			assertThat(copy.destinationBucket()).isEqualTo("configured-look");
+			assertThat(copy.destinationKey()).isEqualTo(GENERATION_LOOK_KEY);
+			assertThat(copy.copySourceIfMatch()).isEqualTo("source-v1");
+			assertThat(copy.metadata()).containsEntry("claim-marker", "gen-marker");
+			assertThat(copy.sourceKey()).doesNotContain("://");
+			assertThat(copy.destinationKey()).doesNotContain("://");
+		}
+	}
+
 
 	private S3ObjectStore store(S3Client s3, TempObjectAgeAlert alert) {
 		return new S3ObjectStore(s3, presigner, BUCKETS, CLOCK, alert);
@@ -600,6 +846,19 @@ class S3ObjectStoreTest {
 
 	private static S3Object obj(String key, Instant lastModified) {
 		return S3Object.builder().key(key).lastModified(lastModified).build();
+	}
+
+	private static void stubAvatarStagingMissing(S3Client s3, HeadObjectResponse destHead) {
+		when(s3.headObject(any(HeadObjectRequest.class))).thenAnswer(invocation -> {
+			HeadObjectRequest request = invocation.getArgument(0);
+			if (AVATAR_STAGING_KEY.equals(request.key())) {
+				throw s3Error(404, "NoSuchKey", "https://configured-temp.s3.amazonaws.com/" + AVATAR_STAGING_KEY);
+			}
+			if (DEST_KEY.equals(request.key()) && destHead != null) {
+				return destHead;
+			}
+			throw s3Error(404, "NoSuchKey", "missing");
+		});
 	}
 
 	private static ClaimCommand command(String claimMarker) {

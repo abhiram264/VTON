@@ -118,6 +118,36 @@ class SqsGenerationWorkQueueTest {
 	}
 
 	@Test
+	void receiveDeletesNonUuidPoisonWithoutReturningLease() {
+		when(sqsClient.receiveMessage(any(ReceiveMessageRequest.class)))
+			.thenReturn(ReceiveMessageResponse.builder()
+				.messages(Message.builder()
+					.body("not-a-uuid")
+					.receiptHandle(RECEIPT_HANDLE)
+					.build())
+				.build());
+
+		assertThat(queue.receive()).isEmpty();
+
+		ArgumentCaptor<DeleteMessageRequest> captor = ArgumentCaptor.forClass(DeleteMessageRequest.class);
+		verify(sqsClient).deleteMessage(captor.capture());
+		assertThat(captor.getValue().queueUrl()).isEqualTo(QUEUE_URL);
+		assertThat(captor.getValue().receiptHandle()).isEqualTo(RECEIPT_HANDLE);
+		assertThat(queue.poisonMessageCount()).isEqualTo(1);
+	}
+
+	@Test
+	void feature19QueueDefaultsAreAligned() {
+		assertThat(SqsGenerationWorkQueue.VISIBILITY_TIMEOUT_SECONDS).isEqualTo(120);
+		assertThat(SqsGenerationWorkQueue.HEARTBEAT_INTERVAL_SECONDS).isEqualTo(45);
+		assertThat(SqsGenerationWorkQueue.LONG_POLL_SECONDS).isEqualTo(20);
+		assertThat(SqsGenerationWorkQueue.RECEIVE_BATCH_SIZE).isEqualTo(1);
+		assertThat(SqsGenerationWorkQueue.MAIN_RETENTION_SECONDS).isEqualTo(345600);
+		assertThat(SqsGenerationWorkQueue.DLQ_RETENTION_SECONDS).isEqualTo(1209600);
+		assertThat(SqsGenerationWorkQueue.MAX_RECEIVE_COUNT).isEqualTo(5);
+	}
+
+	@Test
 	void apiDoesNotExposeBusinessRetryCountFromSqsReceiveCount() {
 		assertThat(Arrays.stream(GenerationWorkQueue.class.getDeclaredMethods()).map(Method::getName))
 			.containsExactlyInAnyOrder("send", "receive", "extendVisibility", "delete");

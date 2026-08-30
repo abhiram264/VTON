@@ -9,6 +9,7 @@ import java.util.UUID;
 
 import javax.sql.DataSource;
 
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.dao.DataAccessException;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -16,6 +17,7 @@ import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import com.aifashionvault.shared.AccountMediaPurge;
 import com.aifashionvault.shared.IdentityMappingId;
 import com.aifashionvault.shared.UserId;
 
@@ -30,21 +32,37 @@ public final class JdbcIdentityProvisioning implements IdentityProvisioning {
 	private final JdbcTemplate jdbc;
 	private final TransactionTemplate transactions;
 	private final Clock clock;
+	private final List<AccountMediaPurge> mediaPurges;
 
 	public JdbcIdentityProvisioning(DataSource dataSource) {
 		this(dataSource, Clock.systemUTC());
 	}
 
 	public JdbcIdentityProvisioning(DataSource dataSource, Clock clock) {
+		this(dataSource, clock, List.of());
+	}
+
+	public JdbcIdentityProvisioning(
+		DataSource dataSource,
+		Clock clock,
+		ObjectProvider<AccountMediaPurge> mediaPurges) {
+		this(dataSource, clock, orderedPurges(mediaPurges));
+	}
+
+	public JdbcIdentityProvisioning(DataSource dataSource, Clock clock, List<AccountMediaPurge> mediaPurges) {
 		if (dataSource == null) {
 			throw new IllegalArgumentException("dataSource is required");
 		}
 		if (clock == null) {
 			throw new IllegalArgumentException("clock is required");
 		}
+		if (mediaPurges == null) {
+			throw new IllegalArgumentException("mediaPurges is required");
+		}
 		this.jdbc = new JdbcTemplate(dataSource);
 		this.transactions = new TransactionTemplate(new DataSourceTransactionManager(dataSource));
 		this.clock = clock;
+		this.mediaPurges = List.copyOf(mediaPurges);
 	}
 
 	@Override
@@ -84,6 +102,9 @@ public final class JdbcIdentityProvisioning implements IdentityProvisioning {
 		User user = loadUser(userId);
 		if (user == null) {
 			throw new IllegalArgumentException("user is required");
+		}
+		for (AccountMediaPurge mediaPurge : mediaPurges) {
+			mediaPurge.purgeForUser(userId);
 		}
 		User deleted = UserDeletion.markDeleted(user, deletedAt);
 		jdbc.update(
@@ -160,5 +181,12 @@ public final class JdbcIdentityProvisioning implements IdentityProvisioning {
 
 	private static Instant toInstant(Timestamp timestamp) {
 		return timestamp == null ? null : timestamp.toInstant();
+	}
+
+	private static List<AccountMediaPurge> orderedPurges(ObjectProvider<AccountMediaPurge> mediaPurges) {
+		if (mediaPurges == null) {
+			throw new IllegalArgumentException("mediaPurges is required");
+		}
+		return mediaPurges.orderedStream().toList();
 	}
 }

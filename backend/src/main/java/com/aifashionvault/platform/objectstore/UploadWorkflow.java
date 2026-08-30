@@ -26,8 +26,12 @@ public final class UploadWorkflow {
 	}
 
 	public UploadCapability create(UserId userId, MediaDeclaration declaration) {
-		if (userId == null || declaration == null) {
-			throw new IllegalArgumentException("userId and declaration are required");
+		return create(userId, declaration, UploadPurpose.GENERIC);
+	}
+
+	public UploadCapability create(UserId userId, MediaDeclaration declaration, UploadPurpose purpose) {
+		if (userId == null || declaration == null || purpose == null) {
+			throw new IllegalArgumentException("userId, declaration, and purpose are required");
 		}
 		try {
 			ImageMediaPolicy.requireDeclaration(declaration.contentType(), declaration.contentLength());
@@ -41,15 +45,24 @@ public final class UploadWorkflow {
 				message == null || message.isBlank() ? "invalid upload declaration" : message);
 		}
 		UploadId uploadId = new UploadId(uploadIds.get());
-		return store.presignStagingPut(userId, uploadId, declaration);
+		return store.presignStagingPut(userId, uploadId, declaration, purpose);
 	}
 
 	public VerifiedUpload complete(UserId userId, UploadId uploadId) {
 		if (userId == null || uploadId == null) {
 			throw new IllegalArgumentException("userId and uploadId are required");
 		}
-		ObjectRef ref = stagingRef(userId, uploadId);
-		ObjectMetadata metadata = store.head(ref);
+		ObjectRef avatar = stagingRef(userId, uploadId, UploadPurpose.AVATAR);
+		ObjectRef ref;
+		ObjectMetadata metadata;
+		try {
+			metadata = store.head(avatar);
+			ref = avatar;
+		}
+		catch (ObjectStoreExceptions.StagedObjectMissingException ignored) {
+			ref = stagingRef(userId, uploadId, UploadPurpose.GENERIC);
+			metadata = store.head(ref);
+		}
 		ImageMediaType declaredType;
 		try {
 			String normalized = ImageMediaPolicy.requireDeclaration(metadata.contentType(), metadata.contentLength());
@@ -87,15 +100,20 @@ public final class UploadWorkflow {
 			throw new IllegalArgumentException("userId and uploadId are required");
 		}
 		try {
-			store.delete(stagingRef(userId, uploadId));
+			store.delete(stagingRef(userId, uploadId, UploadPurpose.AVATAR));
 		}
 		catch (ObjectStoreExceptions.StagedObjectMissingException ignored) {
-			// missing TEMP object is a successful abort
+			try {
+				store.delete(stagingRef(userId, uploadId, UploadPurpose.GENERIC));
+			}
+			catch (ObjectStoreExceptions.StagedObjectMissingException ignoredAgain) {
+				// missing TEMP object is a successful abort
+			}
 		}
 	}
 
-	private static ObjectRef stagingRef(UserId userId, UploadId uploadId) {
-		return new ObjectRef(StorageBoundary.TEMP, StorageKeys.stagingKey(userId, uploadId).value());
+	private static ObjectRef stagingRef(UserId userId, UploadId uploadId, UploadPurpose purpose) {
+		return new ObjectRef(StorageBoundary.TEMP, StorageKeys.stagingKey(userId, uploadId, purpose).value());
 	}
 
 	private static int boundedReadCap(long contentLength) {

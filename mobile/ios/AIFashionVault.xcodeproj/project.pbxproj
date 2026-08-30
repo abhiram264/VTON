@@ -10,8 +10,28 @@
 		0C80B921A6F3F58F76C31292 /* libPods-AIFashionVault.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 5DCACB8F33CDC322A6C60F78 /* libPods-AIFashionVault.a */; };
 		13B07FBF1A68108700A75B9A /* Images.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 13B07FB51A68108700A75B9A /* Images.xcassets */; };
 		761780ED2CA45674006654EE /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 761780EC2CA45674006654EE /* AppDelegate.swift */; };
+		761781012CA45674006654EE /* ShareViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 761781002CA45674006654EE /* ShareViewController.swift */; };
+		761781042CA45674006654EE /* FashionVaultShare.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 761781032CA45674006654EE /* FashionVaultShare.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		7617811A2CA45674006654EE /* ShareHandoff.swift in Sources */ = {isa = PBXBuildFile; fileRef = 761781182CA45674006654EE /* ShareHandoff.swift */; };
+		7617811B2CA45674006654EE /* ShareHandoff.m in Sources */ = {isa = PBXBuildFile; fileRef = 761781192CA45674006654EE /* ShareHandoff.m */; };
+		7617811C2CA45674006654EE /* LookNotificationRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 761781172CA45674006654EE /* LookNotificationRouter.swift */; };
+		2E64422647794AB794858FAE /* ShareHandoffDiscovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3237F98B841431DBE323BD0 /* ShareHandoffDiscovery.swift */; };
 		81AB9BB82411601600AC10FF /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */; };
 /* End PBXBuildFile section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		7617810A2CA45674006654EE /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				761781042CA45674006654EE /* FashionVaultShare.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		13B07F961A680F5B00A75B9A /* AIFashionVault.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AIFashionVault.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -22,6 +42,15 @@
 		5709B34CF0A7D63546082F79 /* Pods-AIFashionVault.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-AIFashionVault.release.xcconfig"; path = "Target Support Files/Pods-AIFashionVault/Pods-AIFashionVault.release.xcconfig"; sourceTree = "<group>"; };
 		5DCACB8F33CDC322A6C60F78 /* libPods-AIFashionVault.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = "libPods-AIFashionVault.a"; sourceTree = BUILT_PRODUCTS_DIR; };
 		761780EC2CA45674006654EE /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AppDelegate.swift; path = AIFashionVault/AppDelegate.swift; sourceTree = "<group>"; };
+		761781002CA45674006654EE /* ShareViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareViewController.swift; sourceTree = "<group>"; };
+		761781052CA45674006654EE /* FashionVaultShare-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; name = Info.plist; path = Info.plist; sourceTree = "<group>"; };
+		761781032CA45674006654EE /* FashionVaultShare.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = FashionVaultShare.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		761781192CA45674006654EE /* ShareHandoff.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; name = ShareHandoff.m; path = AIFashionVault/ShareHandoff.m; sourceTree = "<group>"; };
+		761781082CA45674006654EE /* AIFashionVault.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = AIFashionVault/AIFashionVault.entitlements; sourceTree = "<group>"; };
+		761781022CA45674006654EE /* FashionVaultShare.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = FashionVaultShare/FashionVaultShare.entitlements; sourceTree = "<group>"; };
+		D3237F98B841431DBE323BD0 /* ShareHandoffDiscovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ShareHandoffDiscovery.swift; path = AIFashionVault/ShareHandoffDiscovery.swift; sourceTree = "<group>"; };
+		761781172CA45674006654EE /* LookNotificationRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LookNotificationRouter.swift; path = AIFashionVault/LookNotificationRouter.swift; sourceTree = "<group>"; };
+		761781182CA45674006654EE /* ShareHandoff.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ShareHandoff.swift; path = AIFashionVault/ShareHandoff.swift; sourceTree = "<group>"; };
 		81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = file.storyboard; name = LaunchScreen.storyboard; path = AIFashionVault/LaunchScreen.storyboard; sourceTree = "<group>"; };
 		ED297162215061F000B7C4FE /* JavaScriptCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = JavaScriptCore.framework; path = System/Library/Frameworks/JavaScriptCore.framework; sourceTree = SDKROOT; };
 /* End PBXFileReference section */
@@ -35,6 +64,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		761781092CA45674006654EE /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -43,7 +79,12 @@
 			children = (
 				13B07FB51A68108700A75B9A /* Images.xcassets */,
 				761780EC2CA45674006654EE /* AppDelegate.swift */,
+				D3237F98B841431DBE323BD0 /* ShareHandoffDiscovery.swift */,
+				761781172CA45674006654EE /* LookNotificationRouter.swift */,
+				761781182CA45674006654EE /* ShareHandoff.swift */,
+				761781192CA45674006654EE /* ShareHandoff.m */,
 				13B07FB61A68108700A75B9A /* Info.plist */,
+				761781082CA45674006654EE /* AIFashionVault.entitlements */,
 				81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */,
 				13B07FB81A68108700A75B9A /* PrivacyInfo.xcprivacy */,
 			);
@@ -59,6 +100,16 @@
 			name = Frameworks;
 			sourceTree = "<group>";
 		};
+		761781072CA45674006654EE /* FashionVaultShare */ = {
+			isa = PBXGroup;
+			children = (
+				761781052CA45674006654EE /* FashionVaultShare-Info.plist */,
+				761781022CA45674006654EE /* FashionVaultShare.entitlements */,
+				761781002CA45674006654EE /* ShareViewController.swift */,
+			);
+			path = FashionVaultShare;
+			sourceTree = "<group>";
+		};
 		832341AE1AAA6A7D00B99B32 /* Libraries */ = {
 			isa = PBXGroup;
 			children = (
@@ -70,6 +121,7 @@
 			isa = PBXGroup;
 			children = (
 				13B07FAE1A68108700A75B9A /* AIFashionVault */,
+				761781072CA45674006654EE /* FashionVaultShare */,
 				832341AE1AAA6A7D00B99B32 /* Libraries */,
 				83CBBA001A601CBA00E9B192 /* Products */,
 				2D16E6871FA4F8E400B85C8A /* Frameworks */,
@@ -84,6 +136,7 @@
 			isa = PBXGroup;
 			children = (
 				13B07F961A680F5B00A75B9A /* AIFashionVault.app */,
+				761781032CA45674006654EE /* FashionVaultShare.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -110,16 +163,35 @@
 				13B07F8E1A680F5B00A75B9A /* Resources */,
 				00DD1BFF1BD5951E006B06BC /* Bundle React Native code and images */,
 				00EEFC60759A1932668264C0 /* [CP] Embed Pods Frameworks */,
+				7617810A2CA45674006654EE /* Embed Foundation Extensions */,
 				E235C05ADACE081382539298 /* [CP] Copy Pods Resources */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				7617810B2CA45674006654EE /* PBXTargetDependency */,
 			);
 			name = AIFashionVault;
 			productName = AIFashionVault;
 			productReference = 13B07F961A680F5B00A75B9A /* AIFashionVault.app */;
 			productType = "com.apple.product-type.application";
+		};
+		7617810124A45674006654EE /* FashionVaultShare */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 7617810E2CA45674006654EE /* Build configuration list for PBXNativeTarget "FashionVaultShare" */;
+			buildPhases = (
+				7617810C2CA45674006654EE /* Sources */,
+				761781092CA45674006654EE /* Frameworks */,
+				7617810D2CA45674006654EE /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = FashionVaultShare;
+			productName = FashionVaultShare;
+			productReference = 761781032CA45674006654EE /* FashionVaultShare.appex */;
+			productType = "com.apple.product-type.app-extension";
 		};
 /* End PBXNativeTarget section */
 
@@ -130,6 +202,9 @@
 				LastUpgradeCheck = 1210;
 				TargetAttributes = {
 					13B07F861A680F5B00A75B9A = {
+						LastSwiftMigration = 1120;
+					};
+					7617810124A45674006654EE = {
 						LastSwiftMigration = 1120;
 					};
 				};
@@ -148,6 +223,7 @@
 			projectRoot = "";
 			targets = (
 				13B07F861A680F5B00A75B9A /* AIFashionVault */,
+				7617810124A45674006654EE /* FashionVaultShare */,
 			);
 		};
 /* End PBXProject section */
@@ -159,6 +235,13 @@
 			files = (
 				81AB9BB82411601600AC10FF /* LaunchScreen.storyboard in Resources */,
 				13B07FBF1A68108700A75B9A /* Images.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		7617810D2CA45674006654EE /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -245,10 +328,40 @@
 			buildActionMask = 2147483647;
 			files = (
 				761780ED2CA45674006654EE /* AppDelegate.swift in Sources */,
+				7617811A2CA45674006654EE /* ShareHandoff.swift in Sources */,
+				7617811B2CA45674006654EE /* ShareHandoff.m in Sources */,
+				7617811C2CA45674006654EE /* LookNotificationRouter.swift in Sources */,
+				2E64422647794AB794858FAE /* ShareHandoffDiscovery.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		7617810C2CA45674006654EE /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				761781012CA45674006654EE /* ShareViewController.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		7617810B2CA45674006654EE /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 7617810124A45674006654EE /* FashionVaultShare */;
+			targetProxy = 7617810F2CA45674006654EE /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin PBXContainerItemProxy section */
+		7617810F2CA45674006654EE /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 83CBB9F71A601CBA00E9B192 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 7617810124A45674006654EE;
+			remoteInfo = FashionVaultShare;
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin XCBuildConfiguration section */
 		13B07F941A680F5B00A75B9A /* Debug */ = {
@@ -257,6 +370,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_ENTITLEMENTS = AIFashionVault/AIFashionVault.entitlements;
 				CURRENT_PROJECT_VERSION = 1;
 				ENABLE_BITCODE = NO;
 				INFOPLIST_FILE = AIFashionVault/Info.plist;
@@ -287,6 +401,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_ENTITLEMENTS = AIFashionVault/AIFashionVault.entitlements;
 				CURRENT_PROJECT_VERSION = 1;
 				INFOPLIST_FILE = AIFashionVault/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.1;
@@ -302,6 +417,53 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = "com.aifashionvault.app";
 				PRODUCT_NAME = AIFashionVault;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VERSIONING_SYSTEM = "apple-generic";
+			};
+			name = Release;
+		};
+		761781102CA45674006654EE /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_ENTITLEMENTS = FashionVaultShare/FashionVaultShare.entitlements;
+				CURRENT_PROJECT_VERSION = 1;
+				INFOPLIST_FILE = FashionVaultShare/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.1;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.aifashionvault.app.FashionVaultShare";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VERSIONING_SYSTEM = "apple-generic";
+			};
+			name = Debug;
+		};
+		761781112CA45674006654EE /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_ENTITLEMENTS = FashionVaultShare/FashionVaultShare.entitlements;
+				CURRENT_PROJECT_VERSION = 1;
+				INFOPLIST_FILE = FashionVaultShare/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.1;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.aifashionvault.app.FashionVaultShare";
+				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -456,6 +618,15 @@
 			buildConfigurations = (
 				13B07F941A680F5B00A75B9A /* Debug */,
 				13B07F951A680F5B00A75B9A /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		7617810E2CA45674006654EE /* Build configuration list for PBXNativeTarget "FashionVaultShare" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				761781102CA45674006654EE /* Debug */,
+				761781112CA45674006654EE /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

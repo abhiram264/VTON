@@ -9,16 +9,19 @@ import java.net.URL;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
 import com.aifashionvault.platform.environment.VaultEnvironmentProperties;
+import com.aifashionvault.shared.StorageKey;
 import com.aifashionvault.shared.UploadId;
 import com.aifashionvault.shared.UserId;
 
 import software.amazon.awssdk.awscore.exception.AwsServiceException;
 import software.amazon.awssdk.core.ResponseInputStream;
+import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.core.exception.SdkClientException;
 import software.amazon.awssdk.core.exception.SdkServiceException;
 import software.amazon.awssdk.services.s3.S3Client;
@@ -39,7 +42,7 @@ import software.amazon.awssdk.services.s3.presigner.S3Presigner;
 import software.amazon.awssdk.services.s3.presigner.model.PresignedGetObjectRequest;
 import software.amazon.awssdk.services.s3.presigner.model.PresignedPutObjectRequest;
 
-public final class S3ObjectStore implements ObjectStore {
+public final class S3ObjectStore implements ObjectStore, GenerationMediaStore {
 
 	private static final Duration PUT_TTL_CAP = Duration.ofMinutes(10);
 	private static final Duration GET_TTL_CAP = Duration.ofMinutes(5);
@@ -79,6 +82,7 @@ public final class S3ObjectStore implements ObjectStore {
 		return switch (boundary) {
 			case AVATAR -> buckets.avatarBucket();
 			case VAULT -> buckets.vaultBucket();
+			case GENERATION_INPUT -> buckets.tempBucket();
 			case LOOK -> buckets.lookBucket();
 			case TEMP -> buckets.tempBucket();
 		};
@@ -123,10 +127,20 @@ public final class S3ObjectStore implements ObjectStore {
 
 	@Override
 	public UploadCapability presignStagingPut(UserId userId, UploadId uploadId, MediaDeclaration declaration) {
-		if (userId == null || uploadId == null || declaration == null) {
-			throw new IllegalArgumentException("userId, uploadId, and declaration are required");
+		return presignStagingPut(userId, uploadId, declaration, UploadPurpose.GENERIC);
+	}
+
+	@Override
+	public UploadCapability presignStagingPut(
+		UserId userId,
+		UploadId uploadId,
+		MediaDeclaration declaration,
+		UploadPurpose purpose
+	) {
+		if (userId == null || uploadId == null || declaration == null || purpose == null) {
+			throw new IllegalArgumentException("userId, uploadId, declaration, and purpose are required");
 		}
-		ObjectRef object = new ObjectRef(StorageBoundary.TEMP, StorageKeys.stagingKey(userId, uploadId).value());
+		ObjectRef object = new ObjectRef(StorageBoundary.TEMP, StorageKeys.stagingKey(userId, uploadId, purpose).value());
 		PutObjectRequest put = PutObjectRequest.builder()
 			.bucket(bucket(object.boundary()))
 			.key(object.objectKey())
@@ -202,31 +216,70 @@ public final class S3ObjectStore implements ObjectStore {
 	}
 
 	@Override
+	public List<StoredObject> list(StorageBoundary boundary, String prefix) {
+		if (boundary == null) {
+			throw new IllegalArgumentException("storage boundary is required");
+		}
+		if (prefix == null) {
+			throw new IllegalArgumentException("prefix is required");
+		}
+		List<StoredObject> objects = new ArrayList<>();
+		String token = null;
+		do {
+			ListObjectsV2Request.Builder request = ListObjectsV2Request.builder()
+				.bucket(bucket(boundary))
+				.prefix(prefix);
+			if (token != null) {
+				request.continuationToken(token);
+			}
+			ListObjectsV2Response page = s3.listObjectsV2(request.build());
+			for (S3Object object : page.contents()) {
+				if (object == null || object.key() == null || object.key().isBlank()) {
+					continue;
+				}
+				objects.add(new StoredObject(object.key(), object.lastModified()));
+			}
+			token = Boolean.TRUE.equals(page.isTruncated()) ? page.nextContinuationToken() : null;
+		}
+		while (token != null);
+		return objects;
+	}
+
+	@Override
 	public ClaimResult claim(ClaimCommand command) {
 		if (command == null) {
 			throw new IllegalArgumentException("command is required");
 		}
-		ObjectRef source = new ObjectRef(
-			StorageBoundary.TEMP,
-			StorageKeys.stagingKey(command.userId(), command.uploadId()).value());
+		ObjectRef source = claimSource(command);
 		ObjectRef destination = new ObjectRef(command.destinationBoundary(), command.destination().value());
-		CopyObjectRequest copy = CopyObjectRequest.builder()
-			.sourceBucket(bucket(source.boundary()))
-			.sourceKey(source.objectKey())
-			.destinationBucket(bucket(destination.boundary()))
-			.destinationKey(destination.objectKey())
-			.metadataDirective(MetadataDirective.REPLACE)
-			.metadata(Map.of(CLAIM_MARKER, command.claimMarker()))
-			.copySourceIfMatch(command.sourceVersion())
-			.overrideConfiguration(override -> override.putHeader("If-None-Match", "*"))
+		return copyWithClaimMarker(source, destination, command.sourceVersion(), command.claimMarker());
+	}
+
+	@Override
+	public void putBounded(StorageKey dest, InputStream source, long maxBytes, String mediaType) {
+		if (dest == null || source == null) {
+			throw new IllegalArgumentException("dest and source are required");
+		}
+		if (maxBytes <= 0) {
+			throw new IllegalArgumentException("maxBytes must be positive");
+		}
+		if (mediaType == null || mediaType.isBlank()) {
+			throw new IllegalArgumentException("mediaType is required");
+		}
+		byte[] payload = readBoundedPayload(source, maxBytes);
+		PutObjectRequest put = PutObjectRequest.builder()
+			.bucket(bucket(generationMediaBoundary(dest)))
+			.key(dest.value())
+			.contentType(mediaType)
+			.contentLength((long) payload.length)
+			.ifNoneMatch("*")
 			.build();
 		try {
-			s3.copyObject(copy);
-			return new ClaimResult.Copied();
+			s3.putObject(put, RequestBody.fromBytes(payload));
 		}
 		catch (S3Exception ex) {
 			if (isPreconditionFailed(ex)) {
-				return classifyExistingDestination(destination, command.claimMarker());
+				return;
 			}
 			throw translate(ex);
 		}
@@ -236,12 +289,57 @@ public final class S3ObjectStore implements ObjectStore {
 	}
 
 	@Override
+	public ClaimResult claim(GenerationClaimCommand command) {
+		if (command == null) {
+			throw new IllegalArgumentException("command is required");
+		}
+		ObjectRef source = new ObjectRef(StorageBoundary.TEMP, command.sourceTempKey().value());
+		ObjectRef destination = new ObjectRef(StorageBoundary.LOOK, command.destinationLookKey().value());
+		return copyWithClaimMarker(source, destination, command.sourceVersion(), command.claimMarker());
+	}
+
+	@Override
+	public ClaimResult claimProductInput(ProductInputClaimCommand command) {
+		if (command == null) {
+			throw new IllegalArgumentException("command is required");
+		}
+		ObjectRef source = new ObjectRef(
+			StorageBoundary.TEMP,
+			StorageKeys.stagingKey(command.ownerId(), command.productUploadId(), UploadPurpose.GENERIC).value());
+		ObjectMetadata sourceMetadata = head(source);
+		String normalizedType;
+		try {
+			normalizedType = ImageMediaPolicy.requireDeclaration(
+				sourceMetadata.contentType(), sourceMetadata.contentLength());
+			byte[] bytes = readBounded(source, sourceMetadata.version(), boundedReadCap(sourceMetadata.contentLength()));
+			ImageMediaType inspectedType = new ImageInspector().inspect(bytes).mediaType();
+			if (!(normalizedType.equals("image/jpeg") && inspectedType == ImageMediaType.JPEG)
+				&& !(normalizedType.equals("image/png") && inspectedType == ImageMediaType.PNG)) {
+				throw new IllegalArgumentException("image type does not match stored content type");
+			}
+		}
+		catch (IllegalArgumentException | ObjectStoreExceptions.ImageValidationException ex) {
+			throw new ObjectStoreExceptions.ImageValidationException("invalid product upload");
+		}
+		ObjectRef destination = new ObjectRef(
+			StorageBoundary.GENERATION_INPUT,
+			StorageKeys.generationInputKey(
+				command.ownerId(), command.generationId().value(), command.destinationMediaId().value()).value());
+		return copyWithClaimMarker(
+			source,
+			destination,
+			sourceMetadata.version(),
+			command.generationId().value() + ":" + command.destinationMediaId().value(),
+			normalizedType);
+	}
+	@Override
 	public void purgeUserObjects(UserId userId) {
 		if (userId == null) {
 			throw new IllegalArgumentException("userId is required");
 		}
 		String id = userId.value().toString();
 		purgePrefix(StorageBoundary.AVATAR, "users/" + id + "/");
+		purgePrefix(StorageBoundary.GENERATION_INPUT, "users/" + id + "/generation-inputs/");
 		purgePrefix(StorageBoundary.VAULT, "users/" + id + "/");
 		purgePrefix(StorageBoundary.LOOK, "users/" + id + "/");
 		purgePrefix(StorageBoundary.TEMP, "temp/" + id + "/");
@@ -253,7 +351,9 @@ public final class S3ObjectStore implements ObjectStore {
 		String tempBucket = buckets.tempBucket();
 		String token = null;
 		do {
-			ListObjectsV2Request.Builder request = ListObjectsV2Request.builder().bucket(tempBucket);
+			ListObjectsV2Request.Builder request = ListObjectsV2Request.builder()
+				.bucket(tempBucket)
+				.prefix("temp/");
 			if (token != null) {
 				request.continuationToken(token);
 			}
@@ -264,6 +364,63 @@ public final class S3ObjectStore implements ObjectStore {
 			token = Boolean.TRUE.equals(page.isTruncated()) ? page.nextContinuationToken() : null;
 		}
 		while (token != null);
+	}
+
+	private ObjectRef claimSource(ClaimCommand command) {
+		ObjectRef avatar = new ObjectRef(
+			StorageBoundary.TEMP,
+			StorageKeys.stagingKey(command.userId(), command.uploadId(), UploadPurpose.AVATAR).value());
+		try {
+			head(avatar);
+			return avatar;
+		}
+		catch (ObjectStoreExceptions.StagedObjectMissingException ignored) {
+			return new ObjectRef(
+				StorageBoundary.TEMP,
+				StorageKeys.stagingKey(command.userId(), command.uploadId(), UploadPurpose.GENERIC).value());
+		}
+	}
+	private ClaimResult copyWithClaimMarker(
+		ObjectRef source,
+		ObjectRef destination,
+		String sourceVersion,
+		String claimMarker
+	) {
+		return copyWithClaimMarker(source, destination, sourceVersion, claimMarker, null);
+	}
+
+	private ClaimResult copyWithClaimMarker(
+		ObjectRef source,
+		ObjectRef destination,
+		String sourceVersion,
+		String claimMarker,
+		String contentType
+	) {
+		CopyObjectRequest.Builder builder = CopyObjectRequest.builder()
+			.sourceBucket(bucket(source.boundary()))
+			.sourceKey(source.objectKey())
+			.destinationBucket(bucket(destination.boundary()))
+			.destinationKey(destination.objectKey())
+			.metadataDirective(MetadataDirective.REPLACE)
+			.metadata(Map.of(CLAIM_MARKER, claimMarker))
+			.copySourceIfMatch(sourceVersion)
+			.overrideConfiguration(override -> override.putHeader("If-None-Match", "*"));
+		if (contentType != null) {
+			builder.contentType(contentType);
+		}
+		try {
+			s3.copyObject(builder.build());
+			return new ClaimResult.Copied();
+		}
+		catch (S3Exception ex) {
+			if (isPreconditionFailed(ex)) {
+				return classifyExistingDestination(destination, claimMarker);
+			}
+			throw translate(ex);
+		}
+		catch (SdkClientException ex) {
+			throw unavailable();
+		}
 	}
 
 	private ClaimResult classifyExistingDestination(ObjectRef destination, String claimMarker) {
@@ -390,6 +547,45 @@ public final class S3ObjectStore implements ObjectStore {
 		return null;
 	}
 
+	private static StorageBoundary generationMediaBoundary(StorageKey key) {
+		String value = key.value();
+		if (value.startsWith("temp/")) {
+			return StorageBoundary.TEMP;
+		}
+		if (value.contains("/generation-inputs/")) {
+			return StorageBoundary.GENERATION_INPUT;
+		}
+		if (value.contains("/looks/")) {
+			return StorageBoundary.LOOK;
+		}
+		throw new IllegalArgumentException("generation media destination must be a generation TEMP, input, or LOOK key");
+	}
+
+	private static byte[] readBoundedPayload(InputStream in, long maxBytes) {
+		if (maxBytes > Integer.MAX_VALUE) {
+			throw new IllegalArgumentException("maxBytes exceeds supported bound");
+		}
+		int max = (int) maxBytes;
+		try {
+			int chunk = Math.min(8192, Math.max(1, max));
+			byte[] buffer = new byte[chunk];
+			ByteArrayOutputStream out = new ByteArrayOutputStream(chunk);
+			int remaining = max;
+			int read;
+			while (remaining > 0 && (read = in.read(buffer, 0, Math.min(buffer.length, remaining))) != -1) {
+				out.write(buffer, 0, read);
+				remaining -= read;
+			}
+			if (remaining == 0 && in.read() != -1) {
+				throw new IllegalArgumentException("object exceeds maxBytes");
+			}
+			return out.toByteArray();
+		}
+		catch (IOException ex) {
+			throw unavailable();
+		}
+	}
+
 	private static byte[] readAtMost(InputStream in, int maxBytes) throws IOException {
 		if (in == null || maxBytes <= 0) {
 			return new byte[0];
@@ -404,6 +600,10 @@ public final class S3ObjectStore implements ObjectStore {
 			remaining -= read;
 		}
 		return out.toByteArray();
+	}
+
+	private static int boundedReadCap(long contentLength) {
+		return (int) Math.min(contentLength, ImageMediaPolicy.MAX_BYTES);
 	}
 
 	private static RuntimeException translate(S3Exception ex) {

@@ -2,9 +2,11 @@ package com.aifashionvault.platform.objectstore;
 
 import java.io.IOException;
 import java.lang.reflect.Constructor;
+import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.lang.reflect.ParameterizedType;
+import java.lang.reflect.Proxy;
 import java.lang.reflect.RecordComponent;
 import java.lang.reflect.Type;
 import java.net.URI;
@@ -21,6 +23,7 @@ import java.util.UUID;
 
 import org.junit.jupiter.api.Test;
 
+import com.aifashionvault.avatar.AvatarMediaAccess;
 import com.aifashionvault.shared.StorageKey;
 import com.aifashionvault.shared.UploadId;
 import com.aifashionvault.shared.UserId;
@@ -35,11 +38,12 @@ class ObjectStoreTypesTest {
 	private static final URI SIGNED_URI = URI.create("https://example.invalid/staging/put?X-Amz-Signature=redact-me-token");
 
 	@Test
-	void objectStoreDeclaresExactlyTheEightPortMethods() {
+	void objectStoreDeclaresExactlyTheTenPortMethods() {
 		assertThat(ObjectStore.class.isInterface()).isTrue();
 		Method[] methods = ObjectStore.class.getDeclaredMethods();
-		assertThat(methods).hasSize(8);
+		assertThat(methods).hasSize(10);
 		assertThat(Arrays.stream(methods).map(Method::getName)).containsExactlyInAnyOrder(
+			"presignStagingPut",
 			"presignStagingPut",
 			"head",
 			"readBounded",
@@ -47,11 +51,18 @@ class ObjectStoreTypesTest {
 			"claim",
 			"purgeUserObjects",
 			"cleanupTemp",
-			"presignGet");
+			"presignGet",
+			"list");
 
-		assertThat(methodNamed(methods, "presignStagingPut").getParameterTypes())
-			.containsExactly(UserId.class, UploadId.class, MediaDeclaration.class);
-		assertThat(methodNamed(methods, "presignStagingPut").getReturnType()).isEqualTo(UploadCapability.class);
+		assertThat(methodNamed(methods, "presignStagingPut", UserId.class, UploadId.class, MediaDeclaration.class)
+			.getReturnType()).isEqualTo(UploadCapability.class);
+		assertThat(methodNamed(
+			methods,
+			"presignStagingPut",
+			UserId.class,
+			UploadId.class,
+			MediaDeclaration.class,
+			UploadPurpose.class).getReturnType()).isEqualTo(UploadCapability.class);
 
 		assertThat(methodNamed(methods, "head").getParameterTypes()).containsExactly(ObjectRef.class);
 		assertThat(methodNamed(methods, "head").getReturnType()).isEqualTo(ObjectMetadata.class);
@@ -75,6 +86,53 @@ class ObjectStoreTypesTest {
 		assertThat(methodNamed(methods, "presignGet").getParameterTypes())
 			.containsExactly(ObjectRef.class, Duration.class);
 		assertThat(methodNamed(methods, "presignGet").getReturnType()).isEqualTo(PresignedAccess.class);
+
+		Method list = methodNamed(methods, "list", StorageBoundary.class, String.class);
+		assertThat(list.getReturnType()).isEqualTo(List.class);
+		assertThat(list.isDefault()).isTrue();
+		ParameterizedType listReturnType = (ParameterizedType) list.getGenericReturnType();
+		assertThat(listReturnType.getActualTypeArguments()).containsExactly(StoredObject.class);
+	}
+
+	@Test
+	void listingDefaultsAreEmptyAndExposeOnlyStableMetadata() {
+		ObjectStore objectStore = defaultMethodsOnly(ObjectStore.class);
+		assertThat(objectStore.list(StorageBoundary.AVATAR, "users/")).isEmpty();
+
+		AvatarMediaAccess avatarMediaAccess = defaultMethodsOnly(AvatarMediaAccess.class);
+		assertThat(avatarMediaAccess.listPersistentAvatars()).isEmpty();
+
+		Method listPersistentAvatars = methodNamed(
+			AvatarMediaAccess.class.getDeclaredMethods(),
+			"listPersistentAvatars");
+		assertThat(listPersistentAvatars.isDefault()).isTrue();
+		ParameterizedType persistentObjects = (ParameterizedType) listPersistentAvatars.getGenericReturnType();
+		assertThat(persistentObjects.getActualTypeArguments())
+			.containsExactly(AvatarMediaAccess.PersistentObject.class);
+	}
+
+	@Test
+	void storedObjectRejectsBlankKeysAndAllowsUnknownLastModified() {
+		Instant lastModified = Instant.parse("2026-08-24T12:00:00Z");
+		StoredObject stored = new StoredObject("users/u/avatars/a.jpg", lastModified);
+		assertThat(stored.key()).isEqualTo("users/u/avatars/a.jpg");
+		assertThat(stored.lastModified()).isEqualTo(lastModified);
+		assertThat(new StoredObject("users/u/avatars/b.jpg", null).lastModified()).isNull();
+
+		assertThatThrownBy(() -> new StoredObject(null, lastModified))
+			.isInstanceOf(IllegalArgumentException.class);
+		assertThatThrownBy(() -> new StoredObject("", lastModified))
+			.isInstanceOf(IllegalArgumentException.class);
+		assertThatThrownBy(() -> new StoredObject("   ", lastModified))
+			.isInstanceOf(IllegalArgumentException.class);
+	}
+
+	@Test
+	void persistentObjectRetainsStableKeyAndNullableTimestamp() {
+		StorageKey key = new StorageKey("users/u/avatars/a.jpg");
+		AvatarMediaAccess.PersistentObject object = new AvatarMediaAccess.PersistentObject(key, null);
+		assertThat(object.key()).isEqualTo(key);
+		assertThat(object.lastModified()).isNull();
 	}
 
 	@Test
@@ -93,6 +151,7 @@ class ObjectStoreTypesTest {
 			"UploadId.java",
 			"ObjectStore.java",
 			"MediaDeclaration.java",
+			"StoredObject.java",
 			"ObjectMetadata.java",
 			"UploadCapability.java",
 			"VerifiedUpload.java",
@@ -292,6 +351,12 @@ class ObjectStoreTypesTest {
 		assertThat(componentNames(MediaDeclaration.class)).containsExactly("contentType", "contentLength");
 		assertThat(componentTypes(ObjectMetadata.class)).containsExactly(long.class, String.class, String.class);
 		assertThat(componentNames(ObjectMetadata.class)).containsExactly("contentLength", "contentType", "version");
+		assertThat(componentTypes(StoredObject.class)).containsExactly(String.class, Instant.class);
+		assertThat(componentNames(StoredObject.class)).containsExactly("key", "lastModified");
+		assertThat(componentTypes(AvatarMediaAccess.PersistentObject.class))
+			.containsExactly(StorageKey.class, Instant.class);
+		assertThat(componentNames(AvatarMediaAccess.PersistentObject.class))
+			.containsExactly("key", "lastModified");
 		assertThat(componentTypes(UploadCapability.class))
 			.containsExactly(UploadId.class, String.class, URI.class, Map.class, Instant.class);
 		assertThat(componentNames(UploadCapability.class))
@@ -307,11 +372,25 @@ class ObjectStoreTypesTest {
 			"sourceVersion");
 	}
 
-	private static Method methodNamed(Method[] methods, String name) {
+	private static <T> T defaultMethodsOnly(Class<T> port) {
+		Object proxy = Proxy.newProxyInstance(
+			port.getClassLoader(),
+			new Class<?>[] { port },
+			(instance, method, arguments) -> {
+				if (method.isDefault()) {
+					return InvocationHandler.invokeDefault(instance, method, arguments);
+				}
+				throw new AssertionError("unexpected abstract method " + method);
+			});
+		return port.cast(proxy);
+	}
+
+	private static Method methodNamed(Method[] methods, String name, Class<?>... parameterTypes) {
 		return Arrays.stream(methods)
 			.filter(method -> method.getName().equals(name))
+			.filter(method -> parameterTypes.length == 0 || Arrays.equals(method.getParameterTypes(), parameterTypes))
 			.findFirst()
-			.orElseThrow(() -> new AssertionError("missing method " + name));
+			.orElseThrow(() -> new AssertionError("missing method " + name + Arrays.toString(parameterTypes)));
 	}
 
 	private static List<String> componentNames(Class<?> type) {

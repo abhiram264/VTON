@@ -41,3 +41,15 @@ vault:
     resource-attributes: ${OTEL_RESOURCE_ATTRIBUTES:}
     exporter-otlp-endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:}
     exporter-otlp-headers: ${OTEL_EXPORTER_OTLP_HEADERS:}
+  generation:
+    multi-item-enabled: false
+    admission-paused: false
+    attestation-required: false
+    queue:
+      visibility-timeout-seconds: 120
+      heartbeat-seconds: 45
+      long-poll-seconds: 20
+      receive-batch-size: 1
+      main-retention-seconds: 345600
+      dlq-retention-seconds: 1209600
+      max-receive-count: 5

@@ -1,0 +1,8 @@
+fog_surrounding_standing_man.jpg
+Source page: https://commons.wikimedia.org/wiki/File:Fog_surrounding_standing_man.jpg
+Original file: https://upload.wikimedia.org/wikipedia/commons/5/57/Fog_surrounding_standing_man.jpg
+License: CC0 1.0 Universal public-domain dedication
+License deed: https://creativecommons.org/publicdomain/zero/1.0/
+The source page identifies the work as the uploader's own work and records its CC0 dedication.
+Vendored solely as a fixed semantic-detector regression fixture. Personality rights, if any, remain unaffected.
+Source SHA-1: db76e664b523f90dbb4ccb60d9eb80d04c391f22

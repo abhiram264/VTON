@@ -9,6 +9,9 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.scheduling.annotation.Scheduled;
 
+import com.aifashionvault.avatar.AvatarBytesInspector;
+import com.aifashionvault.avatar.AvatarMediaAccess;
+import com.aifashionvault.importer.ImportMediaAccess;
 import com.aifashionvault.platform.environment.AppEnv;
 import com.aifashionvault.platform.environment.VaultEnvironmentProperties;
 
@@ -61,6 +64,21 @@ public class ObjectStoreConfiguration {
 	@Bean
 	UploadWorkflow uploadWorkflow(ObjectStore objectStore, ImageInspector imageInspector) {
 		return new UploadWorkflow(objectStore, imageInspector);
+	}
+
+	@Bean
+	AvatarMediaAccess avatarMediaAccess(ObjectStore objectStore) {
+		return new ObjectStoreAvatarMediaAccess(objectStore);
+	}
+
+	@Bean
+	ImportMediaAccess importMediaAccess(ObjectStore objectStore, ImageInspector imageInspector) {
+		return new ObjectStoreImportMediaAccess(objectStore, imageInspector);
+	}
+
+	@Bean
+	AvatarBytesInspector avatarBytesInspector(ImageInspector imageInspector) {
+		return new ImageInspectorAvatarBytesInspector(imageInspector);
 	}
 
 	@Bean

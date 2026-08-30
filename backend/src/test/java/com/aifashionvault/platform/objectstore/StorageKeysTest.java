@@ -86,10 +86,46 @@ class StorageKeysTest {
 		}
 
 		@Test
+		void genericPurposeMatchesTwoArgumentStagingKey() {
+			StorageKey withPurpose = StorageKeys.stagingKey(USER_ID, UPLOAD_ID, UploadPurpose.GENERIC);
+			StorageKey withoutPurpose = StorageKeys.stagingKey(USER_ID, UPLOAD_ID);
+
+			assertThat(withPurpose.value()).isEqualTo(withoutPurpose.value());
+			assertThat(withPurpose.value()).isEqualTo(
+				"temp/11111111-1111-1111-1111-111111111111/uploads/22222222-2222-2222-2222-222222222222");
+		}
+
+		@Test
+		void avatarPurposeUsesTempAvatarsGrammarWithNoExtension() {
+			StorageKey key = StorageKeys.stagingKey(USER_ID, UPLOAD_ID, UploadPurpose.AVATAR);
+
+			assertThat(key.value()).isEqualTo(
+				"temp/11111111-1111-1111-1111-111111111111/avatars/22222222-2222-2222-2222-222222222222");
+			assertThat(key.value()).contains("/avatars/");
+			assertThat(key.value()).doesNotContain("/uploads/");
+			assertThat(key.value()).doesNotEndWith(".jpg");
+			assertThat(key.value()).doesNotEndWith(".png");
+			assertThat(key.value()).doesNotContain(".");
+			assertThat(key.value()).contains(USER_ID.value().toString());
+			assertThat(key.value()).doesNotContain(OTHER_USER_ID.value().toString());
+		}
+
+		@Test
+		void purposeEnumIsExactlyGenericAndAvatar() {
+			assertThat(UploadPurpose.values()).containsExactly(UploadPurpose.GENERIC, UploadPurpose.AVATAR);
+		}
+
+		@Test
 		void rejectsNullArguments() {
 			assertThatThrownBy(() -> StorageKeys.stagingKey(null, UPLOAD_ID))
 				.isInstanceOf(IllegalArgumentException.class);
 			assertThatThrownBy(() -> StorageKeys.stagingKey(USER_ID, null))
+				.isInstanceOf(IllegalArgumentException.class);
+			assertThatThrownBy(() -> StorageKeys.stagingKey(null, UPLOAD_ID, UploadPurpose.GENERIC))
+				.isInstanceOf(IllegalArgumentException.class);
+			assertThatThrownBy(() -> StorageKeys.stagingKey(USER_ID, null, UploadPurpose.AVATAR))
+				.isInstanceOf(IllegalArgumentException.class);
+			assertThatThrownBy(() -> StorageKeys.stagingKey(USER_ID, UPLOAD_ID, null))
 				.isInstanceOf(IllegalArgumentException.class);
 		}
 	}

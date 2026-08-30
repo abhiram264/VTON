@@ -19,6 +19,8 @@ import com.aifashionvault.platform.environment.AppEnv;
 import com.aifashionvault.platform.environment.VaultEnvironmentConfiguration;
 import com.aifashionvault.platform.environment.VaultEnvironmentProperties;
 
+import com.aifashionvault.importer.ImportMediaAccess;
+
 import software.amazon.awssdk.auth.credentials.DefaultCredentialsProvider;
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
 import software.amazon.awssdk.regions.Region;
@@ -57,8 +59,8 @@ class ObjectStoreConfigurationTest {
 				assertThat(context).hasSingleBean(UploadWorkflow.class);
 				assertThat(context).hasSingleBean(S3Client.class);
 				assertThat(context).hasSingleBean(S3Presigner.class);
-				assertThat(context).hasSingleBean(ImageInspector.class);
 				assertThat(context).hasSingleBean(LoggingTempObjectAgeAlert.class);
+				assertThat(context).hasSingleBean(ImportMediaAccess.class);
 				assertThat(context.getBean(ObjectStore.class)).isInstanceOf(S3ObjectStore.class);
 				assertThat(context.getBeanNamesForType(Clock.class)).isEmpty();
 				assertThat(context.getBean(S3Client.class).serviceClientConfiguration().endpointOverride())

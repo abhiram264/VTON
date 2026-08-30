@@ -1,6 +1,5 @@
 package com.aifashionvault.generation;
 
-import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.lang.reflect.RecordComponent;
@@ -39,7 +38,9 @@ class QualityResultTest {
 				"colorFidelity",
 				"anatomyValid",
 				"artifactDetected",
-				"createdAt");
+				"createdAt",
+				"qualityPolicyVersion",
+				"reasonCode");
 		assertThat(QualityResult.class.getRecordComponents())
 			.extracting(RecordComponent::getType)
 			.containsExactly(
@@ -51,7 +52,9 @@ class QualityResultTest {
 				BigDecimal.class,
 				Boolean.class,
 				Boolean.class,
-				Instant.class);
+				Instant.class,
+				String.class,
+				String.class);
 	}
 
 	@Test
@@ -61,13 +64,27 @@ class QualityResultTest {
 		assertThat(result(QualityDecision.FAIL).decision()).isEqualTo(QualityDecision.FAIL);
 	}
 
+
 	@Test
 	void hasNoConstructorOrFactoryThatAcceptsTechnicalOutcome() {
 		assertThat(QualityResult.class.getRecordComponents())
 			.extracting(RecordComponent::getName)
 			.doesNotContain("technicalOutcome", "technical_outcome");
 		assertThat(QualityResult.class.getDeclaredConstructors())
-			.noneMatch(QualityResultTest::acceptsString);
+			.allSatisfy(constructor -> {
+				Class<?>[] types = constructor.getParameterTypes();
+				int firstTrailingString = types[types.length - 1] == boolean.class
+					? types.length - 3
+					: types.length - 2;
+				int strings = 0;
+				for (int i = 0; i < types.length; i++) {
+					if (types[i] == String.class) {
+						strings++;
+						assertThat(i).isGreaterThanOrEqualTo(firstTrailingString);
+					}
+				}
+				assertThat(strings).isLessThanOrEqualTo(2);
+			});
 		assertThat(Arrays.stream(QualityResult.class.getDeclaredMethods())
 			.filter(method -> Modifier.isStatic(method.getModifiers())))
 			.noneMatch(QualityResultTest::acceptsString);
@@ -112,6 +129,8 @@ class QualityResultTest {
 		assertThat(qualityResult.anatomyValid()).isNull();
 		assertThat(qualityResult.artifactDetected()).isNull();
 		assertThat(qualityResult.createdAt()).isEqualTo(CREATED_AT);
+		assertThat(qualityResult.qualityPolicyVersion()).isEqualTo(QualityGate.BASELINE_POLICY_VERSION);
+		assertThat(qualityResult.reasonCode()).isNull();
 	}
 
 	@Test
@@ -134,12 +153,103 @@ class QualityResultTest {
 		assertThat(qualityResult.artifactDetected()).isFalse();
 	}
 
-	private static QualityResult result(QualityDecision decision) {
-		return new QualityResult(ID, ATTEMPT_ID, decision, null, null, null, null, null, CREATED_AT);
+	@Test
+	void compatibilityConstructorBindsBaselinePolicyVersion() {
+		QualityResult qualityResult = result(QualityDecision.PASS);
+
+		assertThat(qualityResult.qualityPolicyVersion()).isEqualTo(QualityGate.BASELINE_POLICY_VERSION);
+		assertThat(qualityResult.qualityPolicyVersion()).isEqualTo("baseline-v1");
+		assertThat(qualityResult.bindPolicyVersion(null).qualityPolicyVersion()).isEqualTo("baseline-v1");
+		assertThat(qualityResult.bindPolicyVersion(" ").qualityPolicyVersion()).isEqualTo("baseline-v1");
+		assertThat(qualityResult.bindPolicyVersion("baseline-v1")).isSameAs(qualityResult);
 	}
 
-	private static boolean acceptsString(Constructor<?> constructor) {
-		return Arrays.asList(constructor.getParameterTypes()).contains(String.class);
+	@Test
+	void redeliveryReusesAlreadyBoundPolicyVersion() {
+		QualityResult bound = new QualityResult(
+			ID,
+			ATTEMPT_ID,
+			QualityDecision.PASS,
+			null,
+			null,
+			null,
+			null,
+			null,
+			CREATED_AT,
+			"baseline-v1");
+
+		assertThat(bound.bindPolicyVersion("baseline-v1").qualityPolicyVersion()).isEqualTo("baseline-v1");
+		assertThatThrownBy(() -> bound.bindPolicyVersion("future-v2"))
+			.isInstanceOf(IllegalArgumentException.class)
+			.hasMessageContaining("QualityPolicyVersion");
+	}
+
+	@Test
+	void blankPolicyVersionDefaultsToBaseline() {
+		QualityResult qualityResult = new QualityResult(
+			ID, ATTEMPT_ID, QualityDecision.FAIL, null, null, null, null, null, CREATED_AT, null);
+
+		assertThat(qualityResult.qualityPolicyVersion()).isEqualTo("baseline-v1");
+	}
+
+	@Test
+	void canonicalConstructorRetainsMissingPolicyVersionAndNormalizesReasonCode() {
+		QualityResult qualityResult = new QualityResult(
+			ID,
+			ATTEMPT_ID,
+			QualityDecision.FAIL,
+			null,
+			null,
+			null,
+			null,
+			null,
+			CREATED_AT,
+			null,
+			"  low_identity_similarity  ");
+
+		assertThat(qualityResult.qualityPolicyVersion()).isNull();
+		assertThat(qualityResult.reasonCode()).isEqualTo("LOW_IDENTITY_SIMILARITY");
+	}
+
+	@Test
+	void reasonCodeIsOptionalAndBlankValuesNormalizeToNull() {
+		QualityResult blank = new QualityResult(
+			ID,
+			ATTEMPT_ID,
+			QualityDecision.RETRY,
+			null,
+			null,
+			null,
+			null,
+			null,
+			CREATED_AT,
+			"quality-v2",
+			" \t ");
+
+		assertThat(blank.reasonCode()).isNull();
+		assertThat(blank.qualityPolicyVersion()).isEqualTo("quality-v2");
+	}
+
+	@Test
+	void reasonCodeRejectsUnboundedOrFreeFormText() {
+		assertThatThrownBy(() -> new QualityResult(
+			ID,
+			ATTEMPT_ID,
+			QualityDecision.FAIL,
+			null,
+			null,
+			null,
+			null,
+			null,
+			CREATED_AT,
+			"quality-v2",
+			"provider response: https://provider.example/result"))
+			.isInstanceOf(IllegalArgumentException.class)
+			.hasMessageContaining("reasonCode");
+	}
+
+	private static QualityResult result(QualityDecision decision) {
+		return new QualityResult(ID, ATTEMPT_ID, decision, null, null, null, null, null, CREATED_AT);
 	}
 
 	private static boolean acceptsString(Method method) {

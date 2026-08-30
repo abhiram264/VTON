@@ -86,7 +86,11 @@ CI/CD
 
 ---
 
+
+
 # 1. Product Boundaries
+
+
 
 ## 1.1 V1 Product
 
@@ -121,6 +125,8 @@ V1 includes:
 - Cost tracking
 - Provider abstraction
 
+
+
 ## 1.2 Explicit V1 Non-Goals
 
 Do **not** implement in V1:
@@ -151,6 +157,8 @@ Do **not** implement in V1:
 - Proprietary VTON training
 
 ---
+
+
 
 # 2. Engineering Principles
 
@@ -191,6 +199,8 @@ This allows:
 
 ---
 
+
+
 ## Rule 2 — Provider-specific types stay inside provider infrastructure
 
 Never allow:
@@ -213,6 +223,8 @@ Use internal domain types instead.
 
 ---
 
+
+
 ## Rule 3 — Raw user images never enter logs, traces, or analytics
 
 Forbidden:
@@ -234,6 +246,8 @@ inside:
 - crash reports
 
 ---
+
+
 
 ## Rule 4 — Studio state is structured
 
@@ -259,6 +273,8 @@ Correct:
 
 ---
 
+
+
 ## Rule 5 — Provider success does not equal product success
 
 A returned HTTP 200 does not mean the image is acceptable.
@@ -274,6 +290,8 @@ PASS / RETRY / FAIL
 ```
 
 ---
+
+
 
 # 3. Repository Initialization
 
@@ -318,6 +336,8 @@ ai-fashion-vault/
 
 ---
 
+
+
 # 4. Architecture Decision Records
 
 Create the ADRs before implementation.
@@ -354,6 +374,8 @@ Migration strategy
 ```
 
 ---
+
+
 
 # 5. Mobile Project Initialization
 
@@ -424,6 +446,8 @@ React Native Testing Library
 
 ---
 
+
+
 # 6. Backend Project Initialization
 
 Use Spring Initializr with:
@@ -492,6 +516,8 @@ vault/
 
 ---
 
+
+
 # 7. Local Development Environment
 
 Create:
@@ -528,6 +554,8 @@ fashion-generation-temp
 Never use one unrestricted uploads bucket.
 
 ---
+
+
 
 # 8. Environment Strategy
 
@@ -569,6 +597,8 @@ Never commit production secrets.
 
 ---
 
+
+
 # 9. Database Foundation
 
 Use Flyway from the first commit that introduces persistence.
@@ -591,6 +621,8 @@ V010__create_consents.sql
 Use UUID identifiers.
 
 ---
+
+
 
 # 10. Core Domain Model
 
@@ -620,6 +652,8 @@ USER
 ```
 
 ---
+
+
 
 # 11. Authentication
 
@@ -663,6 +697,8 @@ DELETE /me
 
 ---
 
+
+
 # 12. Object Storage
 
 Do not proxy large user-image uploads through Spring memory.
@@ -704,6 +740,8 @@ Temporary generation files → private / TTL
 
 ---
 
+
+
 # 13. My Model
 
 The first real user-facing feature should be **My Model**.
@@ -735,6 +773,8 @@ One primary image only
 Do not implement 3D body reconstruction yet.
 
 ---
+
+
 
 # 14. Avatar Data Model
 
@@ -776,6 +816,8 @@ but do not require them in V1.
 
 ---
 
+
+
 # 15. Avatar Preflight
 
 Before accepting the user photo, validate:
@@ -807,6 +849,8 @@ Example:
 ```
 
 ---
+
+
 
 # 16. VTON Provider Abstraction
 
@@ -853,7 +897,9 @@ maxImageSize
 
 ---
 
-# 17. FASHN Provider Adapter
+
+
+# *
 
 Infrastructure structure:
 
@@ -884,6 +930,8 @@ Do not use maximum-quality 4K as the default mobile workflow.
 
 ---
 
+
+
 # 18. Privacy-Preserving VTON Calls
 
 Preferred:
@@ -904,6 +952,8 @@ Backend immediately stores an accepted result in private application storage.
 Never permanently expose avatar URLs publicly.
 
 ---
+
+
 
 # 19. Generation Job System
 
@@ -950,6 +1000,8 @@ FAILED
 
 ---
 
+
+
 # 20. Generation Data
 
 Track:
@@ -987,6 +1039,8 @@ This data is required for production economics.
 
 ---
 
+
+
 # 21. Retry Strategy
 
 Classify errors.
@@ -1022,6 +1076,8 @@ total attempts: max 3
 Never implement unlimited autonomous retries.
 
 ---
+
+
 
 # 22. Mandatory Quality Gate
 
@@ -1070,6 +1126,8 @@ Never expose these numbers as attractiveness scores.
 
 ---
 
+
+
 # 23. First Vertical Slice
 
 Before Vault or Studio:
@@ -1105,6 +1163,8 @@ P95 successful Look          < 30 sec
 If the core slice is unreliable, stop feature expansion.
 
 ---
+
+
 
 # 24. AI Evaluation Benchmark
 
@@ -1155,6 +1215,8 @@ Provider C         95      24s    4%         ...
 ```
 
 ---
+
+
 
 # 25. Android Share Target
 
@@ -1216,6 +1278,8 @@ Never trust MIME type or file size blindly.
 
 ---
 
+
+
 # 26. iOS Share Extension
 
 Create:
@@ -1276,6 +1340,8 @@ Push notification
 
 ---
 
+
+
 # 27. Share Import Resolver
 
 The operating system may provide:
@@ -1313,6 +1379,8 @@ resolution failure
 
 ---
 
+
+
 # 28. Source Resolver Architecture
 
 Define:
@@ -1345,6 +1413,8 @@ PartnerCatalogResolver
 Do not make brittle scraping the foundation.
 
 ---
+
+
 
 # 29. Product Normalizer
 
@@ -1392,6 +1462,8 @@ Store correction events for future classifier improvement.
 
 ---
 
+
+
 # 30. Vault
 
 The Vault is the persistent personal fashion library.
@@ -1437,6 +1509,8 @@ created_at
 
 ---
 
+
+
 # 31. System Categories vs User Collections
 
 Keep them separate.
@@ -1467,6 +1541,8 @@ One item can belong to many collections.
 
 ---
 
+
+
 # 32. Collection APIs
 
 ```http
@@ -1481,6 +1557,8 @@ DELETE /collections/{id}/items/{vaultItemId}
 ```
 
 ---
+
+
 
 # 33. Studio State
 
@@ -1515,6 +1593,8 @@ Example state:
 ```
 
 ---
+
+
 
 # 34. Outfit Compatibility Engine
 
@@ -1556,6 +1636,8 @@ setAvatar
 These methods enforce compatibility.
 
 ---
+
+
 
 # 35. Render Plan
 
@@ -1607,6 +1689,8 @@ progressive sequential rendering
 
 ---
 
+
+
 # 36. Multi-Item Rendering
 
 Only implement after single-item reliability is good.
@@ -1647,6 +1731,8 @@ anatomy valid
 If one step fails, retry that step rather than restarting blindly.
 
 ---
+
+
 
 # 37. Studio Natural-Language Agent
 
@@ -1717,6 +1803,8 @@ Database
 
 ---
 
+
+
 # 38. Looks
 
 A Look is a persisted successful generation.
@@ -1751,6 +1839,8 @@ POST   /looks/{id}/share-link
 
 ---
 
+
+
 # 39. Push Notifications
 
 Use push when:
@@ -1780,6 +1870,8 @@ Never place sensitive image URLs inside notification payloads.
 
 ---
 
+
+
 # 40. Mobile Navigation
 
 Primary bottom navigation:
@@ -1804,6 +1896,8 @@ Recent Looks
 Quick Try
 ```
 
+
+
 ## Vault
 
 Show:
@@ -1820,6 +1914,8 @@ Accessories
 Collections
 ```
 
+
+
 ## Studio
 
 Show:
@@ -1832,6 +1928,8 @@ Add from Vault
 Natural-language command box
 Generate
 ```
+
+
 
 ## Looks
 
@@ -1846,6 +1944,8 @@ Share
 ```
 
 ---
+
+
 
 # 41. Analytics Event Taxonomy
 
@@ -1886,6 +1986,8 @@ Never place raw image data in event properties.
 
 ---
 
+
+
 # 42. Product Metrics
 
 Track:
@@ -1917,6 +2019,8 @@ Recommended early core metric:
 
 ---
 
+
+
 # 43. Cost Metrics
 
 Track actual provider cost.
@@ -1945,6 +2049,8 @@ The most important AI cost metric is:
 > **Cost per quality-approved Look**
 
 ---
+
+
 
 # 44. Rate Limiting
 
@@ -1978,6 +2084,8 @@ failed attestation
 
 ---
 
+
+
 # 45. Abuse Controls
 
 Before public launch:
@@ -1998,6 +2106,8 @@ global cost circuit breaker
 
 ---
 
+
+
 # 46. App Integrity
 
 Add before or during beta:
@@ -2016,6 +2126,8 @@ promo-credit redemption
 ```
 
 ---
+
+
 
 # 47. Privacy Service
 
@@ -2057,6 +2169,8 @@ complete
 
 ---
 
+
+
 # 48. Data Isolation
 
 Separate object-storage domains:
@@ -2082,6 +2196,8 @@ Do not expose raw photo data to analytics systems.
 
 ---
 
+
+
 # 49. Data Retention
 
 Suggested initial lifecycle:
@@ -2105,7 +2221,11 @@ These remain until deletion by user/account policy.
 
 ---
 
+
+
 # 50. Backend Testing
+
+
 
 ## Unit Tests
 
@@ -2119,6 +2239,8 @@ Normalizer rules
 Source resolution
 ```
 
+
+
 ## Integration Tests
 
 Use Testcontainers:
@@ -2128,6 +2250,8 @@ PostgreSQL
 Redis
 S3-compatible storage
 ```
+
+
 
 ## Provider Contract Tests
 
@@ -2141,6 +2265,8 @@ invalid input
 provider failures
 ```
 
+
+
 ## End-to-End
 
 ```text
@@ -2148,6 +2274,8 @@ Share → Resolve → Try → Quality Gate → Look
 ```
 
 ---
+
+
 
 # 51. Mobile Testing
 
@@ -2173,6 +2301,8 @@ iOS share extension
 ```
 
 ---
+
+
 
 # 52. AI Regression Testing
 
@@ -2204,6 +2334,8 @@ quality pass rate
 Do not deploy a model solely because one demo looks better.
 
 ---
+
+
 
 # 53. Observability
 
@@ -2238,6 +2370,8 @@ provider.credit_balance
 
 ---
 
+
+
 # 54. Logging
 
 Use structured JSON logs.
@@ -2265,6 +2399,8 @@ provider secret
 ```
 
 ---
+
+
 
 # 55. Production Infrastructure
 
@@ -2306,6 +2442,8 @@ private S3
 
 ---
 
+
+
 # 56. Do Not Use Kubernetes Initially
 
 Avoid:
@@ -2322,6 +2460,8 @@ distributed transactions
 Scale only after measured need.
 
 ---
+
+
 
 # 57. CI Pipeline
 
@@ -2347,6 +2487,8 @@ dependency scan
 
 ---
 
+
+
 # 58. Staging Deployment
 
 On merge to main:
@@ -2370,6 +2512,8 @@ manual approval
 
 ---
 
+
+
 # 59. Database Deployment Strategy
 
 Use Flyway.
@@ -2389,6 +2533,8 @@ CONTRACT
 Never combine destructive DB change with same-release code that depends on it.
 
 ---
+
+
 
 # 60. Android Release Preparation
 
@@ -2422,6 +2568,8 @@ Google Photos
 
 ---
 
+
+
 # 61. iOS Release Preparation
 
 Configure:
@@ -2440,6 +2588,8 @@ associated domains if needed
 Use TestFlight before production.
 
 ---
+
+
 
 # 62. Internal Alpha
 
@@ -2487,6 +2637,8 @@ Measure it.
 
 ---
 
+
+
 # 63. Alpha Exit Criteria
 
 Required:
@@ -2502,6 +2654,8 @@ Provider failure handled
 ```
 
 ---
+
+
 
 # 64. Closed Beta
 
@@ -2529,6 +2683,8 @@ Apply generation quotas.
 
 ---
 
+
+
 # 65. Beta Exit Gates
 
 Suggested:
@@ -2549,6 +2705,8 @@ Retention targets should be derived from real beta data.
 
 ---
 
+
+
 # 66. Feature Flags
 
 Create:
@@ -2566,6 +2724,8 @@ NEW_QUALITY_GATE
 Any risky AI feature must be remotely disableable.
 
 ---
+
+
 
 # 67. Production Rollout
 
@@ -2601,7 +2761,11 @@ cost/user
 
 ---
 
+
+
 # 68. Alerting
+
+
 
 ## P0
 
@@ -2612,6 +2776,8 @@ authentication broken
 all generations failing
 S3 unavailable
 ```
+
+
 
 ## P1
 
@@ -2624,6 +2790,8 @@ generation cost spike
 provider credits low
 ```
 
+
+
 ## P2
 
 ```text
@@ -2632,6 +2800,8 @@ one garment category quality degraded
 ```
 
 ---
+
+
 
 # 69. AI-Specific Production Alert
 
@@ -2648,6 +2818,8 @@ This must alert.
 AI products can technically “work” while the output quality is broken.
 
 ---
+
+
 
 # 70. Daily Post-Production Operations
 
@@ -2667,6 +2839,8 @@ problematic source apps
 
 ---
 
+
+
 # 71. Weekly Operations
 
 Every week:
@@ -2683,6 +2857,8 @@ review generation cost
 
 ---
 
+
+
 # 72. Monthly Operations
 
 Every month:
@@ -2698,6 +2874,8 @@ backup restore drill
 ```
 
 ---
+
+
 
 # 73. Provider Evolution
 
@@ -2728,6 +2906,8 @@ category
 
 ---
 
+
+
 # 74. Provider Routing
 
 Future ProviderRouter:
@@ -2755,6 +2935,8 @@ not just model popularity.
 
 ---
 
+
+
 # 75. Cost Circuit Breakers
 
 Create global safety thresholds.
@@ -2778,6 +2960,8 @@ temporarily queue requests
 ```
 
 ---
+
+
 
 # 76. Disaster Recovery
 
@@ -2808,6 +2992,8 @@ verify data
 
 ---
 
+
+
 # 77. Security Review Checklist
 
 Before launch verify:
@@ -2830,6 +3016,8 @@ Before launch verify:
 
 ---
 
+
+
 # 78. Privacy Review Checklist
 
 ```text
@@ -2848,7 +3036,11 @@ Before launch verify:
 
 ---
 
+
+
 # 79. Release Gates
+
+
 
 ## Gate 1 — AI Core
 
@@ -2865,6 +3057,8 @@ Do not build Vault complexity.
 
 ---
 
+
+
 ## Gate 2 — Share Flow
 
 Question:
@@ -2880,6 +3074,8 @@ Fix import flow.
 
 ---
 
+
+
 ## Gate 3 — Product Retention
 
 Question:
@@ -2894,6 +3090,8 @@ Do not build stylist/social/fit features.
 ```
 
 ---
+
+
 
 # 80. Implementation Sequence
 
@@ -2972,7 +3170,11 @@ This is the preferred engineering order.
 
 ---
 
+
+
 # 81. Phase-by-Phase Definition of Done
+
+
 
 ## Phase A — Foundation
 
@@ -2991,6 +3193,8 @@ CI passes
 
 ---
 
+
+
 ## Phase B — AI Core
 
 Done when:
@@ -3007,6 +3211,8 @@ cost recorded
 
 ---
 
+
+
 ## Phase C — Share
 
 Done when:
@@ -3020,6 +3226,8 @@ share → Try Now works
 ```
 
 ---
+
+
 
 ## Phase D — Vault
 
@@ -3037,6 +3245,8 @@ source URL retained
 
 ---
 
+
+
 ## Phase E — Studio
 
 Done when:
@@ -3051,6 +3261,8 @@ single + multi-item render
 
 ---
 
+
+
 ## Phase F — Assistant
 
 Done when:
@@ -3064,6 +3276,8 @@ Studio remains source of truth
 ```
 
 ---
+
+
 
 ## Phase G — Production
 
@@ -3082,7 +3296,11 @@ beta gates passed
 
 ---
 
+
+
 # 82. Suggested API Surface
+
+
 
 ## Authentication/User
 
@@ -3091,6 +3309,8 @@ GET    /me
 DELETE /me
 ```
 
+
+
 ## Uploads
 
 ```http
@@ -3098,6 +3318,8 @@ POST   /uploads
 POST   /uploads/{id}/complete
 DELETE /uploads/{id}
 ```
+
+
 
 ## Avatar
 
@@ -3110,6 +3332,8 @@ DELETE /avatars/{id}
 POST   /avatars/{id}/set-primary
 ```
 
+
+
 ## Imports
 
 ```http
@@ -3118,6 +3342,8 @@ GET    /imports/{id}
 POST   /imports/{id}/resolve
 POST   /imports/{id}/confirm
 ```
+
+
 
 ## Vault
 
@@ -3128,6 +3354,8 @@ GET    /vault/items/{id}
 PATCH  /vault/items/{id}
 DELETE /vault/items/{id}
 ```
+
+
 
 ## Collections
 
@@ -3140,6 +3368,8 @@ POST   /collections/{id}/items
 DELETE /collections/{id}/items/{itemId}
 ```
 
+
+
 ## Studio
 
 ```http
@@ -3151,6 +3381,8 @@ DELETE /studio/sessions/{id}/items/{slot}
 POST   /studio/sessions/{id}/commands
 ```
 
+
+
 ## Generation
 
 ```http
@@ -3160,6 +3392,8 @@ POST   /generations/{id}/cancel
 POST   /generations/{id}/retry
 ```
 
+
+
 ## Looks
 
 ```http
@@ -3168,6 +3402,8 @@ GET    /looks/{id}
 POST   /looks/{id}/regenerate
 DELETE /looks/{id}
 ```
+
+
 
 ## Privacy
 
@@ -3179,6 +3415,8 @@ PATCH  /privacy/consents
 ```
 
 ---
+
+
 
 # 83. Example Generation Request
 
@@ -3202,6 +3440,8 @@ Response:
 Client polls or receives push/websocket update later.
 
 ---
+
+
 
 # 84. Example Studio Command
 
@@ -3233,6 +3473,8 @@ Backend validates each action before mutation.
 
 ---
 
+
+
 # 85. Failure UX
 
 The product must fail gracefully.
@@ -3246,11 +3488,15 @@ We found the product link, but couldn't reliably extract the item image.
 [Upload Image]
 ```
 
+
+
 ## Avatar failure
 
 ```text
 We need a clearer full-body photo to create an accurate preview.
 ```
+
+
 
 ## VTON quality failure
 
@@ -3261,6 +3507,8 @@ We couldn't create an accurate preview for this item.
 [Choose Another Photo]
 ```
 
+
+
 ## Provider outage
 
 ```text
@@ -3270,6 +3518,8 @@ Your item has been saved to the Vault.
 ```
 
 ---
+
+
 
 # 86. Graceful Degradation Order
 
@@ -3296,6 +3546,8 @@ Core user-owned data should remain accessible even when AI is unavailable.
 
 ---
 
+
+
 # 87. Post-Launch Product Decisions
 
 Only after retention exists consider:
@@ -3318,6 +3570,8 @@ Every expansion must be justified by observed behavior.
 
 ---
 
+
+
 # 88. Engineering Kill Criteria
 
 Do not continue blindly if:
@@ -3329,11 +3583,15 @@ Quality-approved result rate remains poor
 despite provider changes
 ```
 
+
+
 ### Latency
 
 ```text
 Mobile wait time makes repeat use negligible
 ```
+
+
 
 ### Cost
 
@@ -3341,12 +3599,16 @@ Mobile wait time makes repeat use negligible
 Cost per retained user is structurally unsustainable
 ```
 
+
+
 ### Share compatibility
 
 ```text
 Important shopping apps consistently provide unusable payloads
 and fallback is too cumbersome
 ```
+
+
 
 ### Retention
 
@@ -3358,6 +3620,8 @@ but do not reuse Vault/Studio
 These are product risks, not just engineering bugs.
 
 ---
+
+
 
 # 89. Source-of-Truth Architecture
 
@@ -3429,6 +3693,8 @@ Final architecture:
 
 ---
 
+
+
 # 90. Final Engineering Principle
 
 The first meaningful technical milestone is not:
@@ -3471,7 +3737,11 @@ If it does not work reliably, the correct engineering action is **not to add mor
 
 ---
 
+
+
 # 91. Recommended Milestone Summary
+
+
 
 ## Milestone 1 — Foundation
 
@@ -3488,6 +3758,8 @@ S3
 CI
 ```
 
+
+
 ## Milestone 2 — VTON Vertical Slice
 
 Deliver:
@@ -3499,6 +3771,8 @@ VTON
 quality gate
 Look
 ```
+
+
 
 ## Milestone 3 — Share
 
@@ -3512,6 +3786,8 @@ normalizer
 fallback
 ```
 
+
+
 ## Milestone 4 — Vault
 
 Deliver:
@@ -3522,6 +3798,8 @@ collections
 search
 source links
 ```
+
+
 
 ## Milestone 5 — Studio
 
@@ -3534,6 +3812,8 @@ render plan
 multi-item
 ```
 
+
+
 ## Milestone 6 — Assistant
 
 Deliver:
@@ -3542,6 +3822,8 @@ Deliver:
 natural-language tool calls
 deterministic mutations
 ```
+
+
 
 ## Milestone 7 — Production Readiness
 
@@ -3558,6 +3840,8 @@ alerts
 CI/CD
 ```
 
+
+
 ## Milestone 8 — Alpha/Beta
 
 Deliver:
@@ -3568,6 +3852,8 @@ quality validation
 retention data
 cost data
 ```
+
+
 
 ## Milestone 9 — Production
 
@@ -3581,6 +3867,8 @@ post-production processes
 ```
 
 ---
+
+
 
 # 92. Final Go/No-Go Logic
 
@@ -3610,24 +3898,28 @@ This staged architecture prevents the team from spending months building specula
 
 ---
 
+
+
 # 93. Sources / Current Platform References
 
 The implementation direction above was validated against current platform guidance available during planning:
 
-- React Native release documentation: https://reactnative.dev/
-- Spring Boot system requirements and observability: https://docs.spring.io/spring-boot/
-- Android Sharesheet / receiving shared content: https://developer.android.com/training/sharing/receive
-- Android Play Integrity: https://developer.android.com/google/play/integrity
-- Apple App Extensions / Share Extensions: https://developer.apple.com/library/archive/documentation/General/Conceptual/ExtensibilityPG/
-- Apple App Groups: https://developer.apple.com/documentation/xcode/configuring-app-groups
-- Firebase Authentication: https://firebase.google.com/docs/auth
-- Firebase Cloud Messaging: https://firebase.google.com/docs/cloud-messaging
-- AWS S3 presigned URLs: https://docs.aws.amazon.com/AmazonS3/latest/userguide/using-presigned-url.html
-- AWS S3 encryption/lifecycle documentation: https://docs.aws.amazon.com/AmazonS3/
-- FASHN API documentation: https://docs.fashn.ai/
-- FASHN privacy and retention documentation: https://docs.fashn.ai/api-overview/data-retention-privacy
+- React Native release documentation: [https://reactnative.dev/](https://reactnative.dev/)
+- Spring Boot system requirements and observability: [https://docs.spring.io/spring-boot/](https://docs.spring.io/spring-boot/)
+- Android Sharesheet / receiving shared content: [https://developer.android.com/training/sharing/receive](https://developer.android.com/training/sharing/receive)
+- Android Play Integrity: [https://developer.android.com/google/play/integrity](https://developer.android.com/google/play/integrity)
+- Apple App Extensions / Share Extensions: [https://developer.apple.com/library/archive/documentation/General/Conceptual/ExtensibilityPG/](https://developer.apple.com/library/archive/documentation/General/Conceptual/ExtensibilityPG/)
+- Apple App Groups: [https://developer.apple.com/documentation/xcode/configuring-app-groups](https://developer.apple.com/documentation/xcode/configuring-app-groups)
+- Firebase Authentication: [https://firebase.google.com/docs/auth](https://firebase.google.com/docs/auth)
+- Firebase Cloud Messaging: [https://firebase.google.com/docs/cloud-messaging](https://firebase.google.com/docs/cloud-messaging)
+- AWS S3 presigned URLs: [https://docs.aws.amazon.com/AmazonS3/latest/userguide/using-presigned-url.html](https://docs.aws.amazon.com/AmazonS3/latest/userguide/using-presigned-url.html)
+- AWS S3 encryption/lifecycle documentation: [https://docs.aws.amazon.com/AmazonS3/](https://docs.aws.amazon.com/AmazonS3/)
+- FASHN API documentation: [https://docs.fashn.ai/](https://docs.fashn.ai/)
+- FASHN privacy and retention documentation: [https://docs.fashn.ai/api-overview/data-retention-privacy](https://docs.fashn.ai/api-overview/data-retention-privacy)
 
 ---
+
+
 
 # 94. Final Note for Engineering / Agentic Implementation
 

@@ -110,14 +110,16 @@ class DomainArchitectureTest {
 	}
 
 	@Test
-	void flywayHasNoVersion011OrHigher() throws IOException {
+	void flywayAllowsOnlyTheFrozenV019MigrationAbovePublishedV017() throws IOException {
 		Path migrations = migrationRoot();
 		List<String> violations = new ArrayList<>();
 		if (Files.isDirectory(migrations)) {
 			try (Stream<Path> walk = Files.walk(migrations)) {
 				walk.filter(Files::isRegularFile).forEach(file -> {
-					if (isNewerThanV010(file.getFileName().toString())) {
-						violations.add(display(migrations, file) + " V011+ Flyway file");
+					String name = file.getFileName().toString();
+					if (isNewerThanV017(name) && !name.equals("V018__single_item_manual_product.sql")
+						&& !name.equals("V019__share_import_resolver.sql")) {
+						violations.add(display(migrations, file) + " unexpected V019+ Flyway file");
 					}
 				});
 			}
@@ -241,17 +243,17 @@ class DomainArchitectureTest {
 		return relative.toString().replace('\\', '/').replace('/', '.');
 	}
 
-	private static boolean isNewerThanV010(String filename) {
+	private static boolean isNewerThanV017(String filename) {
 		Matcher matcher = FLYWAY_VERSION.matcher(filename);
 		if (!matcher.find()) {
 			return false;
 		}
 		String[] parts = matcher.group(1).split("_");
 		int major = Integer.parseInt(parts[0]);
-		if (major > 10) {
+		if (major > 17) {
 			return true;
 		}
-		if (major < 10) {
+		if (major < 17) {
 			return false;
 		}
 		for (int i = 1; i < parts.length; i++) {
