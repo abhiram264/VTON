@@ -1,5 +1,6 @@
 package com.aifashionvault.look;
 
+import java.util.List;
 import java.util.Optional;
 
 import com.aifashionvault.shared.GenerationJobId;
@@ -25,6 +26,10 @@ public interface LookStore {
 
 	default Optional<Look> findByIdForUser(LookId id, UserId ownerId) {
 		throw new UnsupportedOperationException("findByIdForUser");
+	}
+
+	default List<Look> listForUser(UserId ownerId) {
+		throw new UnsupportedOperationException("listForUser");
 	}
 
 	default boolean logicallyDeleteForUser(LookId id, UserId ownerId) {

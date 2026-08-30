@@ -192,6 +192,27 @@ class JdbcLookStoreTest {
 		assertThat(store.logicallyDeleteForUser(lookId, ownerId)).isTrue();
 	}
 
+	@Test
+	void listForUserReturnsOnlyOwnedUndeletedLooksNewestThenId() {
+		UserId owner = insertUser();
+		UserId foreign = insertUser();
+		LookId olderId = new LookId(UUID.fromString("10000000-0000-0000-0000-000000000000"));
+		LookId newerLowId = new LookId(UUID.fromString("20000000-0000-0000-0000-000000000000"));
+		LookId newerHighId = new LookId(UUID.fromString("30000000-0000-0000-0000-000000000000"));
+		Look older = look(olderId, owner, insertJob(owner), storageKey(owner, olderId));
+		Look newerLow = look(newerLowId, owner, insertJob(owner), storageKey(owner, newerLowId));
+		Look newerHigh = look(newerHighId, owner, insertJob(owner), storageKey(owner, newerHighId));
+		store.insert(older);
+		store.insert(newerLow);
+		store.insert(newerHigh);
+		jdbc.update("UPDATE look SET created_at = ? WHERE id = ?", Timestamp.from(NOW.minusSeconds(1)), olderId.value());
+		LookId foreignId = new LookId(UUID.randomUUID());
+		store.insert(look(foreignId, foreign, insertJob(foreign), storageKey(foreign, foreignId)));
+		store.logicallyDeleteForUser(newerLowId, owner);
+
+		assertThat(store.listForUser(owner)).extracting(Look::id).containsExactly(newerHighId, olderId);
+	}
+
 	private UserId insertUser() {
 		UserId userId = new UserId(UUID.randomUUID());
 		jdbc.update(

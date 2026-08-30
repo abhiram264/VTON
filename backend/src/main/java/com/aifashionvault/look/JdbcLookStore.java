@@ -150,6 +150,17 @@ public class JdbcLookStore implements LookStore {
 			.map(this::withLoadedItems);
 	}
 
+	@Override
+	public List<Look> listForUser(UserId ownerId) {
+		if (ownerId == null) {
+			throw new IllegalArgumentException("ownerId is required");
+		}
+		return jdbc.query(
+			SELECT_LOOK + "WHERE user_id = ? AND deleted_at IS NULL ORDER BY created_at DESC, id DESC",
+			LOOK_MAPPER,
+			ownerId.value()).stream().map(this::withLoadedItems).toList();
+	}
+
 	/**
 	 * Returns an owner-scoped row even after logical deletion so repeated delete
 	 * requests can retry physical object cleanup without making the Look readable.
