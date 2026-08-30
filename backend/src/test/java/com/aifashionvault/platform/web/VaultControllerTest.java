@@ -177,6 +177,21 @@ class VaultControllerTest {
 			.andExpect(status().isOk()).andReturn();
 		assertThat(JSON.readTree(unchanged.getResponse().getContentAsString()).get("name").stringValue()).isEqualTo("Original");
 	}
+	@Test
+	void createRejectsUnknownFieldsAndReplayIsIdempotent() throws Exception {
+		String token = InProcessJwtFixture.bearerToken();
+		mockMvc.perform(post("/vault/items").header(HttpHeaders.AUTHORIZATION, bearer(token)).contentType(MediaType.APPLICATION_JSON)
+				.content(createBody("TOP", "Unknown").replace("}", ",\"storageKey\":\"forged\"}")))
+			.andExpect(status().isBadRequest()).andExpect(content().json(INVALID));
+		String upload = UUID.randomUUID().toString();
+		String body = "{\"uploadId\":\"" + upload + "\",\"name\":\"Replay\",\"brand\":\"Acme\",\"category\":\"TOP\",\"attributes\":{\"size\":\"M\"}}";
+		MvcResult first = mockMvc.perform(post("/vault/items").header(HttpHeaders.AUTHORIZATION, bearer(token)).contentType(MediaType.APPLICATION_JSON).content(body))
+			.andExpect(status().isCreated()).andReturn();
+		MvcResult second = mockMvc.perform(post("/vault/items").header(HttpHeaders.AUTHORIZATION, bearer(token)).contentType(MediaType.APPLICATION_JSON).content(body))
+			.andExpect(status().isCreated()).andReturn();
+		assertThat(JSON.readTree(second.getResponse().getContentAsString()).get("id").stringValue())
+			.isEqualTo(JSON.readTree(first.getResponse().getContentAsString()).get("id").stringValue());
+	}
 
 	private JsonNode create(String token, String category, String name) throws Exception {
 		MvcResult result = mockMvc.perform(post("/vault/items").header(HttpHeaders.AUTHORIZATION, bearer(token))

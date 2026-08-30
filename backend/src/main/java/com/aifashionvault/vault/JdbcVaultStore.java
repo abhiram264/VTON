@@ -93,6 +93,9 @@ public final class JdbcVaultStore {
 	public Optional<VaultItem> lockForDelete(VaultItemId id, UserId user) {
 		return one(jdbc.query("SELECT " + COLUMNS + " FROM vault_item v WHERE v.id=? AND v.user_id=? FOR UPDATE", MAPPER,id.value(),user.value()));
 	}
+public boolean isInUse(VaultItemId id) {
+		return Boolean.TRUE.equals(jdbc.queryForObject("SELECT EXISTS(SELECT 1 FROM studio_item WHERE vault_item_id=? UNION ALL SELECT 1 FROM look_item WHERE vault_item_id=? UNION ALL SELECT 1 FROM generation_job_product WHERE vault_item_id=? UNION ALL SELECT 1 FROM generation_render_step_item WHERE vault_item_id=?)", Boolean.class, id.value(), id.value(), id.value(), id.value()));
+	}
 
 	public DeleteResult deleteForUser(VaultItemId id, UserId user) {
 		DeleteResult result=transactions.execute(status -> {
