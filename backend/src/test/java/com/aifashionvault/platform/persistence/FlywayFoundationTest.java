@@ -141,15 +141,15 @@ class FlywayFoundationTest {
 	}
 
 	@Test
-	void flywayAppliesV001ThroughV019OnEmptyDatabase() {
+	void flywayAppliesV001ThroughV020OnEmptyDatabase() {
 		List<Map<String, Object>> history = jdbc.queryForList(
 			"SELECT version, success FROM flyway_schema_history "
 				+ "WHERE version IS NOT NULL ORDER BY installed_rank");
 
-		assertThat(history).hasSize(19);
+		assertThat(history).hasSize(20);
 		assertThat(history)
 			.extracting(row -> Integer.parseInt(row.get("version").toString()))
-			.containsExactly(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19);
+			.containsExactly(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20);
 		assertThat(history)
 			.extracting(row -> row.get("success"))
 			.containsOnly(true);
@@ -289,7 +289,7 @@ class FlywayFoundationTest {
 		List<Map<String, Object>> original = jdbc.queryForList(
 			"SELECT version, checksum FROM flyway_schema_history "
 				+ "WHERE version IS NOT NULL ORDER BY installed_rank");
-		assertThat(original).hasSize(19);
+		assertThat(original).hasSize(20);
 
 		try (PostgreSQLContainer second = newPostgres()) {
 			second.start();
@@ -307,7 +307,7 @@ class FlywayFoundationTest {
 				"SELECT version, checksum FROM flyway_schema_history "
 					+ "WHERE version IS NOT NULL ORDER BY installed_rank");
 
-			assertThat(replayed).hasSize(19);
+			assertThat(replayed).hasSize(20);
 			assertThat(replayed)
 				.usingRecursiveFieldByFieldElementComparator()
 				.containsExactlyElementsOf(original);
@@ -315,7 +315,7 @@ class FlywayFoundationTest {
 	}
 
 	@Test
-	void publishedV002ValidatesAndUpgradesToV019WithoutChecksumRepair() throws Exception {
+	void publishedV002ValidatesAndUpgradesToV020WithoutChecksumRepair() throws Exception {
 		Path publishedMigrations = Files.createTempDirectory("flyway-published-v002-");
 		try (PostgreSQLContainer legacy = newPostgres()) {
 			byte[] currentV002 = migrationBytes("V002__create_avatar_profiles.sql");
@@ -379,7 +379,7 @@ class FlywayFoundationTest {
 				"SELECT version FROM flyway_schema_history "
 					+ "WHERE version IS NOT NULL ORDER BY installed_rank",
 				String.class))
-				.containsExactly("001", "002", "003", "004", "005", "006", "007", "008", "009", "010", "011", "012", "013", "014", "015", "016", "017", "018", "019");
+				.containsExactly("001", "002", "003", "004", "005", "006", "007", "008", "009", "010", "011", "012", "013", "014", "015", "016", "017", "018", "019", "020");
 			assertThat(upgraded.queryForMap(
 				"SELECT revision, lifecycle_state, warnings::text AS warnings, "
 					+ "source_upload_id, preflight_policy_version "
@@ -698,7 +698,7 @@ class FlywayFoundationTest {
 	}
 
 	@Test
-	void v012BaselineMigratesToV019WithoutDataLoss() {
+	void v012BaselineMigratesToV020WithoutDataLoss() {
 		try (PostgreSQLContainer legacy = newPostgres()) {
 			legacy.start();
 			Flyway.configure()
@@ -835,7 +835,7 @@ class FlywayFoundationTest {
 				"SELECT version, success FROM flyway_schema_history "
 					+ "WHERE version IS NOT NULL ORDER BY installed_rank"))
 				.extracting(row -> Integer.parseInt(row.get("version").toString()))
-				.containsExactly(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19);
+				.containsExactly(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20);
 			assertThat(upgraded.queryForObject(
 				"SELECT COUNT(*) FROM generation_job",
 				Integer.class)).isEqualTo(4);
