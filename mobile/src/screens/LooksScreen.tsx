@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { Pressable, Share, StyleSheet, Text, View } from 'react-native';
 import { looksApi } from '../features/looks/looksApi';
-import { pollGeneration } from '../features/generation/generationApi';
+import { generationApi, pollGeneration } from '../features/generation/generationApi';
 import type { LookResource } from '../features/generation/types';
 
-type Props = { onModify: (lookId: string) => void; onOpenLook: (lookId: string) => void; onProfile: () => void };
+type Props = { onModify: (lookId: string) => void; onOpenLook: (lookId: string) => void; onProfile: () => void; pollDelay?: (ms: number) => Promise<void> };
 
-export default function LooksScreen({ onModify, onOpenLook, onProfile }: Props) {
+export default function LooksScreen({ onModify, onOpenLook, onProfile, pollDelay }: Props) {
   const [looks, setLooks] = useState<LookResource[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [status, setStatus] = useState<'loading' | 'ready' | 'failed'>('loading');
@@ -20,7 +20,7 @@ export default function LooksScreen({ onModify, onOpenLook, onProfile }: Props) 
     try {
       const generation = await looksApi.regenerate(selected);
       regenerated.current.add(selected);
-      const completed = await pollGeneration({ get: async () => generation, id: generation.id });
+      const completed = await pollGeneration({ get: generationApi.get, id: generation.id, delay: pollDelay });
       if (completed.lookId) onOpenLook(completed.lookId);
     } finally { setBusy(false); }
   }
