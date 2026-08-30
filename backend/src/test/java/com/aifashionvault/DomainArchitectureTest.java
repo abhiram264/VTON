@@ -110,7 +110,7 @@ class DomainArchitectureTest {
 	}
 
 	@Test
-	void flywayAllowsOnlyTheFrozenV019MigrationAbovePublishedV017() throws IOException {
+	void flywayAllowsOnlyTheFrozenV020MigrationAbovePublishedV017() throws IOException {
 		Path migrations = migrationRoot();
 		List<String> violations = new ArrayList<>();
 		if (Files.isDirectory(migrations)) {
@@ -118,8 +118,9 @@ class DomainArchitectureTest {
 				walk.filter(Files::isRegularFile).forEach(file -> {
 					String name = file.getFileName().toString();
 					if (isNewerThanV017(name) && !name.equals("V018__single_item_manual_product.sql")
-						&& !name.equals("V019__share_import_resolver.sql")) {
-						violations.add(display(migrations, file) + " unexpected V019+ Flyway file");
+						&& !name.equals("V019__share_import_resolver.sql")
+						&& !name.equals("V020__product_normalization.sql")) {
+						violations.add(display(migrations, file) + " unexpected V020+ Flyway file");
 					}
 				});
 			}

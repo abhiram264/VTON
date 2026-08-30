@@ -6,6 +6,9 @@ import java.util.UUID;
 
 import org.junit.jupiter.api.Test;
 
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+import com.aifashionvault.normalization.ProductCategory;
 import com.aifashionvault.shared.SourceReferenceId;
 import com.aifashionvault.shared.StorageKey;
 import com.aifashionvault.shared.UserId;
@@ -52,11 +55,11 @@ class VaultItemTest {
 				SourceReferenceId.class,
 				String.class,
 				String.class,
+				ProductCategory.class,
 				String.class,
 				String.class,
 				String.class,
-				String.class,
-				String.class,
+				JsonNode.class,
 				Instant.class);
 	}
 
@@ -99,14 +102,14 @@ class VaultItemTest {
 	@Test
 	void requiresUserId() {
 		assertThatThrownBy(() -> new VaultItem(
-			ID, null, STORAGE_KEY, SOURCE_REFERENCE_ID, "Shirt", "Brand", "TOP", null, "black", null, null, CREATED_AT))
+			ID, null, STORAGE_KEY, SOURCE_REFERENCE_ID, "Shirt", "Brand", ProductCategory.TOP, null, "black", null, null, CREATED_AT))
 			.isInstanceOf(IllegalArgumentException.class);
 	}
 
 	@Test
 	void requiresStorageKey() {
 		assertThatThrownBy(() -> new VaultItem(
-			ID, USER_ID, null, SOURCE_REFERENCE_ID, "Shirt", "Brand", "TOP", null, "black", null, null, CREATED_AT))
+			ID, USER_ID, null, SOURCE_REFERENCE_ID, "Shirt", "Brand", ProductCategory.TOP, null, "black", null, null, CREATED_AT))
 			.isInstanceOf(IllegalArgumentException.class);
 	}
 
@@ -136,6 +139,6 @@ class VaultItemTest {
 
 	private static VaultItem item(SourceReferenceId sourceReferenceId) {
 		return new VaultItem(
-			ID, USER_ID, STORAGE_KEY, sourceReferenceId, "Shirt", "Brand", "TOP", "shirt", "black", "solid", "{}", CREATED_AT);
+			ID, USER_ID, STORAGE_KEY, sourceReferenceId, "Shirt", "Brand", ProductCategory.TOP, "shirt", "black", "solid", new ObjectMapper().readTree("{}"), CREATED_AT);
 	}
 }

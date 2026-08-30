@@ -2,6 +2,8 @@ package com.aifashionvault.vault;
 
 import java.time.Instant;
 
+import tools.jackson.databind.JsonNode;
+import com.aifashionvault.normalization.ProductCategory;
 import com.aifashionvault.shared.SourceReferenceId;
 import com.aifashionvault.shared.StorageKey;
 import com.aifashionvault.shared.UserId;
@@ -14,11 +16,11 @@ public record VaultItem(
 	SourceReferenceId sourceReferenceId,
 	String name,
 	String brand,
-	String category,
+	ProductCategory category,
 	String subcategory,
 	String color,
 	String pattern,
-	String attributes,
+	JsonNode attributes,
 	Instant createdAt) {
 
 	public VaultItem {
