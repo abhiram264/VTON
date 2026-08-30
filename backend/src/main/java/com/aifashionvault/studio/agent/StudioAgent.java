@@ -1,5 +1,6 @@
 package com.aifashionvault.studio.agent;
 
+import org.springframework.dao.DataAccessException;
 import com.aifashionvault.shared.*;
 import java.util.*;
 
@@ -27,7 +28,9 @@ public final class StudioAgent {
             if (!ALLOWED.contains(c.tool())) error = AgentProblemCode.DISALLOWED_TOOL;
             else try { value = dispatch(actor, session, c); if (value == null) error = AgentProblemCode.MALFORMED_CALL; }
             catch (AgentApplicationException e) { error = e.code(); }
-            catch (RuntimeException e) { error = AgentProblemCode.MALFORMED_CALL; }
+            catch (DataAccessException e) { error = AgentProblemCode.DEPENDENCY_UNAVAILABLE; }
+            catch (IllegalArgumentException e) { error = AgentProblemCode.MALFORMED_CALL; }
+            catch (RuntimeException e) { throw e; }
             if (error != null) { out.add(reject(i, c.tool(), error)); return new AgentExecution(out, false); }
             out.add(new ToolCallResult(i,c.tool(),ToolStatus.OK,value,null));
         }
@@ -56,7 +59,7 @@ public final class StudioAgent {
     private static UUID uuid(Map<String,Object> m,String k) { String x=text(m,k,36); try{return UUID.fromString(x);}catch(IllegalArgumentException e){throw new IllegalArgumentException();} }
     private static StudioSlot slot(Map<String,Object> m) { String x=text(m,"slot",20); try{return StudioSlot.valueOf(x);}catch(IllegalArgumentException e){throw new IllegalArgumentException();} }
     private static int requiredPosition(Map<String,Object> m) { if(!m.containsKey("position")) return 0; return parsePosition(m.get("position")); }
-    private static Integer optionalPosition(Map<String,Object> m) { if(!m.containsKey("position")) { if(slot(m).allowsMultiple()) throw new IllegalArgumentException(); return null; } return parsePosition(m.get("position")); }
+    private static Integer optionalPosition(Map<String,Object> m) { StudioSlot slot = slot(m); if(!m.containsKey("position")) { if(slot.allowsMultiple()) throw new IllegalArgumentException(); return null; } if(!slot.allowsMultiple()) throw new IllegalArgumentException(); return parsePosition(m.get("position")); }
     private static int parsePosition(Object v) { if(!(v instanceof Number n) || n.longValue()<0 || n.longValue()!=n.doubleValue() || n.longValue()>Integer.MAX_VALUE) throw new IllegalArgumentException(); return n.intValue(); }
     private static void exact(Map<String,Object> m) { if(!m.isEmpty()) throw new IllegalArgumentException(); }
 }
