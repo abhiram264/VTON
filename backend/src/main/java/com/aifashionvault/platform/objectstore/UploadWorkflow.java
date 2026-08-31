@@ -5,6 +5,7 @@ import java.util.function.Supplier;
 
 import com.aifashionvault.shared.UploadId;
 import com.aifashionvault.shared.UserId;
+import com.aifashionvault.shared.StorageDomain;
 
 public final class UploadWorkflow {
 

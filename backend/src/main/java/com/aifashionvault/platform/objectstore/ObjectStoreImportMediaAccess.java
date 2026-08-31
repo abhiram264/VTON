@@ -9,6 +9,7 @@ import com.aifashionvault.importer.ImportMediaAccess;
 import com.aifashionvault.shared.StorageKey;
 import com.aifashionvault.shared.UploadId;
 import com.aifashionvault.shared.UserId;
+import com.aifashionvault.shared.StorageDomain;
 
 /**
  * Importer media adapter over the existing private object store: claims a

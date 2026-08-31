@@ -41,7 +41,7 @@ public final class StorageKeys {
 			case AVATAR -> "avatars";
 			case VAULT -> "vault";
 			case LOOK -> "looks";
-			case TEMP, TEMP -> throw new IllegalArgumentException("persistentKey is not for " + boundary);
+			case TEMP -> throw new IllegalArgumentException("persistentKey is not for " + boundary);
 		};
 		return new StorageKey("users/" + userId.value() + "/" + folder + "/" + stableId + extension(mediaType));
 	}

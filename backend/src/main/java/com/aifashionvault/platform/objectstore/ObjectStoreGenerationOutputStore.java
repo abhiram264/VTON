@@ -9,6 +9,7 @@ import com.aifashionvault.generation.vton.PrivateMediaRef;
 import com.aifashionvault.generation.vton.ProviderMediaSource;
 import com.aifashionvault.shared.StorageKey;
 import com.aifashionvault.shared.UserId;
+import com.aifashionvault.shared.StorageDomain;
 
 /**
  * Object-store-backed output store for one generation attempt. Writes use an

@@ -11,6 +11,7 @@ import com.aifashionvault.shared.AvatarImageId;
 import com.aifashionvault.shared.StorageKey;
 import com.aifashionvault.shared.UploadId;
 import com.aifashionvault.shared.UserId;
+import com.aifashionvault.shared.StorageDomain;
 
 public final class ObjectStoreAvatarMediaAccess implements AvatarMediaAccess {
 

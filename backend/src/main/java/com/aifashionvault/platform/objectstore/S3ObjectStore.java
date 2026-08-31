@@ -85,7 +85,6 @@ public final class S3ObjectStore implements ObjectStore, GenerationMediaStore {
 			case VAULT -> buckets.vaultBucket();
 			case TEMP -> buckets.tempBucket();
 			case LOOK -> buckets.lookBucket();
-			case TEMP -> buckets.tempBucket();
 		};
 	}
 
