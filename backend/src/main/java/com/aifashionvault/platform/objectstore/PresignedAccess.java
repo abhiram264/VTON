@@ -37,7 +37,6 @@ public record PresignedAccess(
 	public String toString() {
 		return "PresignedAccess[object=" + object
 			+ ", method=" + method
-			+ ", signedHeaders=" + signedHeaders
 			+ ", expiresAt=" + expiresAt
 			+ "]";
 	}

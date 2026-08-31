@@ -4,6 +4,7 @@ import java.net.URI;
 import java.time.Clock;
 import java.util.concurrent.TimeUnit;
 
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.annotation.EnableScheduling;
@@ -60,10 +61,20 @@ public class ObjectStoreConfiguration {
 	ImageInspector imageInspector() {
 		return new ImageInspector();
 	}
+	@Bean
+	@ConditionalOnExpression("'${vault.env}' != 'production'")
+	MalwareScanner malwareScanner() {
+		return (bytes, contentType) -> new MalwareScanResult(MalwareVerdict.CLEAN, "clean");
+	}
+
 
 	@Bean
-	UploadWorkflow uploadWorkflow(ObjectStore objectStore, ImageInspector imageInspector) {
-		return new UploadWorkflow(objectStore, imageInspector);
+	UploadWorkflow uploadWorkflow(
+		ObjectStore objectStore,
+		ImageInspector imageInspector,
+		MalwareScanner malwareScanner
+	) {
+		return new UploadWorkflow(objectStore, imageInspector, malwareScanner);
 	}
 
 	@Bean

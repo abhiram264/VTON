@@ -3,6 +3,7 @@ package com.aifashionvault.platform.generation;
 import java.time.Clock;
 import java.math.BigDecimal;
 import java.time.Duration;
+import java.util.Map;
 import java.util.Set;
 
 import javax.sql.DataSource;
@@ -13,12 +14,15 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import com.aifashionvault.admission.AbuseBudgetPolicy;
+import com.aifashionvault.admission.AggregateBackedCostCircuitBreaker;
+import com.aifashionvault.admission.GlobalCostCircuitBreaker;
 import com.aifashionvault.generation.CallbackInboxStore;
 import com.aifashionvault.generation.GenerationStore;
 import com.aifashionvault.generation.JdbcCallbackInboxStore;
 import com.aifashionvault.generation.QualityGate;
 import com.aifashionvault.generation.ProviderHealthGate;
-import com.aifashionvault.generation.SpendBreaker;
+import com.aifashionvault.generation.GenerationCostMetrics;
 import com.aifashionvault.generation.vton.InputTransferMethod;
 import com.aifashionvault.generation.vton.OutputDeliveryMethod;
 import com.aifashionvault.generation.vton.PrivacyTransferPolicy;
@@ -41,10 +45,11 @@ import io.micrometer.core.instrument.MeterRegistry;
 @ConditionalOnBean({ DataSource.class, ObjectStore.class })
 public class GenerationProcessorConfiguration {
 
-	/** MVP-default global hard spend ceiling in USD (Q55). */
 	static final String MVP_GLOBAL_SPEND_CEILING = "500.00";
-	/** MVP-default per-user hard spend ceiling in USD (Q55). */
 	static final String MVP_PER_USER_SPEND_CEILING = "25.00";
+	static final String MVP_PROVIDER_SPEND_CEILING = "250.00";
+	static final String MVP_BUDGET_CURRENCY = "USD";
+	static final Duration MVP_BUDGET_WINDOW = Duration.ofDays(1);
 
 	@Bean
 	@ConditionalOnMissingBean(Clock.class)
@@ -114,18 +119,22 @@ public class GenerationProcessorConfiguration {
 		return new JdbcGenerationCapacityLeaseStore(dataSource);
 	}
 
-	/**
-	 * MVP-default hard spend ceilings (Q55). No matching property exists on
-	 * {@code VaultEnvironmentProperties}, so these explicit constants are the
-	 * documented MVP defaults; they are replaced when a dedicated ceiling bean
-	 * is supplied.
-	 */
 	@Bean
-	@ConditionalOnMissingBean(SpendBreaker.class)
-	SpendBreaker spendBreaker() {
-		return new ConfiguredSpendBreaker(
-			new BigDecimal(MVP_GLOBAL_SPEND_CEILING),
-			new BigDecimal(MVP_PER_USER_SPEND_CEILING));
+	@ConditionalOnMissingBean(GlobalCostCircuitBreaker.class)
+	GlobalCostCircuitBreaker globalCostCircuitBreaker(
+		GenerationCostMetrics costMetrics,
+		ObjectProvider<FashnVtonProvider> fashnProviders,
+		ObjectProvider<ProviderRegistry> providerRegistries
+	) {
+		String providerKey = resolveProvider(fashnProviders, providerRegistries).providerKey().value();
+		return new AggregateBackedCostCircuitBreaker(
+			costMetrics,
+			new AbuseBudgetPolicy(
+				new BigDecimal(MVP_GLOBAL_SPEND_CEILING),
+				new BigDecimal(MVP_PER_USER_SPEND_CEILING),
+				Map.of(providerKey, new BigDecimal(MVP_PROVIDER_SPEND_CEILING)),
+				MVP_BUDGET_CURRENCY,
+				MVP_BUDGET_WINDOW));
 	}
 
 	/**
@@ -158,7 +167,7 @@ public class GenerationProcessorConfiguration {
 		ObjectProvider<GenerationMetrics> metrics,
 		ObjectProvider<GenerationCapacityLeaseStore> capacityLeases,
 		ObjectProvider<NotificationEventStore> notificationEvents,
-		ObjectProvider<SpendBreaker> spendBreakers,
+		GlobalCostCircuitBreaker costCircuitBreaker,
 		ObjectProvider<ProviderHealthGate> providerHealthGates
 	) {
 		return new GenerationWorkProcessor(
@@ -180,7 +189,7 @@ public class GenerationProcessorConfiguration {
 			capacityLeases.getIfAvailable(),
 			notificationEvents.getIfAvailable(),
 			null,
-			spendBreakers.getIfAvailable(this::spendBreaker),
+			costCircuitBreaker,
 			providerHealthGates.getIfAvailable(this::providerHealthGate));
 	}
 

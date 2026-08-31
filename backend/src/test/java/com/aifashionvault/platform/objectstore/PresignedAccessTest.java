@@ -32,7 +32,7 @@ class PresignedAccessTest {
 		assertThat(access.toString()).doesNotContain(SIGNED_URI.toString());
 		assertThat(access.toString()).doesNotContain("redact-me-token");
 		assertThat(access.toString()).doesNotContain("https://");
-		assertThat(access.toString()).contains("signedHeaders=");
+		assertThat(access.toString()).doesNotContain("signedHeaders=");
 	}
 
 	@Test

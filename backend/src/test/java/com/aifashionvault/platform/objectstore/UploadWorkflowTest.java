@@ -170,6 +170,35 @@ class UploadWorkflowTest {
 				.isNotInstanceOf(ObjectStoreExceptions.StagedObjectMissingException.class);
 			assertThat(store.deleteCount).isZero();
 		}
+		@Test
+		void readStoreFailureRemainsInfrastructureFailureWithoutDeletion() {
+			FakeObjectStore store = staged(new byte[] {1, 2, 3}, "image/jpeg");
+			store.readFailure = new ObjectStoreExceptions.ObjectStoreUnavailableException("store read failed");
+
+			assertThatThrownBy(() -> workflow(store).complete(USER_ID, UPLOAD_ID))
+				.isInstanceOf(ObjectStoreExceptions.ObjectStoreUnavailableException.class)
+				.hasMessage("store read failed");
+			assertThat(store.deleteCount).isZero();
+		}
+
+		@Test
+		void unsafeScannerVerdictsDeleteTempAndDoNotExposeReason() throws Exception {
+			byte[] jpeg = raster("JPEG", 15, 15);
+			for (MalwareVerdict verdict : new MalwareVerdict[] {MalwareVerdict.DETECTED, MalwareVerdict.UNAVAILABLE}) {
+				FakeObjectStore store = staged(jpeg, "image/jpeg");
+				String reason = "scanner internal reason";
+				UploadWorkflow unsafe = new UploadWorkflow(
+					store,
+					new ImageInspector(),
+					(bytes, type) -> new MalwareScanResult(verdict, reason),
+					() -> FIXED_UPLOAD);
+
+				assertThatThrownBy(() -> unsafe.complete(USER_ID, UPLOAD_ID))
+					.isInstanceOf(ObjectStoreExceptions.ImageValidationException.class)
+					.hasMessage("image failed malware inspection");
+				assertDeletedTemp(store);
+			}
+		}
 
 		@Test
 		void lengthTypeAndMagicFailuresDeleteTemp() throws Exception {
