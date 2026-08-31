@@ -19,6 +19,8 @@ vault:
     url: ${DB_URL}
     username: ${DB_USERNAME}
     password: ${DB_PASSWORD}
+  retention:
+    temporary-media-max-age: PT24H
   aws:
     region: ${AWS_REGION}
     endpoint-url-s3: ${AWS_ENDPOINT_URL_S3:}
