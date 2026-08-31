@@ -7,6 +7,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class ObjectRefTest {
+    @Test
+    void storageDomainValuesAreExactlyDefined() {
+        assertThat(StorageDomain.values()).containsExactly(
+            StorageDomain.AVATAR,
+            StorageDomain.VAULT,
+            StorageDomain.LOOK,
+            StorageDomain.TEMP);
+    }
 
 	@Test
 	void validVaultObjectKeyConstructs() {
@@ -19,6 +27,7 @@ class ObjectRefTest {
 			"users/11111111-1111-1111-1111-111111111111/vault/22222222-2222-2222-2222-222222222222.jpg");
 	}
 
+
 	@Test
 	void surroundingWhitespaceIsStripped() {
 		ObjectRef ref = new ObjectRef(StorageDomain.VAULT, "  users/u/vault/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.jpg  ");
@@ -28,6 +37,7 @@ class ObjectRefTest {
 
 	@Test
 	void nullBoundaryThrowsIllegalArgumentException() {
+
 		assertThatThrownBy(() -> new ObjectRef(null, "users/u/vault/a.jpg"))
 			.isInstanceOf(IllegalArgumentException.class);
 	}

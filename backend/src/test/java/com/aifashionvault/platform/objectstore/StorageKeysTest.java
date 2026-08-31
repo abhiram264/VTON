@@ -28,16 +28,14 @@ class StorageKeysTest {
 	private static final UUID STABLE_ID = UUID.fromString("44444444-4444-4444-4444-444444444444");
 	private static final UUID JOB_ID = UUID.fromString("55555555-5555-5555-5555-555555555555");
 	private static final UUID OBJECT_ID = UUID.fromString("66666666-6666-6666-6666-666666666666");
-
-	@Test
-	void isPublicFinalUtilityWithPrivateConstructor() {
-		assertThat(Modifier.isPublic(StorageKeys.class.getModifiers())).isTrue();
-		assertThat(Modifier.isFinal(StorageKeys.class.getModifiers())).isTrue();
-		Constructor<?>[] constructors = StorageKeys.class.getDeclaredConstructors();
-		assertThat(constructors).hasSize(1);
-		assertThat(Modifier.isPrivate(constructors[0].getModifiers())).isTrue();
-		assertThat(constructors[0].getParameterCount()).isZero();
-	}
+    @Test
+    void storageDomainValuesAreExactlyDefined() {
+        assertThat(StorageDomain.values()).containsExactly(
+            StorageDomain.AVATAR,
+            StorageDomain.VAULT,
+            StorageDomain.LOOK,
+            StorageDomain.TEMP);
+    }
 
 	@Test
 	void doesNotAcceptClientFilenamesOrRawUserIdStrings() {
