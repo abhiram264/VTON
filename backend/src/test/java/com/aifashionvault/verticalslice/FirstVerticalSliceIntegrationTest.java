@@ -158,7 +158,7 @@ class FirstVerticalSliceIntegrationTest {
 			"type", "LOOK_READY", "lookId", look.id().value().toString()));
 
 		when(objects.presignGet(any(), any())).thenReturn(new PresignedAccess(
-			new ObjectRef(com.aifashionvault.platform.objectstore.StorageBoundary.LOOK, look.storageKey().value()),
+			new ObjectRef(com.aifashionvault.shared.StorageDomain.LOOK, look.storageKey().value()),
 			"GET", URI.create("https://private.invalid/read?signature=short-lived"), Map.of(), Instant.now().plusSeconds(300)));
 		http.perform(get("/looks/" + look.id().value()).header(HttpHeaders.AUTHORIZATION, bearer(owner.token())))
 			.andExpect(status().isOk());
