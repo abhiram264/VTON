@@ -41,13 +41,13 @@ import com.aifashionvault.platform.objectstore.ObjectMetadata;
 import com.aifashionvault.platform.objectstore.ObjectRef;
 import com.aifashionvault.platform.objectstore.ObjectStore;
 import com.aifashionvault.platform.objectstore.PresignedAccess;
-import com.aifashionvault.platform.objectstore.StorageBoundary;
 import com.aifashionvault.platform.objectstore.StoredObject;
 import com.aifashionvault.platform.objectstore.UploadCapability;
 import com.aifashionvault.platform.security.ExternalTokenVerifier;
 import com.aifashionvault.platform.security.InProcessJwtFixture;
 import com.aifashionvault.shared.AvatarImageId;
 import com.aifashionvault.shared.GenerationJobId;
+import com.aifashionvault.shared.StorageDomain;
 import com.aifashionvault.shared.StorageKey;
 import com.aifashionvault.shared.UploadId;
 import com.aifashionvault.shared.UserId;
@@ -133,7 +133,7 @@ class LooksHttpContractTest {
 
 		mockMvc.perform(delete("/looks/" + id).header(HttpHeaders.AUTHORIZATION, bearer(owner.token())))
 			.andExpect(status().isNoContent()).andExpect(content().string(""));
-		assertThat(objects.deleted).isEqualTo(new ObjectRef(StorageBoundary.LOOK, storageKey(owner, id)));
+		assertThat(objects.deleted).isEqualTo(new ObjectRef(StorageDomain.LOOK, storageKey(owner, id)));
 		mockMvc.perform(get("/looks/" + id).header(HttpHeaders.AUTHORIZATION, bearer(owner.token())))
 			.andExpect(status().isNotFound()).andExpect(content().string(NOT_FOUND));
 	}
@@ -264,6 +264,6 @@ class LooksHttpContractTest {
 		@Override public PresignedAccess presignGet(ObjectRef object, Duration ttl) {
 			return new PresignedAccess(object, "GET", URI.create("https://example.invalid/read"), Map.of(), NOW.plus(ttl));
 		}
-		@Override public List<StoredObject> list(StorageBoundary boundary, String prefix) { return List.of(); }
+		@Override public List<StoredObject> list(StorageDomain boundary, String prefix) { return List.of(); }
 	}
 }

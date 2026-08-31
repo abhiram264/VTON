@@ -9,6 +9,7 @@ import com.aifashionvault.importer.ImportMediaAccess;
 import com.aifashionvault.shared.StorageKey;
 import com.aifashionvault.shared.UploadId;
 import com.aifashionvault.shared.UserId;
+import com.aifashionvault.shared.StorageDomain;
 
 /**
  * Importer media adapter over the existing private object store: claims a
@@ -49,7 +50,7 @@ public final class ObjectStoreImportMediaAccess implements ImportMediaAccess {
 		if (uploadId == null) {
 			throw new IllegalArgumentException("uploadId is required");
 		}
-		ObjectRef ref = new ObjectRef(StorageBoundary.TEMP, StorageKeys.stagingKey(ownerId, uploadId).value());
+		ObjectRef ref = new ObjectRef(StorageDomain.TEMP, StorageKeys.stagingKey(ownerId, uploadId).value());
 		final ObjectMetadata metadata;
 		try {
 			metadata = store.head(ref);
@@ -98,14 +99,14 @@ public final class ObjectStoreImportMediaAccess implements ImportMediaAccess {
 			throw new IllegalArgumentException("upload and destination are required");
 		}
 		ObjectRef source = new ObjectRef(
-				StorageBoundary.TEMP,
+				StorageDomain.TEMP,
 				StorageKeys.stagingKey(ownerId, upload.id(), UploadPurpose.GENERIC).value());
-		ObjectRef dest = new ObjectRef(StorageBoundary.VAULT, destination.value());
+		ObjectRef dest = new ObjectRef(StorageDomain.VAULT, destination.value());
 		ClaimResult result = store.claim(new ClaimCommand(
 				ownerId,
 				upload.id(),
 				destination,
-				StorageBoundary.VAULT,
+				StorageDomain.VAULT,
 				claimMarker(ownerId, destination),
 				upload.version()));
 		if (result instanceof ClaimResult.Copied) {
@@ -146,7 +147,7 @@ public final class ObjectStoreImportMediaAccess implements ImportMediaAccess {
 		if (writer == null || ownerId == null) {
 			throw new IllegalStateException("publishing fetched images requires an owner-scoped adapter");
 		}
-		ObjectRef dest = new ObjectRef(StorageBoundary.VAULT, destination.value());
+		ObjectRef dest = new ObjectRef(StorageDomain.VAULT, destination.value());
 		return writer.putIfAbsent(dest, content, contentLength, claimMarker(ownerId, destination), normalized);
 	}
 
@@ -156,7 +157,7 @@ public final class ObjectStoreImportMediaAccess implements ImportMediaAccess {
 			throw new IllegalArgumentException("key is required");
 		}
 		try {
-			store.delete(new ObjectRef(StorageBoundary.VAULT, key.value()));
+			store.delete(new ObjectRef(StorageDomain.VAULT, key.value()));
 		}
 		catch (ObjectStoreExceptions.ObjectStoreUnavailableException ex) {
 			// best-effort publish cleanup: never mask the retryable publish failure

@@ -1,8 +1,9 @@
 package com.aifashionvault.platform.objectstore;
 
+import com.aifashionvault.shared.StorageDomain;
 import java.util.Locale;
 
-public record ObjectRef(StorageBoundary boundary, String objectKey) {
+public record ObjectRef(StorageDomain boundary, String objectKey) {
 
 	public ObjectRef {
 		if (boundary == null) {

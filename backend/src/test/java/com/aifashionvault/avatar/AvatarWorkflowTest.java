@@ -48,7 +48,7 @@ import com.aifashionvault.platform.objectstore.ObjectRef;
 import com.aifashionvault.platform.objectstore.ObjectStore;
 import com.aifashionvault.platform.objectstore.ObjectStoreExceptions;
 import com.aifashionvault.platform.objectstore.PresignedAccess;
-import com.aifashionvault.platform.objectstore.StorageBoundary;
+import com.aifashionvault.shared.StorageDomain;
 import com.aifashionvault.platform.objectstore.StorageKeys;
 import com.aifashionvault.platform.objectstore.UploadCapability;
 import com.aifashionvault.platform.objectstore.UploadPurpose;
@@ -139,10 +139,10 @@ class AvatarWorkflowTest {
 		assertThat(image.preflightPolicyVersion()).isEqualTo("avatar-preflight-v1");
 		assertThat(objectStore.claims()).hasSize(1);
 		ClaimCommand claim = objectStore.claims().getFirst();
-		assertThat(claim.destinationBoundary()).isEqualTo(StorageBoundary.AVATAR);
+		assertThat(claim.destinationBoundary()).isEqualTo(StorageDomain.AVATAR);
 		assertThat(claim.claimMarker()).isEqualTo(image.id().value().toString());
 		assertThat(claim.destination()).isEqualTo(image.storageKey());
-		assertThat(objectStore.head(new ObjectRef(StorageBoundary.AVATAR, image.storageKey().value()))).isNotNull();
+		assertThat(objectStore.head(new ObjectRef(StorageDomain.AVATAR, image.storageKey().value()))).isNotNull();
 		assertThat(store.isUploadConsumed(userId, uploadId)).isTrue();
 		assertThat(objectStore.deleted()).contains(temp);
 		assertThatThrownBy(() -> objectStore.head(temp))
@@ -450,7 +450,7 @@ class AvatarWorkflowTest {
 		objectStore.put(staging(userId, uploadId, UploadPurpose.AVATAR), texturedJpeg());
 		AvatarProfile created = workflow.create(userId, uploadId);
 		AvatarImage image = store.findImage(userId, created.primaryImageId()).orElseThrow();
-		objectStore.remove(new ObjectRef(StorageBoundary.AVATAR, image.storageKey().value()));
+		objectStore.remove(new ObjectRef(StorageDomain.AVATAR, image.storageKey().value()));
 
 		assertAvatarException(() -> workflow.get(userId, created.id()), AvatarProblemCode.AVATAR_MEDIA_MISSING);
 		assertAvatarException(() -> workflow.list(userId), AvatarProblemCode.AVATAR_MEDIA_MISSING);
@@ -600,7 +600,7 @@ class AvatarWorkflowTest {
 	}
 
 	private static ObjectRef staging(UserId userId, UploadId uploadId, UploadPurpose purpose) {
-		return new ObjectRef(StorageBoundary.TEMP, StorageKeys.stagingKey(userId, uploadId, purpose).value());
+		return new ObjectRef(StorageDomain.TEMP, StorageKeys.stagingKey(userId, uploadId, purpose).value());
 	}
 
 	private AvatarWorkflow workflow(JdbcAvatarStore avatarStore) {
@@ -801,7 +801,7 @@ class AvatarWorkflowTest {
 		@Override
 		public void delete(ObjectRef object) {
 			deleted.add(object);
-			if (failAvatarDeletes && object.boundary() == StorageBoundary.AVATAR) {
+			if (failAvatarDeletes && object.boundary() == StorageDomain.AVATAR) {
 				throw new ObjectStoreExceptions.ObjectStoreUnavailableException("simulated delete failure");
 			}
 			objects.remove(object);
@@ -811,7 +811,7 @@ class AvatarWorkflowTest {
 		public ClaimResult claim(ClaimCommand command) {
 			claims.add(command);
 			ObjectRef avatarTemp = new ObjectRef(
-				StorageBoundary.TEMP,
+				StorageDomain.TEMP,
 				StorageKeys.stagingKey(command.userId(), command.uploadId(), UploadPurpose.AVATAR).value());
 			Stored source = objects.get(avatarTemp);
 			if (source == null) {

@@ -1,5 +1,6 @@
 package com.aifashionvault.platform.objectstore;
 
+import com.aifashionvault.shared.StorageDomain;
 import com.aifashionvault.shared.StorageKey;
 import com.aifashionvault.shared.UploadId;
 import com.aifashionvault.shared.UserId;
@@ -8,7 +9,7 @@ public record ClaimCommand(
 	UserId userId,
 	UploadId uploadId,
 	StorageKey destination,
-	StorageBoundary destinationBoundary,
+	StorageDomain destinationBoundary,
 	String claimMarker,
 	String sourceVersion
 ) {

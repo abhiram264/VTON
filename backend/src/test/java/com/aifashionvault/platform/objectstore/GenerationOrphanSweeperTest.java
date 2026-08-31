@@ -11,6 +11,7 @@ import java.util.Map;
 
 import org.junit.jupiter.api.Test;
 
+import com.aifashionvault.shared.StorageDomain;
 import com.aifashionvault.shared.UploadId;
 import com.aifashionvault.shared.UserId;
 
@@ -28,9 +29,9 @@ class GenerationOrphanSweeperTest {
 	@Test
 	void unreferencedObjectAfterSafeAgeIsDeletedAndReferencedLookIsKept() {
 		FakeObjectStore objects = new FakeObjectStore();
-		ObjectRef orphanTemp = new ObjectRef(StorageBoundary.TEMP, ORPHAN_TEMP_KEY);
-		ObjectRef referencedLook = new ObjectRef(StorageBoundary.LOOK, LOOK_KEY);
-		ObjectRef youngTemp = new ObjectRef(StorageBoundary.TEMP, YOUNG_TEMP_KEY);
+		ObjectRef orphanTemp = new ObjectRef(StorageDomain.TEMP, ORPHAN_TEMP_KEY);
+		ObjectRef referencedLook = new ObjectRef(StorageDomain.LOOK, LOOK_KEY);
+		ObjectRef youngTemp = new ObjectRef(StorageDomain.TEMP, YOUNG_TEMP_KEY);
 		objects.put(orphanTemp, NOW.minus(Duration.ofHours(2)));
 		objects.put(referencedLook, NOW.minus(Duration.ofHours(3)));
 		objects.put(youngTemp, NOW.minus(Duration.ofMinutes(10)));
@@ -53,7 +54,7 @@ class GenerationOrphanSweeperTest {
 	@Test
 	void objectExistenceDoesNotGrantVisibilityAndUnreferencedFinalIsSwept() {
 		FakeObjectStore objects = new FakeObjectStore();
-		ObjectRef orphanLook = new ObjectRef(StorageBoundary.LOOK, "users/user/looks/uncommitted.jpg");
+		ObjectRef orphanLook = new ObjectRef(StorageDomain.LOOK, "users/user/looks/uncommitted.jpg");
 		objects.put(orphanLook, NOW.minus(Duration.ofHours(5)));
 
 		GenerationOrphanSweeper sweeper = new GenerationOrphanSweeper(
@@ -106,7 +107,7 @@ class GenerationOrphanSweeperTest {
 		}
 
 		@Override
-		public List<StoredObject> list(StorageBoundary boundary, String prefix) {
+		public List<StoredObject> list(StorageDomain boundary, String prefix) {
 			List<StoredObject> matches = new ArrayList<>();
 			for (Map.Entry<ObjectRef, StoredObject> entry : stored.entrySet()) {
 				if (entry.getKey().boundary() != boundary) {

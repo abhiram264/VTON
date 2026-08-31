@@ -10,6 +10,7 @@ import org.mockito.ArgumentCaptor;
 import com.aifashionvault.importer.ImportMediaAccess.ClaimOutcome;
 import com.aifashionvault.importer.ImportMediaAccess.VerifiedImage;
 import com.aifashionvault.platform.environment.VaultEnvironmentProperties;
+import com.aifashionvault.shared.StorageDomain;
 import com.aifashionvault.shared.StorageKey;
 import com.aifashionvault.shared.UploadId;
 import com.aifashionvault.shared.UserId;
@@ -69,7 +70,7 @@ class ObjectStoreImportMediaAccessTest {
 		ImportObjectWriter writer = new ImportObjectWriter(store(s3), s3);
 
 		assertThatThrownBy(() -> writer.putIfAbsent(
-			new ObjectRef(StorageBoundary.VAULT, DEST_KEY),
+			new ObjectRef(StorageDomain.VAULT, DEST_KEY),
 			new ByteArrayInputStream(new byte[] {1, 2, 3}),
 			3,
 			"claim-marker",
@@ -86,7 +87,7 @@ class ObjectStoreImportMediaAccessTest {
 		ImportObjectWriter writer = new ImportObjectWriter(store(s3), s3);
 
 		boolean created = writer.putIfAbsent(
-			new ObjectRef(StorageBoundary.VAULT, DEST_KEY),
+			new ObjectRef(StorageDomain.VAULT, DEST_KEY),
 			new ByteArrayInputStream(new byte[] {1, 2, 3}),
 			3,
 			"claim-marker",

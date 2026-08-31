@@ -24,6 +24,7 @@ import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
 import com.aifashionvault.avatar.AvatarMediaAccess;
+import com.aifashionvault.shared.StorageDomain;
 import com.aifashionvault.shared.StorageKey;
 import com.aifashionvault.shared.UploadId;
 import com.aifashionvault.shared.UserId;
@@ -87,7 +88,7 @@ class ObjectStoreTypesTest {
 			.containsExactly(ObjectRef.class, Duration.class);
 		assertThat(methodNamed(methods, "presignGet").getReturnType()).isEqualTo(PresignedAccess.class);
 
-		Method list = methodNamed(methods, "list", StorageBoundary.class, String.class);
+		Method list = methodNamed(methods, "list", StorageDomain.class, String.class);
 		assertThat(list.getReturnType()).isEqualTo(List.class);
 		assertThat(list.isDefault()).isTrue();
 		ParameterizedType listReturnType = (ParameterizedType) list.getGenericReturnType();
@@ -97,7 +98,7 @@ class ObjectStoreTypesTest {
 	@Test
 	void listingDefaultsAreEmptyAndExposeOnlyStableMetadata() {
 		ObjectStore objectStore = defaultMethodsOnly(ObjectStore.class);
-		assertThat(objectStore.list(StorageBoundary.AVATAR, "users/")).isEmpty();
+		assertThat(objectStore.list(StorageDomain.AVATAR, "users/")).isEmpty();
 
 		AvatarMediaAccess avatarMediaAccess = defaultMethodsOnly(AvatarMediaAccess.class);
 		assertThat(avatarMediaAccess.listPersistentAvatars()).isEmpty();
@@ -288,31 +289,31 @@ class ObjectStoreTypesTest {
 			USER_ID,
 			UPLOAD_ID,
 			destination,
-			StorageBoundary.AVATAR,
+			StorageDomain.AVATAR,
 			"marker-1",
 			"source-v1");
 		assertThat(command.userId()).isEqualTo(USER_ID);
 		assertThat(command.uploadId()).isEqualTo(UPLOAD_ID);
 		assertThat(command.destination()).isEqualTo(destination);
-		assertThat(command.destinationBoundary()).isEqualTo(StorageBoundary.AVATAR);
+		assertThat(command.destinationBoundary()).isEqualTo(StorageDomain.AVATAR);
 		assertThat(command.claimMarker()).isEqualTo("marker-1");
 		assertThat(command.sourceVersion()).isEqualTo("source-v1");
 
-		assertThatThrownBy(() -> new ClaimCommand(null, UPLOAD_ID, destination, StorageBoundary.AVATAR, "m", "v"))
+		assertThatThrownBy(() -> new ClaimCommand(null, UPLOAD_ID, destination, StorageDomain.AVATAR, "m", "v"))
 			.isInstanceOf(IllegalArgumentException.class);
-		assertThatThrownBy(() -> new ClaimCommand(USER_ID, null, destination, StorageBoundary.AVATAR, "m", "v"))
+		assertThatThrownBy(() -> new ClaimCommand(USER_ID, null, destination, StorageDomain.AVATAR, "m", "v"))
 			.isInstanceOf(IllegalArgumentException.class);
-		assertThatThrownBy(() -> new ClaimCommand(USER_ID, UPLOAD_ID, null, StorageBoundary.AVATAR, "m", "v"))
+		assertThatThrownBy(() -> new ClaimCommand(USER_ID, UPLOAD_ID, null, StorageDomain.AVATAR, "m", "v"))
 			.isInstanceOf(IllegalArgumentException.class);
 		assertThatThrownBy(() -> new ClaimCommand(USER_ID, UPLOAD_ID, destination, null, "m", "v"))
 			.isInstanceOf(IllegalArgumentException.class);
-		assertThatThrownBy(() -> new ClaimCommand(USER_ID, UPLOAD_ID, destination, StorageBoundary.AVATAR, null, "v"))
+		assertThatThrownBy(() -> new ClaimCommand(USER_ID, UPLOAD_ID, destination, StorageDomain.AVATAR, null, "v"))
 			.isInstanceOf(IllegalArgumentException.class);
-		assertThatThrownBy(() -> new ClaimCommand(USER_ID, UPLOAD_ID, destination, StorageBoundary.AVATAR, " ", "v"))
+		assertThatThrownBy(() -> new ClaimCommand(USER_ID, UPLOAD_ID, destination, StorageDomain.AVATAR, " ", "v"))
 			.isInstanceOf(IllegalArgumentException.class);
-		assertThatThrownBy(() -> new ClaimCommand(USER_ID, UPLOAD_ID, destination, StorageBoundary.AVATAR, "m", null))
+		assertThatThrownBy(() -> new ClaimCommand(USER_ID, UPLOAD_ID, destination, StorageDomain.AVATAR, "m", null))
 			.isInstanceOf(IllegalArgumentException.class);
-		assertThatThrownBy(() -> new ClaimCommand(USER_ID, UPLOAD_ID, destination, StorageBoundary.AVATAR, "m", ""))
+		assertThatThrownBy(() -> new ClaimCommand(USER_ID, UPLOAD_ID, destination, StorageDomain.AVATAR, "m", ""))
 			.isInstanceOf(IllegalArgumentException.class);
 	}
 

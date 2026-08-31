@@ -1,6 +1,7 @@
 package com.aifashionvault.platform.objectstore;
 
 import java.time.Duration;
+import com.aifashionvault.shared.StorageDomain;
 
 import org.junit.jupiter.api.Test;
 
@@ -15,7 +16,7 @@ class LoggingTempObjectAgeAlertTest {
 	@Test
 	void agedStoresKeyAndAgeOnly() {
 		LoggingTempObjectAgeAlert alert = new LoggingTempObjectAgeAlert();
-		ObjectRef object = new ObjectRef(StorageBoundary.TEMP, KEY);
+		ObjectRef object = new ObjectRef(StorageDomain.TEMP, KEY);
 
 		alert.aged(object, AGE);
 
@@ -29,7 +30,7 @@ class LoggingTempObjectAgeAlertTest {
 	@Test
 	void diagnosticPayloadOmitsUriBytesAndBase64EvenIfLogged() {
 		LoggingTempObjectAgeAlert alert = new LoggingTempObjectAgeAlert();
-		ObjectRef object = new ObjectRef(StorageBoundary.TEMP, KEY);
+		ObjectRef object = new ObjectRef(StorageDomain.TEMP, KEY);
 
 		alert.aged(object, AGE);
 
@@ -59,7 +60,7 @@ class LoggingTempObjectAgeAlertTest {
 	@Test
 	void rejectsNullObjectAndAge() {
 		LoggingTempObjectAgeAlert alert = new LoggingTempObjectAgeAlert();
-		ObjectRef object = new ObjectRef(StorageBoundary.TEMP, KEY);
+		ObjectRef object = new ObjectRef(StorageDomain.TEMP, KEY);
 
 		assertThatThrownBy(() -> alert.aged(null, AGE))
 			.isInstanceOf(IllegalArgumentException.class);

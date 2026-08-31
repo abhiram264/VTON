@@ -3,6 +3,7 @@ package com.aifashionvault.platform.objectstore;
 import java.util.UUID;
 
 import com.aifashionvault.shared.StorageKey;
+import com.aifashionvault.shared.StorageDomain;
 import com.aifashionvault.shared.UploadId;
 import com.aifashionvault.shared.UserId;
 
@@ -28,7 +29,7 @@ public final class StorageKeys {
 
 	public static StorageKey persistentKey(
 		UserId userId,
-		StorageBoundary boundary,
+		StorageDomain boundary,
 		UUID stableId,
 		ImageMediaType mediaType
 	) {
@@ -40,7 +41,7 @@ public final class StorageKeys {
 			case AVATAR -> "avatars";
 			case VAULT -> "vault";
 			case LOOK -> "looks";
-			case GENERATION_INPUT, TEMP -> throw new IllegalArgumentException("persistentKey is not for " + boundary);
+			case TEMP -> throw new IllegalArgumentException("persistentKey is not for " + boundary);
 		};
 		return new StorageKey("users/" + userId.value() + "/" + folder + "/" + stableId + extension(mediaType));
 	}

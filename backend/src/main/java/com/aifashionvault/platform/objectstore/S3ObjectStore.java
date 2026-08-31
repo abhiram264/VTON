@@ -17,6 +17,7 @@ import java.util.Map;
 import com.aifashionvault.platform.environment.VaultEnvironmentProperties;
 import com.aifashionvault.shared.StorageKey;
 import com.aifashionvault.shared.UploadId;
+import com.aifashionvault.shared.StorageDomain;
 import com.aifashionvault.shared.UserId;
 
 import software.amazon.awssdk.awscore.exception.AwsServiceException;
@@ -75,16 +76,15 @@ public final class S3ObjectStore implements ObjectStore, GenerationMediaStore {
 		this.alert = alert;
 	}
 
-	public String bucket(StorageBoundary boundary) {
+	public String bucket(StorageDomain boundary) {
 		if (boundary == null) {
 			throw new IllegalArgumentException("storage boundary is required");
 		}
 		return switch (boundary) {
 			case AVATAR -> buckets.avatarBucket();
 			case VAULT -> buckets.vaultBucket();
-			case GENERATION_INPUT -> buckets.tempBucket();
-			case LOOK -> buckets.lookBucket();
 			case TEMP -> buckets.tempBucket();
+			case LOOK -> buckets.lookBucket();
 		};
 	}
 
@@ -140,7 +140,7 @@ public final class S3ObjectStore implements ObjectStore, GenerationMediaStore {
 		if (userId == null || uploadId == null || declaration == null || purpose == null) {
 			throw new IllegalArgumentException("userId, uploadId, declaration, and purpose are required");
 		}
-		ObjectRef object = new ObjectRef(StorageBoundary.TEMP, StorageKeys.stagingKey(userId, uploadId, purpose).value());
+		ObjectRef object = new ObjectRef(StorageDomain.TEMP, StorageKeys.stagingKey(userId, uploadId, purpose).value());
 		PutObjectRequest put = PutObjectRequest.builder()
 			.bucket(bucket(object.boundary()))
 			.key(object.objectKey())
@@ -216,7 +216,7 @@ public final class S3ObjectStore implements ObjectStore, GenerationMediaStore {
 	}
 
 	@Override
-	public List<StoredObject> list(StorageBoundary boundary, String prefix) {
+	public List<StoredObject> list(StorageDomain boundary, String prefix) {
 		if (boundary == null) {
 			throw new IllegalArgumentException("storage boundary is required");
 		}
@@ -293,8 +293,8 @@ public final class S3ObjectStore implements ObjectStore, GenerationMediaStore {
 		if (command == null) {
 			throw new IllegalArgumentException("command is required");
 		}
-		ObjectRef source = new ObjectRef(StorageBoundary.TEMP, command.sourceTempKey().value());
-		ObjectRef destination = new ObjectRef(StorageBoundary.LOOK, command.destinationLookKey().value());
+		ObjectRef source = new ObjectRef(StorageDomain.TEMP, command.sourceTempKey().value());
+		ObjectRef destination = new ObjectRef(StorageDomain.LOOK, command.destinationLookKey().value());
 		return copyWithClaimMarker(source, destination, command.sourceVersion(), command.claimMarker());
 	}
 
@@ -304,7 +304,7 @@ public final class S3ObjectStore implements ObjectStore, GenerationMediaStore {
 			throw new IllegalArgumentException("command is required");
 		}
 		ObjectRef source = new ObjectRef(
-			StorageBoundary.TEMP,
+			StorageDomain.TEMP,
 			StorageKeys.stagingKey(command.ownerId(), command.productUploadId(), UploadPurpose.GENERIC).value());
 		ObjectMetadata sourceMetadata = head(source);
 		String normalizedType;
@@ -322,7 +322,7 @@ public final class S3ObjectStore implements ObjectStore, GenerationMediaStore {
 			throw new ObjectStoreExceptions.ImageValidationException("invalid product upload");
 		}
 		ObjectRef destination = new ObjectRef(
-			StorageBoundary.GENERATION_INPUT,
+			StorageDomain.TEMP,
 			StorageKeys.generationInputKey(
 				command.ownerId(), command.generationId().value(), command.destinationMediaId().value()).value());
 		return copyWithClaimMarker(
@@ -338,11 +338,11 @@ public final class S3ObjectStore implements ObjectStore, GenerationMediaStore {
 			throw new IllegalArgumentException("userId is required");
 		}
 		String id = userId.value().toString();
-		purgePrefix(StorageBoundary.AVATAR, "users/" + id + "/");
-		purgePrefix(StorageBoundary.GENERATION_INPUT, "users/" + id + "/generation-inputs/");
-		purgePrefix(StorageBoundary.VAULT, "users/" + id + "/");
-		purgePrefix(StorageBoundary.LOOK, "users/" + id + "/");
-		purgePrefix(StorageBoundary.TEMP, "temp/" + id + "/");
+		purgePrefix(StorageDomain.AVATAR, "users/" + id + "/");
+		purgePrefix(StorageDomain.TEMP, "users/" + id + "/generation-inputs/");
+		purgePrefix(StorageDomain.VAULT, "users/" + id + "/");
+		purgePrefix(StorageDomain.LOOK, "users/" + id + "/");
+		purgePrefix(StorageDomain.TEMP, "temp/" + id + "/");
 	}
 
 	@Override
@@ -368,7 +368,7 @@ public final class S3ObjectStore implements ObjectStore, GenerationMediaStore {
 
 	private ObjectRef claimSource(ClaimCommand command) {
 		ObjectRef avatar = new ObjectRef(
-			StorageBoundary.TEMP,
+			StorageDomain.TEMP,
 			StorageKeys.stagingKey(command.userId(), command.uploadId(), UploadPurpose.AVATAR).value());
 		try {
 			head(avatar);
@@ -376,7 +376,7 @@ public final class S3ObjectStore implements ObjectStore, GenerationMediaStore {
 		}
 		catch (ObjectStoreExceptions.StagedObjectMissingException ignored) {
 			return new ObjectRef(
-				StorageBoundary.TEMP,
+				StorageDomain.TEMP,
 				StorageKeys.stagingKey(command.userId(), command.uploadId(), UploadPurpose.GENERIC).value());
 		}
 	}
@@ -442,7 +442,7 @@ public final class S3ObjectStore implements ObjectStore, GenerationMediaStore {
 		}
 	}
 
-	private void purgePrefix(StorageBoundary boundary, String prefix) {
+	private void purgePrefix(StorageDomain boundary, String prefix) {
 		String bucketName = bucket(boundary);
 		String token = null;
 		do {
@@ -468,7 +468,7 @@ public final class S3ObjectStore implements ObjectStore, GenerationMediaStore {
 		}
 		Duration age = Duration.between(obj.lastModified(), now);
 		if (age.compareTo(TEMP_ALERT_AGE) >= 0) {
-			alert.aged(new ObjectRef(StorageBoundary.TEMP, obj.key()), age);
+			alert.aged(new ObjectRef(StorageDomain.TEMP, obj.key()), age);
 		}
 		if (age.compareTo(TEMP_DELETE_AGE) >= 0) {
 			deleteQuietly(tempBucket, obj.key());
@@ -547,16 +547,16 @@ public final class S3ObjectStore implements ObjectStore, GenerationMediaStore {
 		return null;
 	}
 
-	private static StorageBoundary generationMediaBoundary(StorageKey key) {
+	private static StorageDomain generationMediaBoundary(StorageKey key) {
 		String value = key.value();
 		if (value.startsWith("temp/")) {
-			return StorageBoundary.TEMP;
+			return StorageDomain.TEMP;
 		}
 		if (value.contains("/generation-inputs/")) {
-			return StorageBoundary.GENERATION_INPUT;
+			return StorageDomain.TEMP;
 		}
 		if (value.contains("/looks/")) {
-			return StorageBoundary.LOOK;
+			return StorageDomain.LOOK;
 		}
 		throw new IllegalArgumentException("generation media destination must be a generation TEMP, input, or LOOK key");
 	}

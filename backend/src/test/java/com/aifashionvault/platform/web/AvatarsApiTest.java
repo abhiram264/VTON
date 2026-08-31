@@ -56,7 +56,7 @@ import com.aifashionvault.platform.objectstore.ObjectRef;
 import com.aifashionvault.platform.objectstore.ObjectStore;
 import com.aifashionvault.platform.objectstore.ObjectStoreExceptions;
 import com.aifashionvault.platform.objectstore.PresignedAccess;
-import com.aifashionvault.platform.objectstore.StorageBoundary;
+import com.aifashionvault.shared.StorageDomain;
 import com.aifashionvault.platform.objectstore.StorageKeys;
 import com.aifashionvault.platform.objectstore.UploadCapability;
 import com.aifashionvault.platform.objectstore.UploadPurpose;
@@ -664,7 +664,7 @@ class AvatarsApiTest {
 			MediaDeclaration declaration,
 			UploadPurpose purpose
 		) {
-			ObjectRef ref = new ObjectRef(StorageBoundary.TEMP, StorageKeys.stagingKey(userId, uploadId, purpose).value());
+			ObjectRef ref = new ObjectRef(StorageDomain.TEMP, StorageKeys.stagingKey(userId, uploadId, purpose).value());
 			this.objects.put(ref, new Stored(
 				new ObjectMetadata(TEXTURED_JPEG.length, "image/jpeg", "etag-1"),
 				TEXTURED_JPEG));
@@ -705,7 +705,7 @@ class AvatarsApiTest {
 		@Override
 		public ClaimResult claim(ClaimCommand command) {
 			ObjectRef source = new ObjectRef(
-				StorageBoundary.TEMP,
+				StorageDomain.TEMP,
 				StorageKeys.stagingKey(command.userId(), command.uploadId(), UploadPurpose.AVATAR).value());
 			Stored stored = this.objects.get(source);
 			if (stored == null) {
