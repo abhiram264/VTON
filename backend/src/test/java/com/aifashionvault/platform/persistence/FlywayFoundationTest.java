@@ -374,7 +374,7 @@ class FlywayFoundationTest {
 				"SELECT version FROM flyway_schema_history "
 					+ "WHERE version IS NOT NULL ORDER BY installed_rank",
 				String.class))
-				.containsExactly("001", "002", "003", "004", "005", "006", "007", "008", "009", "010", "011", "012", "013", "014", "015", "016", "017", "018", "019", "020");
+                .containsExactly("001", "002", "003", "004", "005", "006", "007", "008", "009", "010", "011", "012", "013", "014", "015", "016", "017", "018", "019", "020", "021", "022");
 			assertThat(upgraded.queryForMap(
 				"SELECT revision, lifecycle_state, warnings::text AS warnings, "
 					+ "source_upload_id, preflight_policy_version "
