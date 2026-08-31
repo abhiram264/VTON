@@ -4,6 +4,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import com.aifashionvault.shared.StorageDomain;
 
 public final class GenerationOrphanSweeper {
 

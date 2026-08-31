@@ -3,6 +3,7 @@ package com.aifashionvault.platform.objectstore;
 import java.util.UUID;
 
 import com.aifashionvault.shared.StorageKey;
+import com.aifashionvault.shared.StorageDomain;
 import com.aifashionvault.shared.UploadId;
 import com.aifashionvault.shared.UserId;
 

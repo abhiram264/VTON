@@ -17,6 +17,7 @@ import java.util.Map;
 import com.aifashionvault.platform.environment.VaultEnvironmentProperties;
 import com.aifashionvault.shared.StorageKey;
 import com.aifashionvault.shared.UploadId;
+import com.aifashionvault.shared.StorageDomain;
 import com.aifashionvault.shared.UserId;
 
 import software.amazon.awssdk.awscore.exception.AwsServiceException;

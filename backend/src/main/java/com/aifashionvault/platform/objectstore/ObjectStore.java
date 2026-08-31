@@ -5,6 +5,7 @@ import java.util.List;
 
 import com.aifashionvault.shared.UploadId;
 import com.aifashionvault.shared.UserId;
+import com.aifashionvault.shared.StorageDomain;
 
 public interface ObjectStore {
 
