@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException
 import static org.assertj.core.api.Assertions.assertThatNullPointerException;
 
 import java.util.LinkedHashMap;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
@@ -35,6 +36,46 @@ class AnalyticsEventTest {
         assertThat(event.properties()).isUnmodifiable();
         properties.put("other", new AnalyticsEventPublisher.LongValue(1));
         assertThat(event.properties()).doesNotContainKey("other");
+    }
+
+    @Test
+    void rejectsEveryForbiddenKeyTokenInEveryPosition() {
+        String[] forbiddenTokens = {"image", "media", "url", "uri", "body", "base64", "bytes", "token", "secret",
+                "signed", "signature", "capability", "provider_request"};
+        for (String token : forbiddenTokens) {
+            for (String key : new String[] {token, token + "_field", "field_" + token, "field_" + token + "_value"}) {
+                assertThatIllegalArgumentException().isThrownBy(() -> event(key, "ok"))
+                        .withMessage("property key contains a forbidden token");
+            }
+        }
+    }
+
+    @Test
+    void rejectsUnsafeTextFingerprintsCaseInsensitively() {
+        String[] fingerprints = {"http://", "https://", "data:image", "x-amz-", "signature=", "image_base64", "/9j/",
+                "ivborw0kggo"};
+        for (String fingerprint : fingerprints) {
+            String payload = ("prefix-" + fingerprint + "-suffix").toUpperCase(Locale.ROOT);
+            assertThatIllegalArgumentException().isThrownBy(() -> event("good", payload))
+                    .withMessageNotContaining(payload);
+        }
+    }
+
+    @Test
+    void rejectsOverlongAndNullPropertyEntries() {
+        String overlongKey = "a" + "b".repeat(64);
+        assertThatIllegalArgumentException().isThrownBy(() -> event(overlongKey, "ok"))
+                .withMessageNotContaining(overlongKey);
+
+        Map<String, AnalyticsEventPublisher.PropertyValue> nullKey = new LinkedHashMap<>();
+        nullKey.put(null, new AnalyticsEventPublisher.TextValue("ok"));
+        assertThatNullPointerException().isThrownBy(() -> new AnalyticsEventPublisher.Event(
+                AnalyticsEventName.ACCOUNT_CREATED, nullKey));
+
+        Map<String, AnalyticsEventPublisher.PropertyValue> nullValue = new LinkedHashMap<>();
+        nullValue.put("good", null);
+        assertThatNullPointerException().isThrownBy(() -> new AnalyticsEventPublisher.Event(
+                AnalyticsEventName.ACCOUNT_CREATED, nullValue));
     }
 
     @Test
@@ -74,3 +115,4 @@ class AnalyticsEventTest {
                 Map.of(key, new AnalyticsEventPublisher.TextValue(value)));
     }
 }
+
