@@ -39,66 +39,76 @@ public class GenerationCreationService {
 	static final String GENERATION_NOT_CANCELLABLE = "GENERATION_NOT_CANCELLABLE";
 	static final String ADMISSION_PAUSED = "ADMISSION_PAUSED";
 
-	private final GenerationStore store;
-	private final JdbcTemplate jdbc;
-	private final GenerationApiProperties properties;
-	private final Clock clock;
-	private final GenerationMediaStore mediaStore;
+    private final GenerationStore store;
+    private final JdbcTemplate jdbc;
+    private final GenerationApiProperties properties;
+    private final Clock clock;
+    private final GenerationMediaStore mediaStore;
+    private final com.aifashionvault.admission.GenerationRateLimiter rateLimiter;
 
-	public GenerationCreationService(GenerationStore store, JdbcTemplate jdbc, GenerationApiProperties properties, Clock clock,
-		GenerationMediaStore mediaStore) {
-		this.store = store;
-		this.jdbc = jdbc;
-		this.properties = properties;
-		this.clock = clock;
-		this.mediaStore = mediaStore;
-	}
+    public GenerationCreationService(GenerationStore store, JdbcTemplate jdbc, GenerationApiProperties properties, Clock clock,
+        GenerationMediaStore mediaStore) {
+        this(store, jdbc, properties, clock, mediaStore, null);
+    }
 
-	public GenerationResponse create(UserId userId, String idempotencyKey, GenerationRequest request) {
-		if (idempotencyKey == null || idempotencyKey.isBlank()) throw problem(HttpStatus.BAD_REQUEST, MISSING_IDEMPOTENCY_KEY);
-		if (idempotencyKey.strip().length() > 255) throw problem(HttpStatus.BAD_REQUEST, MISSING_IDEMPOTENCY_KEY);
-		if (request == null || request.productUploadId() == null) throw problem(HttpStatus.BAD_REQUEST, PRODUCT_UPLOAD_MISSING);
-		if (properties.isAdmissionPaused()) throw problem(HttpStatus.SERVICE_UNAVAILABLE, ADMISSION_PAUSED);
-		ResolvedAvatar avatar = resolveCurrentAvatar(userId);
-		String key = idempotencyKey.strip();
-		String fingerprint = fingerprint(userId, avatar.imageId(), request.productUploadId());
-		for (GenerationJob existing : store.listJobsByUser(userId)) {
-			if (existing.clientRequestId() != null && key.equals(existing.clientRequestId().value())) {
-				if (!fingerprint.equals(existing.requestFingerprint())) throw problem(HttpStatus.CONFLICT, IDEMPOTENCY_KEY_CONFLICT);
-				return toResponse(existing);
-			}
-		}
-		Instant now = clock.instant();
-		UUID generationId = UUID.randomUUID();
-		MediaAssetId productMediaId = new MediaAssetId(UUID.randomUUID());
-		try {
-			ClaimResult claim = mediaStore.claimProductInput(new ProductInputClaimCommand(
-				userId, new UploadId(request.productUploadId()), new GenerationJobId(generationId), productMediaId));
-			if (claim instanceof ClaimResult.Conflict) throw problem(HttpStatus.CONFLICT, PRODUCT_UPLOAD_ALREADY_CLAIMED);
-		}
-		catch (ObjectStoreExceptions.StagedObjectMissingException ex) {
-			throw problem(HttpStatus.UNPROCESSABLE_ENTITY, PRODUCT_UPLOAD_MISSING);
-		}
-		catch (ObjectStoreExceptions.ImageValidationException | IllegalArgumentException ex) {
-			throw problem(HttpStatus.UNPROCESSABLE_ENTITY, MALFORMED_REQUEST);
-		}
-		GenerationJob job = new GenerationJob(
-			new GenerationJobId(generationId), userId, null, GenerationJob.QUEUED, "STANDARD",
-			new ClientRequestId(key), now, null, avatar.imageId(), List.of(), null, null,
-			fingerprint, avatar.revision(), 0, now, null, 1, 1, 1,
-			now.plus(GenerationJob.ORCHESTRATION_DEADLINE), null,
-			RetryPolicySnapshot.forStepCountV2(1), Optional.empty());
-		CreateSingleItemGenerationCommand command = new CreateSingleItemGenerationCommand(
-			userId, new UploadId(request.productUploadId()), key);
-		FrozenSingleItemIntent intent = new FrozenSingleItemIntent(job.id(), userId, avatar.imageId(), productMediaId, 1, 1);
-		return switch (store.createSingleItem(command, intent, job)) {
-			case GenerationStore.CreateSingleItemResult.Created created -> toResponse(created.job());
-			case GenerationStore.CreateSingleItemResult.Replayed replayed -> toResponse(replayed.job());
-			case GenerationStore.CreateSingleItemResult.FingerprintConflict ignored -> throw problem(HttpStatus.CONFLICT, IDEMPOTENCY_KEY_CONFLICT);
-			case GenerationStore.CreateSingleItemResult.ProductUploadAlreadyClaimed ignored -> throw problem(HttpStatus.CONFLICT, PRODUCT_UPLOAD_ALREADY_CLAIMED);
-		};
-	}
+    public GenerationCreationService(GenerationStore store, JdbcTemplate jdbc, GenerationApiProperties properties, Clock clock,
+        GenerationMediaStore mediaStore, com.aifashionvault.admission.GenerationRateLimiter rateLimiter) {
+        this.store = store;
+        this.jdbc = jdbc;
+        this.properties = properties;
+        this.clock = clock;
+        this.mediaStore = mediaStore;
+        this.rateLimiter = rateLimiter;
+    }
 
+    public GenerationResponse create(UserId userId, String idempotencyKey, GenerationRequest request) {
+        return create(userId, idempotencyKey, request, null, null);
+    }
+
+    public GenerationResponse create(UserId userId, String idempotencyKey, GenerationRequest request, String deviceId, String ipAddress) {
+        if (idempotencyKey == null || idempotencyKey.isBlank()) throw problem(HttpStatus.BAD_REQUEST, MISSING_IDEMPOTENCY_KEY);
+        if (idempotencyKey.strip().length() > 255) throw problem(HttpStatus.BAD_REQUEST, MISSING_IDEMPOTENCY_KEY);
+        if (request == null || request.productUploadId() == null) throw problem(HttpStatus.BAD_REQUEST, PRODUCT_UPLOAD_MISSING);
+        if (properties.isAdmissionPaused()) throw problem(HttpStatus.SERVICE_UNAVAILABLE, ADMISSION_PAUSED);
+        ResolvedAvatar avatar = resolveCurrentAvatar(userId);
+        String key = idempotencyKey.strip();
+        String fingerprint = fingerprint(userId, avatar.imageId(), request.productUploadId());
+        for (GenerationJob existing : store.listJobsByUser(userId)) {
+            if (existing.clientRequestId() != null && key.equals(existing.clientRequestId().value())) {
+                if (!fingerprint.equals(existing.requestFingerprint())) throw problem(HttpStatus.CONFLICT, IDEMPOTENCY_KEY_CONFLICT);
+                return toResponse(existing);
+            }
+        }
+        if (rateLimiter != null) {
+            var decision = rateLimiter.admit(new com.aifashionvault.admission.GenerationAdmissionRequest(userId, deviceId, ipAddress,
+                com.aifashionvault.admission.GenerationRiskTier.ORDINARY, clock.instant()));
+            if (!decision.allowed()) throw problem(HttpStatus.TOO_MANY_REQUESTS, decision.reason());
+        }
+        Instant now = clock.instant();
+        UUID generationId = UUID.randomUUID();
+        MediaAssetId productMediaId = new MediaAssetId(UUID.randomUUID());
+        try {
+            ClaimResult claim = mediaStore.claimProductInput(new ProductInputClaimCommand(
+                userId, new UploadId(request.productUploadId()), new GenerationJobId(generationId), productMediaId));
+            if (claim instanceof ClaimResult.Conflict) throw problem(HttpStatus.CONFLICT, PRODUCT_UPLOAD_ALREADY_CLAIMED);
+        }
+        catch (ObjectStoreExceptions.StagedObjectMissingException ex) { throw problem(HttpStatus.UNPROCESSABLE_ENTITY, PRODUCT_UPLOAD_MISSING); }
+        catch (ObjectStoreExceptions.ImageValidationException | IllegalArgumentException ex) { throw problem(HttpStatus.UNPROCESSABLE_ENTITY, MALFORMED_REQUEST); }
+        GenerationJob job = new GenerationJob(
+            new GenerationJobId(generationId), userId, null, GenerationJob.QUEUED, "STANDARD",
+            new ClientRequestId(key), now, null, avatar.imageId(), List.of(), null, null,
+            fingerprint, avatar.revision(), 0, now, null, 1, 1, 1,
+            now.plus(GenerationJob.ORCHESTRATION_DEADLINE), null,
+            RetryPolicySnapshot.forStepCountV2(1), Optional.empty());
+        CreateSingleItemGenerationCommand command = new CreateSingleItemGenerationCommand(userId, new UploadId(request.productUploadId()), key);
+        FrozenSingleItemIntent intent = new FrozenSingleItemIntent(job.id(), userId, avatar.imageId(), productMediaId, 1, 1);
+        return switch (store.createSingleItem(command, intent, job)) {
+            case GenerationStore.CreateSingleItemResult.Created created -> toResponse(created.job());
+            case GenerationStore.CreateSingleItemResult.Replayed replayed -> toResponse(replayed.job());
+            case GenerationStore.CreateSingleItemResult.FingerprintConflict ignored -> throw problem(HttpStatus.CONFLICT, IDEMPOTENCY_KEY_CONFLICT);
+            case GenerationStore.CreateSingleItemResult.ProductUploadAlreadyClaimed ignored -> throw problem(HttpStatus.CONFLICT, PRODUCT_UPLOAD_ALREADY_CLAIMED);
+        };
+    }
 
 	public GenerationResponse get(UserId userId, String generationId) { return toResponse(requireOwnedJob(userId, generationId)); }
 

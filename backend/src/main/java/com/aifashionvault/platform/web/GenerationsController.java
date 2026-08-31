@@ -2,6 +2,7 @@ package com.aifashionvault.platform.web;
 
 import java.net.URI;
 import java.time.Clock;
+import jakarta.servlet.http.HttpServletRequest;
 
 import javax.sql.DataSource;
 
@@ -24,6 +25,7 @@ import com.aifashionvault.generation.GenerationStore;
 import com.aifashionvault.generation.JdbcGenerationStore;
 import com.aifashionvault.platform.objectstore.GenerationMediaStore;
 import com.aifashionvault.platform.objectstore.ObjectStore;
+import com.aifashionvault.admission.JdbcGenerationRateLimiter;
 import com.aifashionvault.shared.UserId;
 
 @RestController
@@ -48,21 +50,20 @@ public class GenerationsController {
 		if (store == null) {
 			store = new JdbcGenerationStore(dataSource);
 		}
-		this.service = new GenerationCreationService(
-			store,
-			new JdbcTemplate(dataSource),
-			properties,
-			Clock.systemUTC(),
-			resolveMediaStore(mediaStores, objectStores));
+        this.service = new GenerationCreationService(
+            store, new JdbcTemplate(dataSource), properties, Clock.systemUTC(),
+            resolveMediaStore(mediaStores, objectStores), new JdbcGenerationRateLimiter(dataSource, Clock.systemUTC()));
 	}
 
 	@PostMapping
-	public ResponseEntity<GenerationResponse> create(
-		@AuthenticationPrincipal UserId userId,
-		@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
-		@RequestBody(required = false) GenerationRequest request
-	) {
-		GenerationResponse body = service().create(userId, idempotencyKey, request);
+    public ResponseEntity<GenerationResponse> create(
+        @AuthenticationPrincipal UserId userId,
+        @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+        @RequestBody(required = false) GenerationRequest request,
+        HttpServletRequest httpRequest
+    ) {
+        GenerationResponse body = service().create(userId, idempotencyKey, request,
+            httpRequest.getHeader("X-Device-Id"), httpRequest.getRemoteAddr());
 		return ResponseEntity.accepted()
 			.location(URI.create("/generations/" + body.id()))
 			.contentType(MediaType.APPLICATION_JSON)
