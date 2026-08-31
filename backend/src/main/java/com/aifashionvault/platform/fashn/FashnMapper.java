@@ -31,7 +31,7 @@ import com.aifashionvault.generation.vton.SubmissionReplaySafety;
 import com.aifashionvault.generation.vton.VtonMode;
 import com.aifashionvault.platform.objectstore.ImageMediaPolicy;
 import com.aifashionvault.platform.objectstore.ObjectRef;
-import com.aifashionvault.platform.objectstore.StorageBoundary;
+import com.aifashionvault.shared.StorageDomain;
 import com.aifashionvault.shared.StorageKey;
 
 import tools.jackson.databind.JsonNode;
@@ -245,19 +245,19 @@ public final class FashnMapper {
     Optional<ObjectRef> objectRef(StorageKey storageKey) {
         String value = storageKey.value();
         if (value.startsWith("temp/")) {
-            return Optional.of(new ObjectRef(StorageBoundary.TEMP, value));
+            return Optional.of(new ObjectRef(StorageDomain.TEMP, value));
         }
         if (value.contains("/avatars/")) {
-            return Optional.of(new ObjectRef(StorageBoundary.AVATAR, value));
+            return Optional.of(new ObjectRef(StorageDomain.AVATAR, value));
         }
         if (value.contains("/vault/")) {
-            return Optional.of(new ObjectRef(StorageBoundary.VAULT, value));
+            return Optional.of(new ObjectRef(StorageDomain.VAULT, value));
         }
         if (value.contains("/generation-inputs/")) {
-            return Optional.of(new ObjectRef(StorageBoundary.GENERATION_INPUT, value));
+            return Optional.of(new ObjectRef(StorageDomain.TEMP, value));
         }
         if (value.contains("/looks/")) {
-            return Optional.of(new ObjectRef(StorageBoundary.LOOK, value));
+            return Optional.of(new ObjectRef(StorageDomain.LOOK, value));
         }
         return Optional.empty();
     }

@@ -113,7 +113,7 @@ public final class UploadWorkflow {
 	}
 
 	private static ObjectRef stagingRef(UserId userId, UploadId uploadId, UploadPurpose purpose) {
-		return new ObjectRef(StorageBoundary.TEMP, StorageKeys.stagingKey(userId, uploadId, purpose).value());
+		return new ObjectRef(StorageDomain.TEMP, StorageKeys.stagingKey(userId, uploadId, purpose).value());
 	}
 
 	private static int boundedReadCap(long contentLength) {

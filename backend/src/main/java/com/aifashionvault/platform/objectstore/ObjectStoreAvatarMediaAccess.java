@@ -64,14 +64,14 @@ public final class ObjectStoreAvatarMediaAccess implements AvatarMediaAccess {
 	) {
 		StorageKey destination = StorageKeys.persistentKey(
 			userId,
-			StorageBoundary.AVATAR,
+			StorageDomain.AVATAR,
 			imageId.value(),
 			toImageMediaType(mediaType));
 		ClaimResult claimed = objectStore.claim(new ClaimCommand(
 			userId,
 			uploadId,
 			destination,
-			StorageBoundary.AVATAR,
+			StorageDomain.AVATAR,
 			imageId.value().toString(),
 			sourceVersion));
 		if (claimed instanceof ClaimResult.Conflict) {
@@ -102,7 +102,7 @@ public final class ObjectStoreAvatarMediaAccess implements AvatarMediaAccess {
 
 	@Override
 	public List<PersistentObject> listPersistentAvatars() {
-		return objectStore.list(StorageBoundary.AVATAR, "users/")
+		return objectStore.list(StorageDomain.AVATAR, "users/")
 			.stream()
 			.map(object -> new PersistentObject(new StorageKey(object.key()), object.lastModified()))
 			.toList();
@@ -110,12 +110,12 @@ public final class ObjectStoreAvatarMediaAccess implements AvatarMediaAccess {
 
 	private static ObjectRef stagingRef(UserId userId, UploadId uploadId) {
 		return new ObjectRef(
-			StorageBoundary.TEMP,
+			StorageDomain.TEMP,
 			StorageKeys.stagingKey(userId, uploadId, UploadPurpose.AVATAR).value());
 	}
 
 	private static ObjectRef persistentRef(StorageKey storageKey) {
-		return new ObjectRef(StorageBoundary.AVATAR, storageKey.value());
+		return new ObjectRef(StorageDomain.AVATAR, storageKey.value());
 	}
 
 	private static ImageMediaType toImageMediaType(AvatarMediaType mediaType) {

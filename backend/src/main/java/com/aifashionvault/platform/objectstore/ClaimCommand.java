@@ -8,7 +8,7 @@ public record ClaimCommand(
 	UserId userId,
 	UploadId uploadId,
 	StorageKey destination,
-	StorageBoundary destinationBoundary,
+	StorageDomain destinationBoundary,
 	String claimMarker,
 	String sourceVersion
 ) {

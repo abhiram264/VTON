@@ -25,7 +25,7 @@ public interface ObjectStore {
 
 	void delete(ObjectRef object);
 
-	default List<StoredObject> list(StorageBoundary boundary, String prefix) {
+	default List<StoredObject> list(StorageDomain boundary, String prefix) {
 		return List.of();
 	}
 

@@ -115,7 +115,7 @@ public final class ObjectStoreGenerationOutputStore implements GenerationOutputS
 	}
 
 	public void discard() {
-		objects.delete(new ObjectRef(StorageBoundary.TEMP, tempKey().value()));
+		objects.delete(new ObjectRef(StorageDomain.TEMP, tempKey().value()));
 		written = null;
 	}
 
@@ -123,7 +123,7 @@ public final class ObjectStoreGenerationOutputStore implements GenerationOutputS
 		return media.claim(new GenerationClaimCommand(
 			userId,
 			tempKey(),
-			StorageKeys.persistentKey(userId, StorageBoundary.LOOK, attemptId, mediaType),
+			StorageKeys.persistentKey(userId, StorageDomain.LOOK, attemptId, mediaType),
 			sourceVersion,
 			attemptId.toString()));
 	}

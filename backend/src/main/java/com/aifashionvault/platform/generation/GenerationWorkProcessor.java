@@ -81,7 +81,7 @@ import com.aifashionvault.platform.objectstore.ObjectMetadata;
 import com.aifashionvault.platform.objectstore.ObjectRef;
 import com.aifashionvault.platform.objectstore.ObjectStore;
 import com.aifashionvault.platform.objectstore.ObjectStoreGenerationOutputStore;
-import com.aifashionvault.platform.objectstore.StorageBoundary;
+import com.aifashionvault.shared.StorageDomain;
 import com.aifashionvault.platform.objectstore.StorageKeys;
 import com.aifashionvault.platform.queue.GenerationWorkLease;
 import com.aifashionvault.platform.queue.GenerationWorkQueue;
@@ -720,7 +720,7 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 				attempt.id().value(),
 				mediaType);
 			temp = outputStore.writePrivateTemp(source);
-			ObjectRef tempRef = new ObjectRef(StorageBoundary.TEMP, temp.storageKey().value());
+			ObjectRef tempRef = new ObjectRef(StorageDomain.TEMP, temp.storageKey().value());
 			metadata = objectStore.head(tempRef);
 			bytes = objectStore.readBounded(
 				tempRef,
@@ -942,11 +942,11 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 		latest = generationStore.findJob(job.id()).orElse(job);
 		StorageKey lookKey = StorageKeys.persistentKey(
 			job.userId(),
-			StorageBoundary.LOOK,
+			StorageDomain.LOOK,
 			attempt.id().value(),
 			mediaTypeFromTemp(temp.storageKey()));
 		if (unavailable(latest) || latest.completedAt() != null) {
-			objectStore.delete(new ObjectRef(StorageBoundary.LOOK, lookKey.value()));
+			objectStore.delete(new ObjectRef(StorageDomain.LOOK, lookKey.value()));
 			outputStore.discard();
 			completeDeleted(latest, attempt, lease, temp, outputRef);
 			return;
@@ -967,7 +967,7 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 			List.of());
 		Optional<Look> stored = lookStore.insertIfJobActive(look);
 		if (stored.isEmpty()) {
-			objectStore.delete(new ObjectRef(StorageBoundary.LOOK, lookKey.value()));
+			objectStore.delete(new ObjectRef(StorageDomain.LOOK, lookKey.value()));
 			outputStore.discard();
 			completeDeleted(generationStore.findJob(job.id()).orElse(latest), attempt, lease, temp, outputRef);
 			return;
@@ -1194,21 +1194,21 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 			return null;
 		}
 		String key = media.storageKey().value();
-		StorageBoundary boundary;
+		StorageDomain boundary;
 		if (key.startsWith("temp/")) {
-			boundary = StorageBoundary.TEMP;
+			boundary = StorageDomain.TEMP;
 		}
 		else if (key.contains("/avatars/")) {
-			boundary = StorageBoundary.AVATAR;
+			boundary = StorageDomain.AVATAR;
 		}
 		else if (key.contains("/vault/")) {
-			boundary = StorageBoundary.VAULT;
+			boundary = StorageDomain.VAULT;
 		}
 		else if (key.contains("/generation-inputs/")) {
-			boundary = StorageBoundary.GENERATION_INPUT;
+			boundary = StorageDomain.TEMP;
 		}
 		else if (key.contains("/looks/")) {
-			boundary = StorageBoundary.LOOK;
+			boundary = StorageDomain.LOOK;
 		}
 		else {
 			return null;
@@ -2428,7 +2428,7 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 	private void discardLeftoverTemp(GenerationJob job) {
 		for (GenerationAttempt attempt : generationStore.listAttempts(job.id())) {
 			if (attempt.tempStorageKey() != null) {
-				objectStore.delete(new ObjectRef(StorageBoundary.TEMP, attempt.tempStorageKey().value()));
+				objectStore.delete(new ObjectRef(StorageDomain.TEMP, attempt.tempStorageKey().value()));
 				continue;
 			}
 			for (ImageMediaType type : ImageMediaType.values()) {
@@ -2437,7 +2437,7 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 					job.id().value(),
 					attempt.id().value(),
 					type);
-				objectStore.delete(new ObjectRef(StorageBoundary.TEMP, key.value()));
+				objectStore.delete(new ObjectRef(StorageDomain.TEMP, key.value()));
 			}
 		}
 	}

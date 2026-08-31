@@ -17,7 +17,7 @@ import com.aifashionvault.generation.vton.VtonProductAsset;
 import com.aifashionvault.platform.objectstore.ObjectRef;
 import com.aifashionvault.platform.objectstore.ObjectStore;
 import com.aifashionvault.platform.objectstore.ObjectStoreExceptions;
-import com.aifashionvault.platform.objectstore.StorageBoundary;
+import com.aifashionvault.shared.StorageDomain;
 import com.aifashionvault.platform.objectstore.StorageKeys;
 import com.aifashionvault.shared.StorageKey;
 import com.aifashionvault.shared.VaultItemId;
@@ -86,7 +86,7 @@ public final class AuthorizedGenerationMediaResolver {
 				StorageKey key = StorageKeys.generationInputKey(
 					intent.ownerId(), intent.generationId().value(), intent.productMediaId().value());
 				try {
-					objectStore.head(new ObjectRef(StorageBoundary.GENERATION_INPUT, key.value()));
+					objectStore.head(new ObjectRef(StorageDomain.TEMP, key.value()));
 				}
 				catch (ObjectStoreExceptions.StagedObjectMissingException ex) {
 					throw new GenerationInputMissingException("generation input is absent", ex);
