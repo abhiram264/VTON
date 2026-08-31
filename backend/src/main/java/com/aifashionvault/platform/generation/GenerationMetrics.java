@@ -258,6 +258,7 @@ public final class GenerationMetrics implements GenerationCostMetrics {
 		GenerationCostFact fact = recorded.fact();
 		return !recorded.recordedAt().isBefore(query.windowStart())
 			&& recorded.recordedAt().isBefore(query.windowEnd())
+			&& (query.userId() == null || query.userId().equals(fact.userId()))
 			&& (query.providerKey() == null || query.providerKey().equals(fact.providerKey()))
 			&& (query.modelRouteAuditIdentity() == null
 				|| query.modelRouteAuditIdentity().equals(fact.modelRouteAuditIdentity()))
@@ -275,6 +276,7 @@ public final class GenerationMetrics implements GenerationCostMetrics {
 			&& PricingSnapshot.COST_FINAL.equals(replacement.costStatus())
 			&& previous.generationId().equals(replacement.generationId())
 			&& previous.attemptId().equals(replacement.attemptId())
+			&& previous.userId().equals(replacement.userId())
 			&& previous.providerKey().equals(replacement.providerKey())
 			&& previous.modelRouteAuditIdentity().equals(replacement.modelRouteAuditIdentity())
 			&& previous.technicalOutcome().equals(replacement.technicalOutcome())

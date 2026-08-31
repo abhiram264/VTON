@@ -2,7 +2,10 @@ package com.aifashionvault.generation;
 
 import java.time.Instant;
 
+import com.aifashionvault.shared.UserId;
+
 public record CostQuery(
+	UserId userId,
 	String providerKey,
 	String modelRouteAuditIdentity,
 	String currency,
