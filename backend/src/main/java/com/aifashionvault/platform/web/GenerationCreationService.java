@@ -80,7 +80,9 @@ public class GenerationCreationService {
             }
         }
         if (rateLimiter != null) {
-            var decision = rateLimiter.admit(new com.aifashionvault.admission.GenerationAdmissionRequest(userId, deviceId, ipAddress,
+            String safeDevice = deviceId == null || deviceId.isBlank() ? "http-session" : deviceId;
+            String safeIp = ipAddress == null || ipAddress.isBlank() ? "unknown" : ipAddress;
+            var decision = rateLimiter.admit(new com.aifashionvault.admission.GenerationAdmissionRequest(userId, safeDevice, safeIp,
                 com.aifashionvault.admission.GenerationRiskTier.ORDINARY, clock.instant()));
             if (!decision.allowed()) throw problem(HttpStatus.TOO_MANY_REQUESTS, decision.reason());
         }
