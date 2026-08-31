@@ -1,12 +1,25 @@
 package com.aifashionvault.platform.generation;
 
+import java.math.BigDecimal;
+import java.math.MathContext;
+import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
 
+import com.aifashionvault.generation.CostAggregate;
+import com.aifashionvault.generation.CostQuery;
+import com.aifashionvault.generation.GenerationCostFact;
+import com.aifashionvault.generation.GenerationCostMetrics;
 import com.aifashionvault.generation.GenerationJob;
 import com.aifashionvault.generation.PricingSnapshot;
 import com.aifashionvault.generation.RetryDisposition;
+import com.aifashionvault.shared.GenerationAttemptId;
 import com.aifashionvault.shared.QualityDecision;
 import com.aifashionvault.shared.TerminalReason;
 
@@ -15,7 +28,7 @@ import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 
-public final class GenerationMetrics {
+public final class GenerationMetrics implements GenerationCostMetrics {
 
 	public static final String TRANSITION = "generation.transition";
 	public static final String DEADLINE_EXPIRED = "generation.deadline.expired";
@@ -24,6 +37,7 @@ public final class GenerationMetrics {
 	public static final String QUALITY = "generation.quality";
 	public static final String QUALITY_EVALUATOR_UNAVAILABLE = "generation.quality.evaluator.unavailable";
 	public static final String COST = "generation.cost";
+	public static final String COST_ATTEMPT = "generation.cost.attempt";
 	public static final String ORPHAN_CLEANUP = "generation.orphan.cleanup";
 	public static final String LOGICAL_ATTEMPTS = "generation.retry.logical.attempts";
 	public static final String ADDITIONAL_BUDGET = "generation.retry.additional.budget";
@@ -75,13 +89,23 @@ public final class GenerationMetrics {
 	public static final String TERMINAL_UNKNOWN = "UNKNOWN";
 
 	private final MeterRegistry registry;
+	private final Clock clock;
+	private final Map<GenerationAttemptId, RecordedCostFact> costFacts = new HashMap<>();
 	private final AtomicLong outboxLagMillis = new AtomicLong();
 
 	public GenerationMetrics(MeterRegistry registry) {
+		this(registry, Clock.systemUTC());
+	}
+
+	public GenerationMetrics(MeterRegistry registry, Clock clock) {
 		if (registry == null) {
 			throw new IllegalArgumentException("registry is required");
 		}
+		if (clock == null) {
+			throw new IllegalArgumentException("clock is required");
+		}
 		this.registry = registry;
+		this.clock = clock;
 		Gauge.builder(OUTBOX_LAG, outboxLagMillis, AtomicLong::doubleValue)
 			.baseUnit("milliseconds")
 			.register(registry);
@@ -148,6 +172,131 @@ public final class GenerationMetrics {
 			.tag("status", costStatus)
 			.register(registry)
 			.increment();
+	}
+
+	@Override
+	public synchronized void recordAttempt(GenerationCostFact fact) {
+		if (fact == null) {
+			throw new IllegalArgumentException("fact is required");
+		}
+		RecordedCostFact existing = costFacts.get(fact.attemptId());
+		if (existing != null) {
+			if (existing.fact().equals(fact)) {
+				return;
+			}
+			if (!isFinalReconciliation(existing.fact(), fact)) {
+				throw new IllegalStateException("conflicting cost fact for attempt " + fact.attemptId().value());
+			}
+		}
+		costFacts.put(fact.attemptId(), new RecordedCostFact(fact, existing == null ? clock.instant() : existing.recordedAt()));
+		recordCostFactMetric(fact);
+	}
+
+	@Override
+	public synchronized CostAggregate aggregate(CostQuery query) {
+		if (query == null) {
+			throw new IllegalArgumentException("query is required");
+		}
+		long requests = 0;
+		long successes = 0;
+		long approvedLooks = 0;
+		long activeUsers = 0;
+		long retainedUsers = 0;
+		long knownCosts = 0;
+		boolean unknownCost = false;
+		BigDecimal total = BigDecimal.ZERO;
+		Set<String> currencies = new HashSet<>();
+		for (RecordedCostFact recorded : costFacts.values()) {
+			GenerationCostFact fact = recorded.fact();
+			if (!matches(query, recorded)) {
+				continue;
+			}
+			requests++;
+			if ("SUCCESS".equals(fact.technicalOutcome())) {
+				successes++;
+			}
+			if (fact.qualityApprovedLook()) {
+				approvedLooks++;
+			}
+			if (fact.activeUser()) {
+				activeUsers++;
+			}
+			if (fact.retainedUser()) {
+				retainedUsers++;
+			}
+			if (PricingSnapshot.COST_UNKNOWN.equals(fact.costStatus())) {
+				unknownCost = true;
+			}
+			else {
+				knownCosts++;
+				total = total.add(fact.cost());
+				currencies.add(fact.currency());
+			}
+		}
+		boolean combinable = !unknownCost && currencies.size() <= 1;
+		BigDecimal totalCost = combinable ? total : null;
+		String currency = combinable
+			? query.currency() != null ? query.currency() : currencies.stream().findFirst().orElse(null)
+			: null;
+		return new CostAggregate(
+			totalCost,
+			ratio(totalCost, requests),
+			ratio(totalCost, successes),
+			ratio(totalCost, approvedLooks),
+			ratio(totalCost, activeUsers),
+			ratio(totalCost, retainedUsers),
+			requests,
+			successes,
+			approvedLooks,
+			activeUsers,
+			retainedUsers,
+			knownCosts,
+			currency);
+	}
+
+	private static boolean matches(CostQuery query, RecordedCostFact recorded) {
+		GenerationCostFact fact = recorded.fact();
+		return !recorded.recordedAt().isBefore(query.windowStart())
+			&& recorded.recordedAt().isBefore(query.windowEnd())
+			&& (query.providerKey() == null || query.providerKey().equals(fact.providerKey()))
+			&& (query.modelRouteAuditIdentity() == null
+				|| query.modelRouteAuditIdentity().equals(fact.modelRouteAuditIdentity()))
+			&& (query.currency() == null || query.currency().equals(fact.currency()));
+	}
+
+	private static BigDecimal ratio(BigDecimal total, long denominator) {
+		return total == null || denominator == 0
+			? null
+			: total.divide(BigDecimal.valueOf(denominator), MathContext.DECIMAL128);
+	}
+
+	private static boolean isFinalReconciliation(GenerationCostFact previous, GenerationCostFact replacement) {
+		return PricingSnapshot.COST_ESTIMATED.equals(previous.costStatus())
+			&& PricingSnapshot.COST_FINAL.equals(replacement.costStatus())
+			&& previous.generationId().equals(replacement.generationId())
+			&& previous.attemptId().equals(replacement.attemptId())
+			&& previous.providerKey().equals(replacement.providerKey())
+			&& previous.modelRouteAuditIdentity().equals(replacement.modelRouteAuditIdentity())
+			&& previous.technicalOutcome().equals(replacement.technicalOutcome())
+			&& java.util.Objects.equals(previous.qualityOutcome(), replacement.qualityOutcome())
+			&& previous.qualityApprovedLook() == replacement.qualityApprovedLook()
+			&& previous.activeUser() == replacement.activeUser()
+			&& previous.retainedUser() == replacement.retainedUser()
+			&& previous.currency().equals(replacement.currency());
+	}
+
+	private void recordCostFactMetric(GenerationCostFact fact) {
+		Counter.builder(COST_ATTEMPT)
+			.tag("provider", fact.providerKey())
+			.tag("model", fact.modelRouteAuditIdentity())
+			.tag("technical_outcome", fact.technicalOutcome())
+			.tag("quality_outcome", fact.qualityOutcome() == null ? "none" : fact.qualityOutcome())
+			.tag("cost_status", fact.costStatus())
+			.register(registry)
+			.increment();
+	}
+
+	private record RecordedCostFact(GenerationCostFact fact, Instant recordedAt) {
 	}
 
 	public void recordOrphanCleanup(String kind, int count) {
