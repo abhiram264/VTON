@@ -23,13 +23,16 @@ public final class DefaultAppIntegrityVerifier implements AppIntegrityVerifier {
         if (evidence.operation() == null) return result(AppIntegrityFailureReason.OPERATION_MISMATCH);
         if (evidence.platform() == null) return result(AppIntegrityFailureReason.UNSUPPORTED_PLATFORM);
         try {
-            ProviderVerification v = evidence.platform() == AppIntegrityPlatform.ANDROID ? android.verify(evidence) : ios.verify(evidence);
+            AppIntegrityPlatform platform = evidence.platform();
+            ProviderVerification v = platform == AppIntegrityPlatform.ANDROID ? android.verify(evidence) : ios.verify(evidence);
             if (v == null) return result(AppIntegrityFailureReason.INTERNAL_ERROR);
             if (v.status() != AppIntegrityVerdictStatus.VERIFIED) return new AppIntegrityVerdict(
                     required ? AppIntegrityVerdictStatus.DENIED : v.status(), safeReason(v.reason()));
-            if (v.platform() != evidence.platform()) return result(AppIntegrityFailureReason.PLATFORM_MISMATCH);
+            if (v.platform() != platform) return result(AppIntegrityFailureReason.PLATFORM_MISMATCH);
             if (v.operation() != evidence.operation()) return result(AppIntegrityFailureReason.OPERATION_MISMATCH);
             if (!evidence.requestNonce().equals(v.requestNonce())) return result(AppIntegrityFailureReason.NONCE_MISMATCH);
+            String expectedAppId = platform == AppIntegrityPlatform.ANDROID ? android.expectedAppId() : ios.expectedAppId();
+            if (!expectedAppId.equals(v.appId())) return result(AppIntegrityFailureReason.APP_MISMATCH);
             if (v.expiresAt() == null || !v.expiresAt().isAfter(clock.instant())) return result(AppIntegrityFailureReason.EXPIRED);
             if (v.assertionId() == null || !USED_ASSERTIONS.add(v.assertionId())) return result(AppIntegrityFailureReason.REPLAYED);
             return new AppIntegrityVerdict(AppIntegrityVerdictStatus.VERIFIED, AppIntegrityFailureReason.NONE);
