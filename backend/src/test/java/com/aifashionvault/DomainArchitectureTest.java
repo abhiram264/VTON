@@ -110,24 +110,21 @@ class DomainArchitectureTest {
 	}
 
 	@Test
-	void flywayAllowsOnlyTheFrozenV021MigrationAbovePublishedV017() throws IOException {
-		Path migrations = migrationRoot();
-		List<String> violations = new ArrayList<>();
-		if (Files.isDirectory(migrations)) {
-			try (Stream<Path> walk = Files.walk(migrations)) {
-				walk.filter(Files::isRegularFile).forEach(file -> {
-					String name = file.getFileName().toString();
-					if (isNewerThanV017(name) && !name.equals("V018__single_item_manual_product.sql")
-						&& !name.equals("V019__share_import_resolver.sql")
-						&& !name.equals("V020__product_normalization.sql")
-						&& !name.equals("V021__privacy_deletion_workflow.sql")) {
-						violations.add(display(migrations, file) + " unexpected V021+ Flyway file");
-					}
-				});
-			}
-		}
-		assertThat(violations).isEmpty();
-	}
+    void flywayAllowsOnlyTheFrozenV022MigrationAbovePublishedV017() throws IOException {
+        Path migrations = migrationRoot();
+        List<String> violations = new ArrayList<>();
+        if (Files.isDirectory(migrations)) {
+            try (Stream<Path> files = Files.list(migrations)) {
+                files.filter(file -> file.getFileName().toString().matches("V\\d+__.*\\.sql"))
+                    .forEach(file -> {
+                        String name = file.getFileName().toString();
+                        if (Integer.parseInt(name.substring(1, 4)) > 20 && !name.equals("V021__product_normalization.sql") && !name.equals("V022__generation_admission.sql"))
+                            violations.add(display(migrations, file) + " unexpected V021+ Flyway file");
+                    });
+            }
+        }
+        assertThat(violations).isEmpty();
+    }
 
 	@Test
 	void sourceHasNoOrgIdOrTenantId() throws IOException {

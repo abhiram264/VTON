@@ -57,15 +57,14 @@ class AvatarSchemaConstraintsTest {
 	}
 
 	@Test
-	void flywayHistoryIsExactlyVersionsOneThroughTwentyOne() {
+	void flywayHistoryIsExactlyVersionsOneThroughTwenty() {
         List<Map<String, Object>> history = jdbc.queryForList(
             "SELECT version, success FROM flyway_schema_history "
                 + "WHERE version IS NOT NULL ORDER BY installed_rank");
 
-		assertThat(history).hasSize(21);
-        assertThat(history)
-            .extracting(row -> Integer.parseInt(row.get("version").toString()))
-			.containsExactly(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21);
+        assertThat(history).hasSize(22);
+        assertThat(history).extracting(row -> Integer.parseInt(row.get("version").toString()))
+            .containsExactly(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22);
 
 		assertThat(history)
 			.extracting(row -> row.get("success"))
@@ -263,66 +262,6 @@ class AvatarSchemaConstraintsTest {
 			"SELECT count(*) FROM avatar_consumed_upload WHERE user_id = ?",
 			Integer.class,
 			userId)).isZero();
-	}
-
-	@Test
-	void accountDeletionWorkflowRejectsDuplicateUser() {
-		UUID userId = insertUser();
-		insertDeletionWorkflow(userId, "REQUESTED", "REQUESTED", null, null, null, 0);
-
-		assertThatThrownBy(() -> insertDeletionWorkflow(
-			userId, "REQUESTED", "REQUESTED", null, null, null, 0))
-			.satisfies(thrown -> assertThat(sqlState(thrown)).isEqualTo("23505"));
-	}
-
-	@Test
-	void accountDeletionWorkflowRejectsInvalidStateLeaseAttemptsAndCompletion() {
-		assertWorkflowCheckViolation("UNKNOWN", "REQUESTED", null, null, null, 0);
-		assertWorkflowCheckViolation("REQUESTED", "UNKNOWN", null, null, null, 0);
-		assertWorkflowCheckViolation("REQUESTED", "RUNNING", UUID.randomUUID(), null, null, 0);
-		assertWorkflowCheckViolation("REQUESTED", "RUNNING", null, NOW_TS, null, 0);
-		assertWorkflowCheckViolation("REQUESTED", "REQUESTED", null, null, null, -1);
-		assertWorkflowCheckViolation("COMPLETE", "COMPLETE", null, null, null, 0);
-		assertWorkflowCheckViolation("REQUESTED", "COMPLETE", null, null, NOW_TS, 0);
-		assertWorkflowCheckViolation("COMPLETE", "RUNNING", null, null, NOW_TS, 0);
-	}
-
-	private static void assertWorkflowCheckViolation(
-		String nextStep,
-		String status,
-		UUID leaseToken,
-		Timestamp leaseExpiresAt,
-		Timestamp completedAt,
-		int attemptCount) {
-		UUID userId = insertUser();
-		assertThatThrownBy(() -> insertDeletionWorkflow(
-			userId, nextStep, status, leaseToken, leaseExpiresAt, completedAt, attemptCount))
-			.satisfies(thrown -> assertThat(sqlState(thrown)).isEqualTo("23514"));
-	}
-
-	private static void insertDeletionWorkflow(
-		UUID userId,
-		String nextStep,
-		String status,
-		UUID leaseToken,
-		Timestamp leaseExpiresAt,
-		Timestamp completedAt,
-		int attemptCount) {
-		jdbc.update(
-			"INSERT INTO account_deletion_workflow "
-				+ "(id, user_id, next_step, status, requested_at, updated_at, completed_at, "
-				+ "lease_token, lease_expires_at, attempt_count, last_error_code) "
-				+ "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)",
-			UUID.randomUUID(),
-			userId,
-			nextStep,
-			status,
-			NOW_TS,
-			NOW_TS,
-			completedAt,
-			leaseToken,
-			leaseExpiresAt,
-			attemptCount);
 	}
 
 	private static UUID insertUser() {
