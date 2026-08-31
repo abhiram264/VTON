@@ -12,7 +12,7 @@ import com.aifashionvault.platform.objectstore.ObjectMetadata;
 import com.aifashionvault.platform.objectstore.ObjectRef;
 import com.aifashionvault.platform.objectstore.ObjectStore;
 import com.aifashionvault.platform.objectstore.PresignedAccess;
-import com.aifashionvault.platform.objectstore.StorageBoundary;
+import com.aifashionvault.shared.StorageDomain;
 
 public final class PrivacyApprovedInputTransfer {
 
@@ -64,19 +64,19 @@ public final class PrivacyApprovedInputTransfer {
 
     private static ObjectRef objectRef(String key) {
         if (key.startsWith("temp/")) {
-            return new ObjectRef(StorageBoundary.TEMP, key);
+            return new ObjectRef(StorageDomain.TEMP, key);
         }
         if (key.contains("/avatars/")) {
-            return new ObjectRef(StorageBoundary.AVATAR, key);
+            return new ObjectRef(StorageDomain.AVATAR, key);
         }
         if (key.contains("/vault/")) {
-            return new ObjectRef(StorageBoundary.VAULT, key);
+            return new ObjectRef(StorageDomain.VAULT, key);
         }
         if (key.contains("/generation-inputs/")) {
-            return new ObjectRef(StorageBoundary.GENERATION_INPUT, key);
+            return new ObjectRef(StorageDomain.TEMP, key);
         }
         if (key.contains("/looks/")) {
-            return new ObjectRef(StorageBoundary.LOOK, key);
+            return new ObjectRef(StorageDomain.LOOK, key);
         }
         throw new IllegalArgumentException("media object is unresolvable");
     }

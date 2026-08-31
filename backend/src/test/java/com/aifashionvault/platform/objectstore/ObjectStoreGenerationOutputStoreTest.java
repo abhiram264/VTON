@@ -12,6 +12,7 @@ import org.mockito.ArgumentCaptor;
 import com.aifashionvault.generation.vton.GenerationOutputStore;
 import com.aifashionvault.generation.vton.PrivateMediaRef;
 import com.aifashionvault.generation.vton.ProviderMediaSource;
+import com.aifashionvault.shared.StorageDomain;
 import com.aifashionvault.shared.StorageKey;
 import com.aifashionvault.shared.UserId;
 
@@ -174,7 +175,7 @@ class ObjectStoreGenerationOutputStoreTest {
 		store.discard();
 
 		verify(objects).delete(new ObjectRef(
-			StorageBoundary.TEMP,
+			StorageDomain.TEMP,
 			StorageKeys.generationTempKey(USER_ID, JOB_ID, ATTEMPT_ID, MEDIA_TYPE).value()));
 		verifyNoInteractions(media);
 	}
@@ -182,7 +183,7 @@ class ObjectStoreGenerationOutputStoreTest {
 	@Test
 	void promoteClaimsTempToLookWithAttemptIdMarker() {
 		StorageKey tempKey = StorageKeys.generationTempKey(USER_ID, JOB_ID, ATTEMPT_ID, MEDIA_TYPE);
-		StorageKey lookKey = StorageKeys.persistentKey(USER_ID, StorageBoundary.LOOK, ATTEMPT_ID, MEDIA_TYPE);
+		StorageKey lookKey = StorageKeys.persistentKey(USER_ID, StorageDomain.LOOK, ATTEMPT_ID, MEDIA_TYPE);
 		GenerationClaimCommand command = new GenerationClaimCommand(
 			USER_ID,
 			tempKey,

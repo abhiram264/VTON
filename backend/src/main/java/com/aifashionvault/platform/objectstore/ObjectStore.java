@@ -5,6 +5,7 @@ import java.util.List;
 
 import com.aifashionvault.shared.UploadId;
 import com.aifashionvault.shared.UserId;
+import com.aifashionvault.shared.StorageDomain;
 
 public interface ObjectStore {
 
@@ -25,7 +26,7 @@ public interface ObjectStore {
 
 	void delete(ObjectRef object);
 
-	default List<StoredObject> list(StorageBoundary boundary, String prefix) {
+	default List<StoredObject> list(StorageDomain boundary, String prefix) {
 		return List.of();
 	}
 

@@ -4,6 +4,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import com.aifashionvault.shared.StorageDomain;
 
 public final class GenerationOrphanSweeper {
 
@@ -41,13 +42,13 @@ public final class GenerationOrphanSweeper {
 
 	public int sweep() {
 		int deleted = 0;
-		deleted += sweepBoundary(StorageBoundary.TEMP);
-		deleted += sweepBoundary(StorageBoundary.GENERATION_INPUT);
-		deleted += sweepBoundary(StorageBoundary.LOOK);
+		deleted += sweepBoundary(StorageDomain.TEMP);
+		deleted += sweepBoundary(StorageDomain.TEMP);
+		deleted += sweepBoundary(StorageDomain.LOOK);
 		return deleted;
 	}
 
-	private int sweepBoundary(StorageBoundary boundary) {
+	private int sweepBoundary(StorageDomain boundary) {
 		List<StoredObject> listed = objects.list(boundary, "");
 		Instant cutoff = clock.instant().minus(safeAge);
 		int deleted = 0;

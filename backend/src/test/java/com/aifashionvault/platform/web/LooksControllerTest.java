@@ -21,7 +21,7 @@ import com.aifashionvault.look.Look;
 import com.aifashionvault.platform.objectstore.ObjectRef;
 import com.aifashionvault.platform.objectstore.ObjectStore;
 import com.aifashionvault.platform.objectstore.PresignedAccess;
-import com.aifashionvault.platform.objectstore.StorageBoundary;
+import com.aifashionvault.shared.StorageDomain;
 import com.aifashionvault.shared.AvatarImageId;
 import com.aifashionvault.shared.ClientRequestId;
 import com.aifashionvault.shared.GenerationJobId;
@@ -51,9 +51,9 @@ class LooksControllerTest {
 		JdbcLookStore store = mock(JdbcLookStore.class);
 		ObjectStore objects = mock(ObjectStore.class);
 		when(store.findByIdForUser(LOOK_ID, OWNER)).thenReturn(Optional.of(look()));
-		when(objects.presignGet(new ObjectRef(StorageBoundary.LOOK, KEY.value()), java.time.Duration.ofMinutes(5)))
+		when(objects.presignGet(new ObjectRef(StorageDomain.LOOK, KEY.value()), java.time.Duration.ofMinutes(5)))
 			.thenReturn(new PresignedAccess(
-				new ObjectRef(StorageBoundary.LOOK, KEY.value()),
+				new ObjectRef(StorageDomain.LOOK, KEY.value()),
 				"GET",
 				URI.create("https://private.invalid/read?signature=secret"),
 				Map.of(),
@@ -83,8 +83,8 @@ class LooksControllerTest {
 		ObjectStore objects = mock(ObjectStore.class);
 		when(store.listForUser(OWNER)).thenReturn(List.of(look()));
 		when(store.findByIdForUser(LOOK_ID, OWNER)).thenReturn(Optional.of(look()));
-		when(objects.presignGet(new ObjectRef(StorageBoundary.LOOK, KEY.value()), java.time.Duration.ofMinutes(5)))
-			.thenReturn(new PresignedAccess(new ObjectRef(StorageBoundary.LOOK, KEY.value()), "GET",
+		when(objects.presignGet(new ObjectRef(StorageDomain.LOOK, KEY.value()), java.time.Duration.ofMinutes(5)))
+			.thenReturn(new PresignedAccess(new ObjectRef(StorageDomain.LOOK, KEY.value()), "GET",
 				URI.create("https://private.invalid/read?signature=secret"), Map.of(), NOW.plusSeconds(300)));
 
 		List<LookResource> listed = controller(store, objects).list(OWNER);
@@ -94,7 +94,7 @@ class LooksControllerTest {
 		assertThat(listed.getFirst().avatarId()).isNull();
 		assertThat(listed.getFirst().qualityStatus()).isEqualTo(QualityDecision.PASS);
 		assertThat(shared.url()).isEqualTo(URI.create("https://private.invalid/read?signature=secret"));
-		verify(objects, times(2)).presignGet(new ObjectRef(StorageBoundary.LOOK, KEY.value()), java.time.Duration.ofMinutes(5));
+		verify(objects, times(2)).presignGet(new ObjectRef(StorageDomain.LOOK, KEY.value()), java.time.Duration.ofMinutes(5));
 	}
 
 	@Test
@@ -136,7 +136,7 @@ class LooksControllerTest {
 		controller(store, objects).delete(OWNER, LOOK_ID.value().toString());
 
 		verify(store).logicallyDeleteForUser(LOOK_ID, OWNER);
-		verify(objects).delete(new ObjectRef(StorageBoundary.LOOK, KEY.value()));
+		verify(objects).delete(new ObjectRef(StorageDomain.LOOK, KEY.value()));
 	}
 
 	@SuppressWarnings("unchecked")

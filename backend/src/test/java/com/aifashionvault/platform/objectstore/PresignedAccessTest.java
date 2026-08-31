@@ -7,12 +7,14 @@ import java.util.Map;
 
 import org.junit.jupiter.api.Test;
 
+import com.aifashionvault.shared.StorageDomain;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class PresignedAccessTest {
 
-	private static final ObjectRef OBJECT = new ObjectRef(StorageBoundary.TEMP, "temp/u/uploads/id");
+	private static final ObjectRef OBJECT = new ObjectRef(StorageDomain.TEMP, "temp/u/uploads/id");
 	private static final URI SIGNED_URI = URI.create(
 		"https://configured-temp.s3.amazonaws.com/temp/u/uploads/id?X-Amz-Signature=redact-me-token");
 	private static final Instant EXPIRES_AT = Instant.parse("2026-08-23T12:00:00Z");

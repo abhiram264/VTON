@@ -20,7 +20,7 @@ import org.junit.jupiter.api.Test;
 
 import com.aifashionvault.platform.objectstore.ObjectRef;
 import com.aifashionvault.platform.objectstore.PresignedAccess;
-import com.aifashionvault.platform.objectstore.StorageBoundary;
+import com.aifashionvault.shared.StorageDomain;
 import com.aifashionvault.platform.objectstore.UploadCapability;
 import com.aifashionvault.platform.web.AvatarProblemResponse;
 import com.aifashionvault.platform.web.AvatarResourceResponse;
@@ -159,7 +159,7 @@ class AvatarTelemetryRedactionTest {
 	@Test
 	void presignedAccessToStringOmitsSignedUri() {
 		PresignedAccess access = new PresignedAccess(
-			new ObjectRef(StorageBoundary.TEMP, "temp/u/uploads/id"),
+			new ObjectRef(StorageDomain.TEMP, "temp/u/uploads/id"),
 			"PUT",
 			SIGNED_URI,
 			Map.of("content-type", "image/jpeg"),

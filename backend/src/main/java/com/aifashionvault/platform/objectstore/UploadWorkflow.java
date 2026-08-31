@@ -5,6 +5,7 @@ import java.util.function.Supplier;
 
 import com.aifashionvault.shared.UploadId;
 import com.aifashionvault.shared.UserId;
+import com.aifashionvault.shared.StorageDomain;
 
 public final class UploadWorkflow {
 
@@ -113,7 +114,7 @@ public final class UploadWorkflow {
 	}
 
 	private static ObjectRef stagingRef(UserId userId, UploadId uploadId, UploadPurpose purpose) {
-		return new ObjectRef(StorageBoundary.TEMP, StorageKeys.stagingKey(userId, uploadId, purpose).value());
+		return new ObjectRef(StorageDomain.TEMP, StorageKeys.stagingKey(userId, uploadId, purpose).value());
 	}
 
 	private static int boundedReadCap(long contentLength) {

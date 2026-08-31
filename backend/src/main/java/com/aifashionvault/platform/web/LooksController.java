@@ -40,7 +40,7 @@ import com.aifashionvault.platform.objectstore.ObjectRef;
 import com.aifashionvault.platform.objectstore.ObjectStore;
 import com.aifashionvault.platform.objectstore.ObjectStoreExceptions;
 import com.aifashionvault.platform.objectstore.PresignedAccess;
-import com.aifashionvault.platform.objectstore.StorageBoundary;
+import com.aifashionvault.shared.StorageDomain;
 import com.aifashionvault.shared.ClientRequestId;
 import com.aifashionvault.shared.GenerationJobId;
 import com.aifashionvault.shared.LookId;
@@ -139,7 +139,7 @@ public class LooksController {
 			throw new NotFound();
 		}
 		try {
-			objectStore().delete(new ObjectRef(StorageBoundary.LOOK, look.storageKey().value()));
+			objectStore().delete(new ObjectRef(StorageDomain.LOOK, look.storageKey().value()));
 		}
 		catch (ObjectStoreExceptions.StagedObjectMissingException ignored) {
 			// Absence is the converged cleanup state.
@@ -198,7 +198,7 @@ public class LooksController {
 	private ReadCapability capability(Look look) {
 		try {
 			PresignedAccess access = objectStore().presignGet(
-				new ObjectRef(StorageBoundary.LOOK, look.storageKey().value()), READ_TTL);
+				new ObjectRef(StorageDomain.LOOK, look.storageKey().value()), READ_TTL);
 			return new ReadCapability(access.uri(), access.expiresAt());
 		}
 		catch (ObjectStoreExceptions.StagedObjectMissingException ex) {

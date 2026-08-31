@@ -33,7 +33,7 @@ import com.aifashionvault.platform.objectstore.ObjectRef;
 import com.aifashionvault.platform.objectstore.ObjectStore;
 import com.aifashionvault.platform.objectstore.ObjectStoreExceptions;
 import com.aifashionvault.platform.objectstore.PresignedAccess;
-import com.aifashionvault.platform.objectstore.StorageBoundary;
+import com.aifashionvault.shared.StorageDomain;
 import com.aifashionvault.platform.objectstore.UploadCapability;
 import com.aifashionvault.platform.objectstore.UploadPurpose;
 import com.aifashionvault.shared.AccountMediaPurge;
@@ -117,8 +117,8 @@ class AvatarAccountMediaPurgeTest {
 
 		assertThat(statusAtObjectDelete).containsOnly("DELETING").hasSize(2);
 		assertThat(objectStore.deleted()).containsExactlyInAnyOrder(
-			new ObjectRef(StorageBoundary.AVATAR, retiredKey),
-			new ObjectRef(StorageBoundary.AVATAR, currentKey));
+			new ObjectRef(StorageDomain.AVATAR, retiredKey),
+			new ObjectRef(StorageDomain.AVATAR, currentKey));
 		assertThat(objectStore.purgeUserObjectsCalls()).isZero();
 		assertThat(store.findByUser(userId)).isEmpty();
 		assertThat(store.findByIdAndUser(existing.id(), userId)).isEmpty();

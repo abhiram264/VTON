@@ -36,7 +36,7 @@ import com.aifashionvault.platform.objectstore.ObjectRef;
 import com.aifashionvault.platform.objectstore.ObjectStore;
 import com.aifashionvault.platform.objectstore.ObjectStoreExceptions;
 import com.aifashionvault.platform.objectstore.PresignedAccess;
-import com.aifashionvault.platform.objectstore.StorageBoundary;
+import com.aifashionvault.shared.StorageDomain;
 import com.aifashionvault.shared.AvatarProfileId;
 import com.aifashionvault.shared.UploadId;
 import com.aifashionvault.shared.UserId;
@@ -191,7 +191,7 @@ public class AvatarsController {
 		PresignedAccess access;
 		try {
 			access = this.mediaStore.presignGet(
-				new ObjectRef(StorageBoundary.AVATAR, image.storageKey().value()),
+				new ObjectRef(StorageDomain.AVATAR, image.storageKey().value()),
 				DISPLAY_TTL);
 		}
 		catch (ObjectStoreExceptions.StagedObjectMissingException

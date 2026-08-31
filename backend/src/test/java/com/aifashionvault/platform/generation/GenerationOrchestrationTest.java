@@ -86,7 +86,7 @@ import com.aifashionvault.platform.objectstore.ObjectMetadata;
 import com.aifashionvault.platform.objectstore.ObjectRef;
 import com.aifashionvault.platform.objectstore.ObjectStore;
 import com.aifashionvault.platform.objectstore.PresignedAccess;
-import com.aifashionvault.platform.objectstore.StorageBoundary;
+import com.aifashionvault.shared.StorageDomain;
 import com.aifashionvault.platform.objectstore.StoredObject;
 import com.aifashionvault.platform.objectstore.UploadCapability;
 import com.aifashionvault.platform.objectstore.UploadPurpose;
@@ -158,8 +158,8 @@ class GenerationOrchestrationTest {
 		notificationStore = new InMemoryNotificationStore();
 		queue = new InMemoryQueue();
 		objects = new InMemoryObjects();
-		objects.put(new ObjectRef(StorageBoundary.AVATAR, AVATAR_KEY), new byte[] {1, 2, 3});
-		objects.put(new ObjectRef(StorageBoundary.VAULT, PRODUCT_KEY), new byte[] {4, 5, 6});
+		objects.put(new ObjectRef(StorageDomain.AVATAR, AVATAR_KEY), new byte[] {1, 2, 3});
+		objects.put(new ObjectRef(StorageDomain.VAULT, PRODUCT_KEY), new byte[] {4, 5, 6});
 		resolver = mock(AuthorizedGenerationMediaResolver.class);
 		when(resolver.resolve(any())).thenReturn(resolvedMedia());
 		transfer = new PrivacyApprovedInputTransfer(policy(), objects);
@@ -3815,7 +3815,7 @@ class GenerationOrchestrationTest {
 		}
 
 		@Override
-		public List<StoredObject> list(StorageBoundary boundary, String prefix) {
+		public List<StoredObject> list(StorageDomain boundary, String prefix) {
 			return List.of();
 		}
 

@@ -34,7 +34,7 @@ import com.aifashionvault.platform.objectstore.ObjectRef;
 import com.aifashionvault.platform.objectstore.ObjectStore;
 import com.aifashionvault.platform.objectstore.ObjectStoreExceptions;
 import com.aifashionvault.platform.objectstore.PresignedAccess;
-import com.aifashionvault.platform.objectstore.StorageBoundary;
+import com.aifashionvault.shared.StorageDomain;
 import com.aifashionvault.platform.objectstore.UploadCapability;
 import com.aifashionvault.platform.objectstore.UploadPurpose;
 import com.aifashionvault.shared.StorageKey;
