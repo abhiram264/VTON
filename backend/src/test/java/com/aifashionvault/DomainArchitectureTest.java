@@ -110,7 +110,7 @@ class DomainArchitectureTest {
 	}
 
 	@Test
-	void flywayAllowsOnlyTheFrozenV020MigrationAbovePublishedV017() throws IOException {
+	void flywayAllowsOnlyTheFrozenV021MigrationAbovePublishedV017() throws IOException {
 		Path migrations = migrationRoot();
 		List<String> violations = new ArrayList<>();
 		if (Files.isDirectory(migrations)) {
@@ -119,8 +119,9 @@ class DomainArchitectureTest {
 					String name = file.getFileName().toString();
 					if (isNewerThanV017(name) && !name.equals("V018__single_item_manual_product.sql")
 						&& !name.equals("V019__share_import_resolver.sql")
-						&& !name.equals("V020__product_normalization.sql")) {
-						violations.add(display(migrations, file) + " unexpected V020+ Flyway file");
+						&& !name.equals("V020__product_normalization.sql")
+						&& !name.equals("V021__privacy_deletion_workflow.sql")) {
+						violations.add(display(migrations, file) + " unexpected V021+ Flyway file");
 					}
 				});
 			}
