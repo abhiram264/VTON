@@ -4,10 +4,12 @@ import java.math.BigDecimal;
 
 import com.aifashionvault.shared.GenerationAttemptId;
 import com.aifashionvault.shared.GenerationJobId;
+import com.aifashionvault.shared.UserId;
 
 public record GenerationCostFact(
 	GenerationJobId generationId,
 	GenerationAttemptId attemptId,
+	UserId userId,
 	String providerKey,
 	String modelRouteAuditIdentity,
 	String technicalOutcome,
@@ -22,8 +24,8 @@ public record GenerationCostFact(
 	boolean retainedUser) {
 
 	public GenerationCostFact {
-		if (generationId == null || attemptId == null) {
-			throw new IllegalArgumentException("generationId and attemptId are required");
+		if (generationId == null || attemptId == null || userId == null) {
+			throw new IllegalArgumentException("generationId, attemptId, and userId are required");
 		}
 		if (providerKey == null || providerKey.isBlank()) {
 			throw new IllegalArgumentException("providerKey is required");
