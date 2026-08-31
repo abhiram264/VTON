@@ -12,6 +12,7 @@ import java.util.UUID;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
+import com.aifashionvault.shared.StorageDomain;
 import com.aifashionvault.shared.StorageKey;
 import com.aifashionvault.shared.UploadId;
 import com.aifashionvault.shared.UserId;
@@ -135,44 +136,44 @@ class StorageKeysTest {
 
 		@Test
 		void scopesAvatarVaultAndLookKeysToTheSuppliedUserId() {
-			assertThat(StorageKeys.persistentKey(USER_ID, StorageBoundary.AVATAR, STABLE_ID, ImageMediaType.JPEG).value())
+			assertThat(StorageKeys.persistentKey(USER_ID, StorageDomain.AVATAR, STABLE_ID, ImageMediaType.JPEG).value())
 				.isEqualTo("users/11111111-1111-1111-1111-111111111111/avatars/44444444-4444-4444-4444-444444444444.jpg");
-			assertThat(StorageKeys.persistentKey(USER_ID, StorageBoundary.AVATAR, STABLE_ID, ImageMediaType.PNG).value())
+			assertThat(StorageKeys.persistentKey(USER_ID, StorageDomain.AVATAR, STABLE_ID, ImageMediaType.PNG).value())
 				.isEqualTo("users/11111111-1111-1111-1111-111111111111/avatars/44444444-4444-4444-4444-444444444444.png");
-			assertThat(StorageKeys.persistentKey(USER_ID, StorageBoundary.VAULT, STABLE_ID, ImageMediaType.JPEG).value())
+			assertThat(StorageKeys.persistentKey(USER_ID, StorageDomain.VAULT, STABLE_ID, ImageMediaType.JPEG).value())
 				.isEqualTo("users/11111111-1111-1111-1111-111111111111/vault/44444444-4444-4444-4444-444444444444.jpg");
-			assertThat(StorageKeys.persistentKey(USER_ID, StorageBoundary.LOOK, STABLE_ID, ImageMediaType.PNG).value())
+			assertThat(StorageKeys.persistentKey(USER_ID, StorageDomain.LOOK, STABLE_ID, ImageMediaType.PNG).value())
 				.isEqualTo("users/11111111-1111-1111-1111-111111111111/looks/44444444-4444-4444-4444-444444444444.png");
 		}
 
 		@Test
 		void neverIncludesAnotherUsersIdOrAClientFilename() {
-			StorageKey key = StorageKeys.persistentKey(USER_ID, StorageBoundary.VAULT, STABLE_ID, ImageMediaType.JPEG);
+			StorageKey key = StorageKeys.persistentKey(USER_ID, StorageDomain.VAULT, STABLE_ID, ImageMediaType.JPEG);
 
 			assertThat(key.value()).contains(USER_ID.value().toString());
 			assertThat(key.value()).doesNotContain(OTHER_USER_ID.value().toString());
 			assertThat(key.value()).doesNotContain("../");
 			assertThat(key.value()).doesNotContain("foo.jpg");
 			assertThat(key.value()).endsWith(".jpg");
-			assertThat(StorageKeys.persistentKey(USER_ID, StorageBoundary.LOOK, STABLE_ID, ImageMediaType.PNG).value())
+			assertThat(StorageKeys.persistentKey(USER_ID, StorageDomain.LOOK, STABLE_ID, ImageMediaType.PNG).value())
 				.endsWith(".png");
 		}
 
 		@Test
 		void rejectsTempBoundary() {
-			assertThatThrownBy(() -> StorageKeys.persistentKey(USER_ID, StorageBoundary.TEMP, STABLE_ID, ImageMediaType.JPEG))
+			assertThatThrownBy(() -> StorageKeys.persistentKey(USER_ID, StorageDomain.TEMP, STABLE_ID, ImageMediaType.JPEG))
 				.isInstanceOf(IllegalArgumentException.class);
 		}
 
 		@Test
 		void rejectsNullArguments() {
-			assertThatThrownBy(() -> StorageKeys.persistentKey(null, StorageBoundary.AVATAR, STABLE_ID, ImageMediaType.JPEG))
+			assertThatThrownBy(() -> StorageKeys.persistentKey(null, StorageDomain.AVATAR, STABLE_ID, ImageMediaType.JPEG))
 				.isInstanceOf(IllegalArgumentException.class);
 			assertThatThrownBy(() -> StorageKeys.persistentKey(USER_ID, null, STABLE_ID, ImageMediaType.JPEG))
 				.isInstanceOf(IllegalArgumentException.class);
-			assertThatThrownBy(() -> StorageKeys.persistentKey(USER_ID, StorageBoundary.AVATAR, null, ImageMediaType.JPEG))
+			assertThatThrownBy(() -> StorageKeys.persistentKey(USER_ID, StorageDomain.AVATAR, null, ImageMediaType.JPEG))
 				.isInstanceOf(IllegalArgumentException.class);
-			assertThatThrownBy(() -> StorageKeys.persistentKey(USER_ID, StorageBoundary.AVATAR, STABLE_ID, null))
+			assertThatThrownBy(() -> StorageKeys.persistentKey(USER_ID, StorageDomain.AVATAR, STABLE_ID, null))
 				.isInstanceOf(IllegalArgumentException.class);
 		}
 	}

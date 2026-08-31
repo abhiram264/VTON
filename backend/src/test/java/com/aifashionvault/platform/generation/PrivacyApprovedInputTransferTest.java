@@ -19,7 +19,7 @@ import com.aifashionvault.platform.objectstore.ObjectMetadata;
 import com.aifashionvault.platform.objectstore.ObjectRef;
 import com.aifashionvault.platform.objectstore.ObjectStore;
 import com.aifashionvault.platform.objectstore.PresignedAccess;
-import com.aifashionvault.platform.objectstore.StorageBoundary;
+import com.aifashionvault.shared.StorageDomain;
 import com.aifashionvault.shared.StorageKey;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -49,7 +49,7 @@ class PrivacyApprovedInputTransferTest {
     @Test
     void inlinePathReadsBoundedBytesAndNeverPresigns() {
         ObjectStore store = mock(ObjectStore.class);
-        ObjectRef object = new ObjectRef(StorageBoundary.AVATAR, "users/u1/avatars/a.jpg");
+        ObjectRef object = new ObjectRef(StorageDomain.AVATAR, "users/u1/avatars/a.jpg");
         byte[] payload = new byte[] {1, 2, 3};
         when(store.readBounded(eq(object), any(), eq((int) MAX_INLINE_BYTES))).thenReturn(payload);
 
@@ -70,7 +70,7 @@ class PrivacyApprovedInputTransferTest {
     @Test
     void unknownSizeHeadsThenInlinesWithoutPresign() {
         ObjectStore store = mock(ObjectStore.class);
-        ObjectRef object = new ObjectRef(StorageBoundary.TEMP, "temp/u1/job/obj.jpg");
+        ObjectRef object = new ObjectRef(StorageDomain.TEMP, "temp/u1/job/obj.jpg");
         byte[] payload = new byte[] {9, 8, 7};
         when(store.head(object)).thenReturn(new ObjectMetadata(payload.length, "image/jpeg", "etag-1"));
         when(store.readBounded(object, "etag-1", (int) MAX_INLINE_BYTES)).thenReturn(payload);
@@ -91,7 +91,7 @@ class PrivacyApprovedInputTransferTest {
     @Test
     void oversizedFallbackMintsOnePresignPerPrepareWithCappedTtl() {
         ObjectStore store = mock(ObjectStore.class);
-        ObjectRef object = new ObjectRef(StorageBoundary.VAULT, "users/u1/vault/item.png");
+        ObjectRef object = new ObjectRef(StorageDomain.VAULT, "users/u1/vault/item.png");
         Duration providerTtl = Duration.ofMinutes(2);
         when(store.presignGet(object, providerTtl)).thenReturn(access(object, FIRST_URI));
 
@@ -112,7 +112,7 @@ class PrivacyApprovedInputTransferTest {
     @Test
     void twoPrepareCallsMintFreshPresigns() {
         ObjectStore store = mock(ObjectStore.class);
-        ObjectRef object = new ObjectRef(StorageBoundary.LOOK, "users/u1/looks/look.png");
+        ObjectRef object = new ObjectRef(StorageDomain.LOOK, "users/u1/looks/look.png");
         Duration providerTtl = Duration.ofMinutes(5);
         when(store.presignGet(object, providerTtl))
             .thenReturn(access(object, FIRST_URI), access(object, SECOND_URI));
@@ -152,7 +152,7 @@ class PrivacyApprovedInputTransferTest {
         PrivateMediaRef input = media(
             "users/u1/generation-inputs/00000000-0000-0000-0000-000000000001/product",
             OptionalLong.of(MAX_INLINE_BYTES + 1));
-        ObjectRef expected = new ObjectRef(StorageBoundary.GENERATION_INPUT, input.storageKey().value());
+        ObjectRef expected = new ObjectRef(StorageDomain.TEMP, input.storageKey().value());
         PresignedAccess access = access(expected, FIRST_URI);
         when(store.presignGet(expected, MAX_SIGNED_READ_TTL)).thenReturn(access);
 

@@ -21,6 +21,7 @@ import com.aifashionvault.avatar.AvatarMediaAccess;
 import com.aifashionvault.platform.environment.VaultEnvironmentProperties;
 import com.aifashionvault.shared.StorageKey;
 import com.aifashionvault.shared.UploadId;
+import com.aifashionvault.shared.StorageDomain;
 import com.aifashionvault.shared.UserId;
 
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
@@ -99,16 +100,16 @@ class S3ObjectStoreTest {
 			S3ObjectStore store = store(mock(S3Client.class), (object, age) -> {
 			});
 
-			assertThat(store.bucket(StorageBoundary.AVATAR)).isEqualTo("configured-avatar");
-			assertThat(store.bucket(StorageBoundary.VAULT)).isEqualTo("configured-vault");
-			assertThat(store.bucket(StorageBoundary.GENERATION_INPUT)).isEqualTo("configured-temp");
-			assertThat(store.bucket(StorageBoundary.LOOK)).isEqualTo("configured-look");
-			assertThat(store.bucket(StorageBoundary.TEMP)).isEqualTo("configured-temp");
+			assertThat(store.bucket(StorageDomain.AVATAR)).isEqualTo("configured-avatar");
+			assertThat(store.bucket(StorageDomain.VAULT)).isEqualTo("configured-vault");
+			assertThat(store.bucket(StorageDomain.TEMP)).isEqualTo("configured-temp");
+			assertThat(store.bucket(StorageDomain.LOOK)).isEqualTo("configured-look");
+			assertThat(store.bucket(StorageDomain.TEMP)).isEqualTo("configured-temp");
 			assertThat(Set.of(
-				store.bucket(StorageBoundary.AVATAR),
-				store.bucket(StorageBoundary.VAULT),
-				store.bucket(StorageBoundary.LOOK),
-				store.bucket(StorageBoundary.TEMP))).hasSize(4);
+				store.bucket(StorageDomain.AVATAR),
+				store.bucket(StorageDomain.VAULT),
+				store.bucket(StorageDomain.LOOK),
+				store.bucket(StorageDomain.TEMP))).hasSize(4);
 		}
 
 		@Test
@@ -116,16 +117,16 @@ class S3ObjectStoreTest {
 			S3ObjectStore store = store(mock(S3Client.class), (object, age) -> {
 			});
 
-			assertThat(store.presignPut(new ObjectRef(StorageBoundary.AVATAR, "users/u/avatars/a.jpg"), Duration.ofMinutes(10))
+			assertThat(store.presignPut(new ObjectRef(StorageDomain.AVATAR, "users/u/avatars/a.jpg"), Duration.ofMinutes(10))
 				.uri()
 				.toString()).contains("configured-avatar");
-			assertThat(store.presignGet(new ObjectRef(StorageBoundary.VAULT, "users/u/vault/v.jpg"), Duration.ofMinutes(5))
+			assertThat(store.presignGet(new ObjectRef(StorageDomain.VAULT, "users/u/vault/v.jpg"), Duration.ofMinutes(5))
 				.uri()
 				.toString()).contains("configured-vault");
-			assertThat(store.presignPut(new ObjectRef(StorageBoundary.LOOK, "users/u/looks/l.jpg"), Duration.ofMinutes(1))
+			assertThat(store.presignPut(new ObjectRef(StorageDomain.LOOK, "users/u/looks/l.jpg"), Duration.ofMinutes(1))
 				.uri()
 				.toString()).contains("configured-look");
-			assertThat(store.presignGet(new ObjectRef(StorageBoundary.TEMP, "temp/u/job/t.jpg"), Duration.ofSeconds(30))
+			assertThat(store.presignGet(new ObjectRef(StorageDomain.TEMP, "temp/u/job/t.jpg"), Duration.ofSeconds(30))
 				.uri()
 				.toString()).contains("configured-temp");
 		}
@@ -138,7 +139,7 @@ class S3ObjectStoreTest {
 		void putAllowsExactTenMinuteCapAndRejectsAboveOrNonpositive() {
 			S3ObjectStore store = store(mock(S3Client.class), (object, age) -> {
 			});
-			ObjectRef ref = new ObjectRef(StorageBoundary.AVATAR, "users/u/avatars/a.jpg");
+			ObjectRef ref = new ObjectRef(StorageDomain.AVATAR, "users/u/avatars/a.jpg");
 
 			PresignedAccess allowed = store.presignPut(ref, Duration.ofMinutes(10));
 			assertThat(allowed.method()).isEqualTo("PUT");
@@ -158,7 +159,7 @@ class S3ObjectStoreTest {
 		void getAllowsExactFiveMinuteCapAndRejectsAboveOrNonpositive() {
 			S3ObjectStore store = store(mock(S3Client.class), (object, age) -> {
 			});
-			ObjectRef ref = new ObjectRef(StorageBoundary.LOOK, "users/u/looks/l.jpg");
+			ObjectRef ref = new ObjectRef(StorageDomain.LOOK, "users/u/looks/l.jpg");
 
 			PresignedAccess allowed = store.presignGet(ref, Duration.ofMinutes(5));
 			assertThat(allowed.method()).isEqualTo("GET");
@@ -180,13 +181,13 @@ class S3ObjectStoreTest {
 
 		@Test
 		void objectRefIsAKeyNotAUrlAndRejectsUrlShapedIdentity() {
-			ObjectRef ref = new ObjectRef(StorageBoundary.VAULT, "users/u/vault/item.jpg");
+			ObjectRef ref = new ObjectRef(StorageDomain.VAULT, "users/u/vault/item.jpg");
 			assertThat(ref.objectKey()).isEqualTo("users/u/vault/item.jpg");
 			assertThat(ref.objectKey()).doesNotContain("://");
 
-			assertThatThrownBy(() -> new ObjectRef(StorageBoundary.AVATAR, "https://configured-avatar.s3.amazonaws.com/users/u/avatars/a.jpg"))
+			assertThatThrownBy(() -> new ObjectRef(StorageDomain.AVATAR, "https://configured-avatar.s3.amazonaws.com/users/u/avatars/a.jpg"))
 				.isInstanceOf(IllegalArgumentException.class);
-			assertThatThrownBy(() -> new ObjectRef(StorageBoundary.TEMP, "http://example.invalid/temp/a.jpg"))
+			assertThatThrownBy(() -> new ObjectRef(StorageDomain.TEMP, "http://example.invalid/temp/a.jpg"))
 				.isInstanceOf(IllegalArgumentException.class);
 		}
 
@@ -195,7 +196,7 @@ class S3ObjectStoreTest {
 			S3Client s3 = mock(S3Client.class);
 			S3ObjectStore store = store(s3, (object, age) -> {
 			});
-			ObjectRef ref = new ObjectRef(StorageBoundary.AVATAR, "users/u/avatars/a.jpg");
+			ObjectRef ref = new ObjectRef(StorageDomain.AVATAR, "users/u/avatars/a.jpg");
 
 			PresignedAccess put = store.presignPut(ref, Duration.ofMinutes(10));
 			PresignedAccess get = store.presignGet(ref, Duration.ofMinutes(5));
@@ -212,7 +213,7 @@ class S3ObjectStoreTest {
 			S3Client s3 = mock(S3Client.class);
 			S3ObjectStore store = store(s3, (object, age) -> {
 			});
-			ObjectRef ref = new ObjectRef(StorageBoundary.VAULT, "users/u/vault/item.jpg");
+			ObjectRef ref = new ObjectRef(StorageDomain.VAULT, "users/u/vault/item.jpg");
 
 			store.delete(ref);
 
@@ -246,7 +247,7 @@ class S3ObjectStoreTest {
 					.isTruncated(false)
 					.build());
 
-			List<StoredObject> result = store.list(StorageBoundary.AVATAR, "users/");
+			List<StoredObject> result = store.list(StorageDomain.AVATAR, "users/");
 
 			assertThat(result).containsExactly(
 				new StoredObject("users/u/avatars/first.jpg", firstModified),
@@ -272,7 +273,7 @@ class S3ObjectStoreTest {
 
 			assertThatThrownBy(() -> store.list(null, "users/"))
 				.isInstanceOf(IllegalArgumentException.class);
-			assertThatThrownBy(() -> store.list(StorageBoundary.AVATAR, null))
+			assertThatThrownBy(() -> store.list(StorageDomain.AVATAR, null))
 				.isInstanceOf(IllegalArgumentException.class);
 			verifyNoInteractions(s3);
 		}
@@ -281,7 +282,7 @@ class S3ObjectStoreTest {
 		void avatarAdapterDelegatesToPersistentListingWithoutReadingMediaOrCreatingCapabilities() {
 			ObjectStore objectStore = mock(ObjectStore.class);
 			Instant modified = NOW.minus(Duration.ofHours(24));
-			when(objectStore.list(StorageBoundary.AVATAR, "users/")).thenReturn(List.of(
+			when(objectStore.list(StorageDomain.AVATAR, "users/")).thenReturn(List.of(
 				new StoredObject("users/u/avatars/first.jpg", modified),
 				new StoredObject("users/u/avatars/second.png", null)));
 			ObjectStoreAvatarMediaAccess access = new ObjectStoreAvatarMediaAccess(objectStore);
@@ -291,7 +292,7 @@ class S3ObjectStoreTest {
 			assertThat(result).containsExactly(
 				new AvatarMediaAccess.PersistentObject(new StorageKey("users/u/avatars/first.jpg"), modified),
 				new AvatarMediaAccess.PersistentObject(new StorageKey("users/u/avatars/second.png"), null));
-			verify(objectStore).list(StorageBoundary.AVATAR, "users/");
+			verify(objectStore).list(StorageDomain.AVATAR, "users/");
 			verifyNoMoreInteractions(objectStore);
 		}
 	}
@@ -455,7 +456,7 @@ class S3ObjectStoreTest {
 		void putAndGetExpiryQueryRemainSixHundredAndThreeHundred() {
 			S3ObjectStore store = store(mock(S3Client.class), (object, age) -> {
 			});
-			ObjectRef ref = new ObjectRef(StorageBoundary.AVATAR, "users/u/avatars/a.jpg");
+			ObjectRef ref = new ObjectRef(StorageDomain.AVATAR, "users/u/avatars/a.jpg");
 
 			assertThat(store.presignPut(ref, Duration.ofMinutes(10)).uri().getQuery()).contains("X-Amz-Expires=600");
 			assertThat(store.presignGet(ref, Duration.ofMinutes(5)).uri().getQuery()).contains("X-Amz-Expires=300");
@@ -473,7 +474,7 @@ class S3ObjectStoreTest {
 			S3Client s3 = mock(S3Client.class);
 			S3ObjectStore store = store(s3, (object, age) -> {
 			});
-			ObjectRef ref = new ObjectRef(StorageBoundary.TEMP, STAGING_KEY);
+			ObjectRef ref = new ObjectRef(StorageDomain.TEMP, STAGING_KEY);
 			when(s3.headObject(any(HeadObjectRequest.class))).thenReturn(HeadObjectResponse.builder()
 				.contentLength(88L)
 				.contentType("image/png")
@@ -496,7 +497,7 @@ class S3ObjectStoreTest {
 			S3Client s3 = mock(S3Client.class);
 			S3ObjectStore store = store(s3, (object, age) -> {
 			});
-			ObjectRef ref = new ObjectRef(StorageBoundary.TEMP, STAGING_KEY);
+			ObjectRef ref = new ObjectRef(StorageDomain.TEMP, STAGING_KEY);
 
 			when(s3.headObject(any(HeadObjectRequest.class)))
 				.thenThrow(s3Error(404, "NoSuchKey", "https://configured-temp.s3.amazonaws.com/" + STAGING_KEY));
@@ -522,7 +523,7 @@ class S3ObjectStoreTest {
 			S3Client s3 = mock(S3Client.class);
 			S3ObjectStore store = store(s3, (object, age) -> {
 			});
-			ObjectRef ref = new ObjectRef(StorageBoundary.TEMP, STAGING_KEY);
+			ObjectRef ref = new ObjectRef(StorageDomain.TEMP, STAGING_KEY);
 			when(s3.getObject(any(GetObjectRequest.class)))
 				.thenReturn(objectStream(new byte[] {1, 2, 3, 4, 5, 6, 7, 8}));
 
@@ -541,7 +542,7 @@ class S3ObjectStoreTest {
 			S3Client s3 = mock(S3Client.class);
 			S3ObjectStore store = store(s3, (object, age) -> {
 			});
-			ObjectRef ref = new ObjectRef(StorageBoundary.TEMP, STAGING_KEY);
+			ObjectRef ref = new ObjectRef(StorageDomain.TEMP, STAGING_KEY);
 			when(s3.getObject(any(GetObjectRequest.class)))
 				.thenReturn(objectStream(new byte[] {9, 8, 7}))
 				.thenThrow(s3Error(404, "NoSuchKey", "https://configured-temp.s3.amazonaws.com/" + STAGING_KEY));
@@ -866,7 +867,7 @@ class S3ObjectStoreTest {
 			USER_ID,
 			UPLOAD_ID,
 			new StorageKey(DEST_KEY),
-			StorageBoundary.AVATAR,
+			StorageDomain.AVATAR,
 			claimMarker,
 			"source-v1");
 	}

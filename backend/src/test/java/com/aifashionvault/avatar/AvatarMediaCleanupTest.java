@@ -29,7 +29,7 @@ import com.aifashionvault.platform.objectstore.ObjectRef;
 import com.aifashionvault.platform.objectstore.ObjectStore;
 import com.aifashionvault.platform.objectstore.ObjectStoreExceptions;
 import com.aifashionvault.platform.objectstore.PresignedAccess;
-import com.aifashionvault.platform.objectstore.StorageBoundary;
+import com.aifashionvault.shared.StorageDomain;
 import com.aifashionvault.platform.objectstore.UploadCapability;
 import com.aifashionvault.platform.objectstore.UploadPurpose;
 import com.aifashionvault.shared.AvatarImageId;
@@ -281,7 +281,7 @@ class AvatarMediaCleanupTest {
 	}
 
 	private static ObjectRef ref(AvatarImage image) {
-		return new ObjectRef(StorageBoundary.AVATAR, image.storageKey().value());
+		return new ObjectRef(StorageDomain.AVATAR, image.storageKey().value());
 	}
 
 	private static List<Method> beanMethods(Class<?> type) {

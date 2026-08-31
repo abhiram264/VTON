@@ -22,6 +22,7 @@ import javax.imageio.stream.ImageOutputStream;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
+import com.aifashionvault.shared.StorageDomain;
 import com.aifashionvault.shared.UploadId;
 import com.aifashionvault.shared.UserId;
 
@@ -107,10 +108,10 @@ class UploadWorkflowTest {
 				15,
 				15,
 				VERSION));
-			assertThat(store.lastHead.boundary()).isEqualTo(StorageBoundary.TEMP);
+			assertThat(store.lastHead.boundary()).isEqualTo(StorageDomain.TEMP);
 			assertThat(store.lastHead.objectKey()).isEqualTo(StorageKeys.stagingKey(USER_ID, UPLOAD_ID).value());
 			assertThat(store.lastHead.objectKey()).doesNotContain("/avatars/");
-			assertThat(store.lastRead.boundary()).isEqualTo(StorageBoundary.TEMP);
+			assertThat(store.lastRead.boundary()).isEqualTo(StorageDomain.TEMP);
 			assertThat(store.lastRead.objectKey()).isEqualTo(StorageKeys.stagingKey(USER_ID, UPLOAD_ID).value());
 			assertThat(store.lastReadVersion).isEqualTo(VERSION);
 			assertThat(store.lastReadMaxBytes).isEqualTo(jpeg.length);
@@ -242,7 +243,7 @@ class UploadWorkflowTest {
 			assertThat(store.deleteCount).isEqualTo(2);
 			assertThat(store.deleted.get(0).objectKey())
 				.isEqualTo(StorageKeys.stagingKey(USER_ID, UPLOAD_ID, UploadPurpose.AVATAR).value());
-			assertThat(store.lastDelete.boundary()).isEqualTo(StorageBoundary.TEMP);
+			assertThat(store.lastDelete.boundary()).isEqualTo(StorageDomain.TEMP);
 			assertThat(store.lastDelete.objectKey()).isEqualTo(StorageKeys.stagingKey(USER_ID, UPLOAD_ID).value());
 			assertThat(store.headCount).isZero();
 			assertThat(store.readCount).isZero();
@@ -273,7 +274,7 @@ class UploadWorkflowTest {
 			assertThat(store.deleteCount).isEqualTo(2);
 			assertThat(store.deleted.get(0).objectKey())
 				.isEqualTo(StorageKeys.stagingKey(USER_ID, UPLOAD_ID, UploadPurpose.AVATAR).value());
-			assertThat(store.lastDelete.boundary()).isEqualTo(StorageBoundary.TEMP);
+			assertThat(store.lastDelete.boundary()).isEqualTo(StorageDomain.TEMP);
 			assertThat(store.lastDelete.objectKey()).isEqualTo(StorageKeys.stagingKey(USER_ID, UPLOAD_ID).value());
 		}
 
@@ -283,7 +284,7 @@ class UploadWorkflowTest {
 
 			workflow(store).abort(USER_ID, UPLOAD_ID);
 
-			assertThat(store.lastDelete.boundary()).isEqualTo(StorageBoundary.TEMP);
+			assertThat(store.lastDelete.boundary()).isEqualTo(StorageDomain.TEMP);
 			assertThat(store.lastDelete.objectKey()).isEqualTo(StorageKeys.stagingKey(USER_ID, UPLOAD_ID).value());
 			assertThat(store.lastDelete.objectKey()).startsWith("temp/");
 			assertThat(store.lastDelete.objectKey()).doesNotContain("avatars");
@@ -304,7 +305,7 @@ class UploadWorkflowTest {
 
 	private static void assertDeletedTemp(FakeObjectStore store) {
 		assertThat(store.deleteCount).isEqualTo(1);
-		assertThat(store.lastDelete.boundary()).isEqualTo(StorageBoundary.TEMP);
+		assertThat(store.lastDelete.boundary()).isEqualTo(StorageDomain.TEMP);
 		assertThat(store.lastDelete.objectKey()).isEqualTo(StorageKeys.stagingKey(USER_ID, UPLOAD_ID).value());
 	}
 

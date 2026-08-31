@@ -21,7 +21,7 @@ import com.aifashionvault.generation.vton.ProviderJobId;
 import com.aifashionvault.generation.vton.ProviderOutputRef;
 import com.aifashionvault.generation.vton.StatusQueryResult;
 import com.aifashionvault.generation.vton.SubmissionReplaySafety;
-import com.aifashionvault.platform.objectstore.StorageBoundary;
+import com.aifashionvault.shared.StorageDomain;
 import com.aifashionvault.shared.StorageKey;
 
 import tools.jackson.databind.ObjectMapper;
@@ -336,11 +336,11 @@ class FashnMapperTest {
 
     @Test
     void storageKeysResolveToObjectBoundaries() {
-        assertThat(mapper.objectRef(new StorageKey("temp/user/uploads/a")).orElseThrow().boundary()).isEqualTo(StorageBoundary.TEMP);
-        assertThat(mapper.objectRef(new StorageKey("users/u/avatars/a.jpg")).orElseThrow().boundary()).isEqualTo(StorageBoundary.AVATAR);
-        assertThat(mapper.objectRef(new StorageKey("users/u/vault/a.jpg")).orElseThrow().boundary()).isEqualTo(StorageBoundary.VAULT);
-        assertThat(mapper.objectRef(new StorageKey("users/u/looks/a.jpg")).orElseThrow().boundary()).isEqualTo(StorageBoundary.LOOK);
-        assertThat(mapper.objectRef(new StorageKey("temp/user/avatars/staged")).orElseThrow().boundary()).isEqualTo(StorageBoundary.TEMP);
+        assertThat(mapper.objectRef(new StorageKey("temp/user/uploads/a")).orElseThrow().boundary()).isEqualTo(StorageDomain.TEMP);
+        assertThat(mapper.objectRef(new StorageKey("users/u/avatars/a.jpg")).orElseThrow().boundary()).isEqualTo(StorageDomain.AVATAR);
+        assertThat(mapper.objectRef(new StorageKey("users/u/vault/a.jpg")).orElseThrow().boundary()).isEqualTo(StorageDomain.VAULT);
+        assertThat(mapper.objectRef(new StorageKey("users/u/looks/a.jpg")).orElseThrow().boundary()).isEqualTo(StorageDomain.LOOK);
+        assertThat(mapper.objectRef(new StorageKey("temp/user/avatars/staged")).orElseThrow().boundary()).isEqualTo(StorageDomain.TEMP);
         assertThat(mapper.objectRef(new StorageKey("users/u/other/a.jpg"))).isEmpty();
     }
 

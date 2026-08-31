@@ -33,7 +33,7 @@ import com.aifashionvault.platform.objectstore.ObjectMetadata;
 import com.aifashionvault.platform.objectstore.ObjectRef;
 import com.aifashionvault.platform.objectstore.ObjectStore;
 import com.aifashionvault.platform.objectstore.PresignedAccess;
-import com.aifashionvault.platform.objectstore.StorageBoundary;
+import com.aifashionvault.shared.StorageDomain;
 import com.aifashionvault.platform.objectstore.StoredObject;
 import com.aifashionvault.platform.objectstore.UploadCapability;
 import com.aifashionvault.platform.security.ExternalTokenVerifier;
@@ -234,6 +234,6 @@ class VaultControllerTest {
 		@Override public PresignedAccess presignGet(ObjectRef object, Duration ttl) {
 			return new PresignedAccess(object, "GET", URI.create("https://example.invalid"), Map.of(), Instant.now().plus(ttl));
 		}
-		@Override public List<StoredObject> list(StorageBoundary boundary, String prefix) { return List.of(); }
+		@Override public List<StoredObject> list(StorageDomain boundary, String prefix) { return List.of(); }
 	}
 }
