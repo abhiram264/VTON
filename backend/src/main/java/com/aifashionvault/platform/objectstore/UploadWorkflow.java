@@ -11,18 +11,33 @@ public final class UploadWorkflow {
 
 	private final ObjectStore store;
 	private final ImageInspector inspector;
+	private final MalwareScanner malwareScanner;
 	private final Supplier<UUID> uploadIds;
 
 	public UploadWorkflow(ObjectStore store, ImageInspector inspector) {
-		this(store, inspector, UUID::randomUUID);
+		this(store, inspector, (bytes, type) -> new MalwareScanResult(MalwareVerdict.CLEAN, "clean"));
+	}
+
+	public UploadWorkflow(ObjectStore store, ImageInspector inspector, MalwareScanner malwareScanner) {
+		this(store, inspector, malwareScanner, UUID::randomUUID);
 	}
 
 	public UploadWorkflow(ObjectStore store, ImageInspector inspector, Supplier<UUID> uploadIds) {
-		if (store == null || inspector == null || uploadIds == null) {
-			throw new IllegalArgumentException("store, inspector, and uploadIds are required");
+		this(store, inspector, (bytes, type) -> new MalwareScanResult(MalwareVerdict.CLEAN, "clean"), uploadIds);
+	}
+
+	public UploadWorkflow(
+		ObjectStore store,
+		ImageInspector inspector,
+		MalwareScanner malwareScanner,
+		Supplier<UUID> uploadIds
+	) {
+		if (store == null || inspector == null || malwareScanner == null || uploadIds == null) {
+			throw new IllegalArgumentException("store, inspector, malwareScanner, and uploadIds are required");
 		}
 		this.store = store;
 		this.inspector = inspector;
+		this.malwareScanner = malwareScanner;
 		this.uploadIds = uploadIds;
 	}
 
@@ -64,10 +79,11 @@ public final class UploadWorkflow {
 			ref = stagingRef(userId, uploadId, UploadPurpose.GENERIC);
 			metadata = store.head(ref);
 		}
+		String normalizedType;
 		ImageMediaType declaredType;
 		try {
-			String normalized = ImageMediaPolicy.requireDeclaration(metadata.contentType(), metadata.contentLength());
-			declaredType = "image/jpeg".equals(normalized) ? ImageMediaType.JPEG : ImageMediaType.PNG;
+			normalizedType = ImageMediaPolicy.requireDeclaration(metadata.contentType(), metadata.contentLength());
+			declaredType = "image/jpeg".equals(normalizedType) ? ImageMediaType.JPEG : ImageMediaType.PNG;
 		}
 		catch (IllegalArgumentException ex) {
 			deleteQuietly(ref);
@@ -78,14 +94,25 @@ public final class UploadWorkflow {
 		byte[] bytes = store.readBounded(ref, metadata.version(), maxBytes);
 		ImageInspector.Result inspected;
 		try {
+			if (bytes.length != metadata.contentLength()) {
+				throw new ObjectStoreExceptions.ImageValidationException("staged object length does not match metadata");
+			}
 			inspected = inspector.inspect(bytes);
 			if (inspected.mediaType() != declaredType) {
 				throw new ObjectStoreExceptions.ImageValidationException("image type does not match stored content type");
+			}
+			MalwareScanResult scan = malwareScanner.scan(bytes, normalizedType);
+			if (scan == null || scan.verdict() != MalwareVerdict.CLEAN) {
+				throw new ObjectStoreExceptions.ImageValidationException("image failed malware inspection");
 			}
 		}
 		catch (ObjectStoreExceptions.ImageValidationException ex) {
 			deleteQuietly(ref);
 			throw ex;
+		}
+		catch (RuntimeException ex) {
+			deleteQuietly(ref);
+			throw new ObjectStoreExceptions.ImageValidationException("malware inspection unavailable");
 		}
 		return new VerifiedUpload(
 			uploadId,

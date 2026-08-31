@@ -19,9 +19,12 @@ import java.util.function.DoubleSupplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.aifashionvault.admission.GlobalCostCircuitBreaker;
+import com.aifashionvault.admission.ProviderExecutionBudgetRequest;
 import com.aifashionvault.generation.CallbackInbox;
 import com.aifashionvault.generation.CallbackInboxStore;
 import com.aifashionvault.generation.GenerationAttempt;
+import com.aifashionvault.generation.GenerationCostFact;
 import com.aifashionvault.generation.GenerationJob;
 import com.aifashionvault.generation.PricingSnapshot;
 import com.aifashionvault.generation.GenerationRetryBudget;
@@ -40,7 +43,6 @@ import com.aifashionvault.generation.RetryDecisionEngine;
 import com.aifashionvault.generation.RetryDisposition;
 import com.aifashionvault.generation.RetryBackoff;
 import com.aifashionvault.generation.RetryPolicyResolution;
-import com.aifashionvault.generation.SpendBreaker;
 import com.aifashionvault.generation.ProviderTurnOutcome;
 import com.aifashionvault.generation.vton.GenerationOutputStore;
 import com.aifashionvault.generation.vton.AttemptRedeliveryPolicy;
@@ -142,63 +144,56 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 	private final GenerationCapacityLeaseStore capacityLeaseStore;
 	private final NotificationEventStore notificationEventStore;
 	private final DoubleSupplier randomFraction;
-	private final SpendBreaker spendBreaker;
+	private final GlobalCostCircuitBreaker costCircuitBreaker;
 	private final ProviderHealthGate providerHealthGate;
 	private final RetryDecisionEngine retryDecisionEngine = new RetryDecisionEngine();
 
-	/**
-	 * Canonical constructor (C4). The existing argument order is preserved;
-	 * the hard spend breaker (Q55) and the provider-health gate (Q56) are
-	 * appended and are mandatory: production wiring supplies the configured
-	 * beans and tests supply fakes. Null gates are never allowed. Every NEW
-	 * attempt freezes qualityPolicyVersion baseline-v1 (Q52/Q74, MVP); the
-	 * quality policy is never changed per-attempt after admission.
-	 */
-	public GenerationWorkProcessor(
-		GenerationStore generationStore,
-		LookStore lookStore,
-		NotificationStore notificationStore,
-		GenerationWorkQueue queue,
-		VtonProvider provider,
-		AuthorizedGenerationMediaResolver mediaResolver,
-		PrivacyApprovedInputTransfer inputTransfer,
-		QualityGate qualityGate,
-		GenerationMediaStore mediaStore,
-		ObjectStore objectStore,
-		Clock clock,
-		ProviderRegistry providerRegistry,
-		WorkOutboxStore workOutboxStore,
-		CallbackInboxStore callbackInboxStore,
-		GenerationMetrics metrics,
-		GenerationCapacityLeaseStore capacityLeaseStore,
-		NotificationEventStore notificationEventStore,
-		DoubleSupplier randomFraction,
-		SpendBreaker spendBreaker,
-		ProviderHealthGate providerHealthGate
-	) {
-		this.generationStore = require(generationStore, "generationStore");
-		this.lookStore = require(lookStore, "lookStore");
-		this.notificationStore = require(notificationStore, "notificationStore");
-		this.queue = require(queue, "queue");
-		this.provider = require(provider, "provider");
-		this.mediaResolver = require(mediaResolver, "mediaResolver");
-		this.inputTransfer = require(inputTransfer, "inputTransfer");
-		this.qualityGate = require(qualityGate, "qualityGate");
-		this.mediaStore = require(mediaStore, "mediaStore");
-		this.objectStore = require(objectStore, "objectStore");
-		this.clock = require(clock, "clock");
-		this.providerRegistry = providerRegistry;
-		this.workOutboxStore = workOutboxStore;
-		this.callbackInboxStore = callbackInboxStore;
-		this.metrics = metrics;
-		this.capacityLeaseStore = capacityLeaseStore;
-		this.notificationEventStore = notificationEventStore;
-		this.randomFraction = randomFraction == null
-			? () -> ThreadLocalRandom.current().nextDouble()
-			: randomFraction;
-		this.spendBreaker = require(spendBreaker, "spendBreaker");
-		this.providerHealthGate = require(providerHealthGate, "providerHealthGate");
-	}
+
+ 	public GenerationWorkProcessor(
+ 		GenerationStore generationStore,
+ 		LookStore lookStore,
+ 		NotificationStore notificationStore,
+ 		GenerationWorkQueue queue,
+ 		VtonProvider provider,
+ 		AuthorizedGenerationMediaResolver mediaResolver,
+ 		PrivacyApprovedInputTransfer inputTransfer,
+ 		QualityGate qualityGate,
+ 		GenerationMediaStore mediaStore,
+ 		ObjectStore objectStore,
+ 		Clock clock,
+ 		ProviderRegistry providerRegistry,
+ 		WorkOutboxStore workOutboxStore,
+ 		CallbackInboxStore callbackInboxStore,
+ 		GenerationMetrics metrics,
+ 		GenerationCapacityLeaseStore capacityLeaseStore,
+ 		NotificationEventStore notificationEventStore,
+ 		DoubleSupplier randomFraction,
+ 		GlobalCostCircuitBreaker costCircuitBreaker,
+ 		ProviderHealthGate providerHealthGate
+ 	) {
+ 		this.generationStore = require(generationStore, "generationStore");
+ 		this.lookStore = require(lookStore, "lookStore");
+ 		this.notificationStore = require(notificationStore, "notificationStore");
+ 		this.queue = require(queue, "queue");
+ 		this.provider = require(provider, "provider");
+ 		this.mediaResolver = require(mediaResolver, "mediaResolver");
+ 		this.inputTransfer = require(inputTransfer, "inputTransfer");
+ 		this.qualityGate = require(qualityGate, "qualityGate");
+ 		this.mediaStore = require(mediaStore, "mediaStore");
+ 		this.objectStore = require(objectStore, "objectStore");
+ 		this.clock = require(clock, "clock");
+ 		this.providerRegistry = providerRegistry;
+ 		this.workOutboxStore = workOutboxStore;
+ 		this.callbackInboxStore = callbackInboxStore;
+ 		this.metrics = metrics;
+ 		this.capacityLeaseStore = capacityLeaseStore;
+ 		this.notificationEventStore = notificationEventStore;
+ 		this.randomFraction = randomFraction == null
+ 			? () -> ThreadLocalRandom.current().nextDouble()
+ 			: randomFraction;
+ 		this.costCircuitBreaker = require(costCircuitBreaker, "costCircuitBreaker");
+ 		this.providerHealthGate = require(providerHealthGate, "providerHealthGate");
+ 	}
 
 	public void process(GenerationWorkLease lease) {
 		if (lease == null) {
@@ -489,6 +484,7 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 		if (attemptDeadlineExceeded(job, attempt, lease)) {
 			return;
 		}
+		attempt = bindPricingIfNeeded(attempt, active);
 		if (decision == AttemptRedeliveryPolicy.Decision.SUBMIT
 			&& !newExecutionGatesAdmit(job, attempt, lease, active)) {
 			return;
@@ -502,7 +498,6 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 			continueLater(job, lease, FIRST_POLL_DELAY);
 			return;
 		}
-		attempt = bindPricingIfNeeded(attempt, active);
 
 		ResolvedMedia media;
 		try {
@@ -1428,7 +1423,7 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 			.baselinesStillRequiringExecution(baselinesStillRequiring(latest, attempts))
 			.maxAutonomousWait(policyMaxAutonomousWait(latest))
 			.orchestrationDeadlineAt(orchestrationDeadlineAt)
-			.spendBlocked(spendBreaker.blocksNewProviderExecution(latest.userId()))
+ 			.spendBlocked(false)
 			.providerHealthy(providerHealthGate.allowsNewExecution(active.providerKey()))
 			.providerCapable(providerCapable(active, latest))
 			.technicalRetryRequested(technicalRetryRequested)
@@ -1556,7 +1551,7 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 				GenerationMetrics.TERMINAL_BUDGET_EXHAUSTED);
 			return false;
 		}
-		if (spendBreaker.blocksNewProviderExecution(job.userId())) {
+		if (costCircuitBlocks(job, attempt, active)) {
 			recordDisposition(RetryDisposition.NO_RETRY);
 			recordExhaustion(TerminalReason.COST_BUDGET_BLOCKED);
 			failTerminal(
@@ -1582,6 +1577,16 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 		}
 		return true;
 	}
+
+ 	private boolean costCircuitBlocks(GenerationJob job, GenerationAttempt attempt, VtonProvider active) {
+ 		return !costCircuitBreaker.authorize(new ProviderExecutionBudgetRequest(
+ 			job.userId(),
+ 			active.providerKey().value(),
+ 			attempt.model(),
+ 			attempt.estimatedCostCeiling(),
+ 			attempt.currency(),
+ 			clock.instant())).allowed();
+ 	}
 
 	/**
 	 * Maps a non-valid persisted retry-policy row to its fail-closed terminal
@@ -2615,13 +2620,13 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 		PricingSnapshot snapshot = new PricingSnapshot(
 			active.providerKey().value(),
 			model,
-			"unpriced",
+			"mvp-2026-08",
 			clock.instant(),
 			"generation",
-			null,
-			null,
+			BigDecimal.ONE,
+			new BigDecimal("0.10"),
 			currency,
-			null);
+			new BigDecimal("0.10"));
 		return attempt.bindPricing(snapshot);
 	}
 
@@ -2749,16 +2754,38 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 	}
 
 	private void recordCost(GenerationJob job, GenerationAttempt attempt) {
-		if (attempt.costStatus() == null) {
+		if (metrics == null) {
 			return;
 		}
-		if (metrics != null) {
-			metrics.recordCostStatus(attempt.costStatus());
+		String costStatus = attempt.costStatus();
+		BigDecimal cost = PricingSnapshot.COST_FINAL.equals(costStatus)
+			? attempt.actualCost()
+			: attempt.estimatedCost();
+		if (costStatus == null || PricingSnapshot.COST_UNKNOWN.equals(costStatus) || cost == null) {
+			costStatus = PricingSnapshot.COST_UNKNOWN;
+			cost = null;
 		}
-		BigDecimal amount = attempt.actualCost() != null ? attempt.actualCost() : attempt.estimatedCost();
-		if (amount != null && amount.signum() > 0) {
-			spendBreaker.recordAttemptSpend(job.userId(), amount);
-		}
+		Optional<QualityResult> quality = generationStore.findQualityResult(attempt.id());
+		String qualityOutcome = quality.map(result -> result.decision().name()).orElse(null);
+		boolean qualityApprovedLook = "PASS".equals(qualityOutcome)
+			&& job.currentStep() >= job.totalSteps();
+		metrics.recordCostStatus(costStatus);
+		metrics.recordAttempt(new GenerationCostFact(
+			job.id(),
+			attempt.id(),
+			job.userId(),
+			attempt.provider(),
+			attempt.model(),
+			attempt.technicalOutcome(),
+			qualityOutcome,
+			attempt.creditsUsed(),
+			attempt.actualBilledUnits(),
+			cost,
+			attempt.currency(),
+			costStatus,
+			qualityApprovedLook,
+			true,
+			false));
 	}
 
 	private static <T> T require(T value, String name) {

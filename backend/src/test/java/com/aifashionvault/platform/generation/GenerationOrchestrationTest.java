@@ -36,6 +36,13 @@ import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 
+import com.aifashionvault.admission.AbuseDecision;
+import com.aifashionvault.admission.AbuseDecisionReason;
+import com.aifashionvault.admission.AbuseBudgetPolicy;
+import com.aifashionvault.admission.AggregateBackedCostCircuitBreaker;
+import com.aifashionvault.admission.GlobalCostCircuitBreaker;
+import com.aifashionvault.admission.ProviderExecutionBudgetRequest;
+import com.aifashionvault.generation.CostQuery;
 import com.aifashionvault.generation.CallbackInbox;
 import com.aifashionvault.generation.CallbackInboxStore;
 import com.aifashionvault.generation.GenerationAttempt;
@@ -148,7 +155,7 @@ class GenerationOrchestrationTest {
 	private RecordingVtonProvider provider;
 	private GenerationWorkProcessor processor;
 	private GenerationWorkLease lease;
-	private TestSpendBreaker spendBreaker;
+	private TestCostCircuitBreaker costCircuitBreaker;
 	private TestProviderHealthGate providerHealthGate;
 
 	@BeforeEach
@@ -165,7 +172,7 @@ class GenerationOrchestrationTest {
 		transfer = new PrivacyApprovedInputTransfer(policy(), objects);
 		qualityGate = new ScriptedQualityGate();
 		provider = new RecordingVtonProvider();
-		spendBreaker = new TestSpendBreaker();
+		costCircuitBreaker = new TestCostCircuitBreaker();
 		providerHealthGate = new TestProviderHealthGate();
 		processor = processor(provider);
 		lease = new GenerationWorkLease(JOB_ID.value(), "receipt-1");
@@ -454,6 +461,43 @@ class GenerationOrchestrationTest {
 			.tag("category", GenerationMetrics.TERMINAL_FAILED)
 			.counter())
 			.isNotNull();
+	}
+
+	@Test
+	void completedAttemptFeedsUserAttributedSpendExactlyOnce() {
+		GenerationMetrics metrics = new GenerationMetrics(new SimpleMeterRegistry(), CLOCK);
+		processor = processor(provider, null, null, null, metrics);
+		generationStore.insertJob(queuedJob());
+		provider.usage(new ProviderUsage(new BigDecimal("1.50"), new BigDecimal("0.20"), "usd"));
+
+		processor.process(lease);
+		processor.process(new GenerationWorkLease(JOB_ID.value(), "duplicate"));
+
+		var aggregate = metrics.aggregate(new CostQuery(
+			USER_ID,
+			"recording",
+			"default",
+			"USD",
+			NOW.minusSeconds(1),
+			NOW.plusSeconds(1)));
+		assertThat(aggregate.totalCost()).isEqualByComparingTo("0.20");
+		assertThat(aggregate.requestCount()).isEqualTo(1);
+		assertThat(aggregate.qualityApprovedLookCount()).isEqualTo(1);
+		var breaker = new AggregateBackedCostCircuitBreaker(
+			metrics,
+			new AbuseBudgetPolicy(
+				BigDecimal.TEN,
+				new BigDecimal("0.25"),
+				Map.of("recording", BigDecimal.TEN),
+				"USD",
+				Duration.ofDays(1)));
+		assertThat(breaker.authorize(new ProviderExecutionBudgetRequest(
+			USER_ID,
+			"recording",
+			"default",
+			new BigDecimal("0.05"),
+			"USD",
+			NOW.plusSeconds(1))).reason()).isEqualTo(AbuseDecisionReason.USER_COST_BUDGET_EXHAUSTED);
 	}
 
 
@@ -1760,13 +1804,21 @@ class GenerationOrchestrationTest {
 
 
 	@Test
-	void spendBreakerTripTerminalizesWithCostBudgetBlocked() {
+	void costCircuitTripTerminalizesWithCostBudgetBlocked() {
 		generationStore.insertJob(queuedJob());
-		spendBreaker.trip();
+		costCircuitBreaker.trip();
 
 		processor.process(lease);
 
 		assertThat(provider.submitCount()).isZero();
+		assertThat(costCircuitBreaker.requests()).hasSize(1);
+		ProviderExecutionBudgetRequest request = costCircuitBreaker.requests().getFirst();
+		assertThat(request.userId()).isEqualTo(USER_ID);
+		assertThat(request.providerKey()).isEqualTo("recording");
+		assertThat(request.modelRouteAuditIdentity()).isNotBlank();
+		assertThat(request.projectedCostCeiling()).isPositive();
+		assertThat(request.currency()).isEqualTo("USD");
+		assertThat(request.now()).isEqualTo(NOW);
 		GenerationJob blocked = generationStore.findJob(JOB_ID).orElseThrow();
 		assertThat(blocked.status()).isEqualTo(GenerationJob.FAILED);
 		assertThat(blocked.terminalReason()).isEqualTo("COST_BUDGET_BLOCKED");
@@ -2134,7 +2186,7 @@ class GenerationOrchestrationTest {
 			null,
 			null,
 			() -> 0.0,
-			spendBreaker,
+			costCircuitBreaker,
 			providerHealthGate);
 	}
 
@@ -2166,7 +2218,7 @@ class GenerationOrchestrationTest {
 			null,
 			null,
 			() -> 0.0,
-			spendBreaker,
+			costCircuitBreaker,
 			providerHealthGate);
 	}
 
@@ -2200,7 +2252,7 @@ class GenerationOrchestrationTest {
 			null,
 			null,
 			() -> 0.0,
-			spendBreaker,
+			costCircuitBreaker,
 			providerHealthGate);
 	}
 
@@ -3991,28 +4043,29 @@ class GenerationOrchestrationTest {
 		}
 	}
 
-	private static final class TestSpendBreaker implements com.aifashionvault.generation.SpendBreaker {
+	private static final class TestCostCircuitBreaker implements GlobalCostCircuitBreaker {
 		private volatile boolean blocked;
-		private final List<java.math.BigDecimal> recorded = new CopyOnWriteArrayList<>();
+		private final List<ProviderExecutionBudgetRequest> requests = new CopyOnWriteArrayList<>();
 
 		@Override
-		public boolean blocksNewProviderExecution(UserId userId) {
-			return blocked;
-		}
-
-		@Override
-		public void recordAttemptSpend(UserId userId, java.math.BigDecimal amount) {
-			if (amount != null) {
-				recorded.add(amount);
-			}
+		public AbuseDecision authorize(ProviderExecutionBudgetRequest request) {
+			requests.add(request);
+			return new AbuseDecision(
+				!blocked,
+				blocked ? AbuseDecisionReason.USER_COST_BUDGET_EXHAUSTED : AbuseDecisionReason.ALLOWED,
+				BigDecimal.ZERO,
+				BigDecimal.ONE,
+				request.currency(),
+				request.now().minus(Duration.ofDays(1)),
+				request.now().plus(Duration.ofDays(1)));
 		}
 
 		private void trip() {
 			blocked = true;
 		}
 
-		private List<java.math.BigDecimal> recordedSpend() {
-			return recorded;
+		private List<ProviderExecutionBudgetRequest> requests() {
+			return List.copyOf(requests);
 		}
 	}
 

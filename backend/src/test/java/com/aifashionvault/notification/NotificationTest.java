@@ -16,11 +16,14 @@ import java.util.concurrent.CopyOnWriteArrayList;
 
 import org.junit.jupiter.api.Test;
 
+import com.aifashionvault.admission.AbuseDecision;
+import com.aifashionvault.admission.AbuseDecisionReason;
+import com.aifashionvault.admission.GlobalCostCircuitBreaker;
+import com.aifashionvault.admission.ProviderExecutionBudgetRequest;
 import com.aifashionvault.generation.GenerationAttempt;
 import com.aifashionvault.generation.GenerationJob;
 import com.aifashionvault.generation.GenerationStore;
 import com.aifashionvault.generation.QualityResult;
-import com.aifashionvault.generation.SpendBreaker;
 import com.aifashionvault.generation.vton.InputTransferMethod;
 import com.aifashionvault.generation.vton.OutputDeliveryMethod;
 import com.aifashionvault.generation.vton.PrivacyTransferPolicy;
@@ -358,7 +361,7 @@ class NotificationTest {
 			null,
 			events,
 			() -> 0.0d,
-			noSpendBreaker(),
+			noCostCircuitBreaker(),
 			provider -> true);
 	}
 
@@ -381,15 +384,18 @@ class NotificationTest {
 		};
 	}
 
-	private static SpendBreaker noSpendBreaker() {
-		return new SpendBreaker() {
+	private static GlobalCostCircuitBreaker noCostCircuitBreaker() {
+		return new GlobalCostCircuitBreaker() {
 			@Override
-			public boolean blocksNewProviderExecution(UserId userId) {
-				return false;
-			}
-
-			@Override
-			public void recordAttemptSpend(UserId userId, BigDecimal amount) {
+			public AbuseDecision authorize(ProviderExecutionBudgetRequest request) {
+				return new AbuseDecision(
+					true,
+					AbuseDecisionReason.ALLOWED,
+					BigDecimal.ZERO,
+					BigDecimal.ONE,
+					request.currency(),
+					request.now().minus(Duration.ofDays(1)),
+					request.now().plus(Duration.ofDays(1)));
 			}
 		};
 	}
