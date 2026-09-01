@@ -50,6 +50,8 @@ class GenerationAdmissionHttpTest {
 	@Autowired JdbcTemplate jdbc;
 	@Autowired GenerationApiProperties properties;
 
+	@Autowired GenerationMediaStore mediaStore;
+
 	@DynamicPropertySource
 	static void datasource(DynamicPropertyRegistry registry) {
 		POSTGRES.start();
@@ -64,12 +66,34 @@ class GenerationAdmissionHttpTest {
 	@BeforeEach
 	void reset() {
 		properties.setAdmissionPaused(false);
+		((ControlledGenerationMediaStore) mediaStore).failRelease = false;
 		jdbc.update("TRUNCATE TABLE look_item, look, quality_result, generation_callback_inbox, generation_work_outbox, "
 			+ "generation_quota_reservation, generation_notification_delivery, generation_notification_event, "
 			+ "generation_provider_capacity_slot, generation_attempt, generation_render_step_item, generation_render_step, "
 			+ "generation_job_product, generation_job, vault_item, studio_item, studio_session, avatar_image, "
 			+ "avatar_profile, identity_mapping, users CASCADE");
 	}
+	@Test
+	void mediaReleaseFailureStillRefundsReservationAndPreservesOriginalFailure() throws Exception {
+		Owner owner = seedOwner(true);
+		((ControlledGenerationMediaStore) mediaStore).failRelease = true;
+		jdbc.update("ALTER TABLE generation_job ADD CONSTRAINT force_creation_failure CHECK (false) NOT VALID");
+
+
+		try {
+			Exception thrown = org.junit.jupiter.api.Assertions.assertThrows(Exception.class, () ->
+				mockMvc.perform(post("/generations").header(HttpHeaders.AUTHORIZATION, bearer(owner.token()))
+					.header("Idempotency-Key", "release-failure-refund")
+					.contentType(MediaType.APPLICATION_JSON).content(body(owner.uploadId()))));
+
+			assertThat(thrown.getCause()).isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+			assertThat(thrown).hasMessageNotContaining("sensitive-media-release-detail");
+			assertThat(jdbc.queryForObject("SELECT COALESCE(SUM(count), 0) FROM generation_admission_counter", Long.class)).isZero();
+		} finally {
+			jdbc.update("ALTER TABLE generation_job DROP CONSTRAINT force_creation_failure");
+		}
+	}
+
 
 	@Test
 	void authenticationPrecedesRequestAndAdmissionChecks() throws Exception {
@@ -141,7 +165,7 @@ class GenerationAdmissionHttpTest {
 				.header("Idempotency-Key", "accepted-upload")
 				.contentType(MediaType.APPLICATION_JSON).content(body(owner.uploadId())))
 			.andExpect(status().isAccepted());
-		assertThat(jdbc.queryForList("SELECT count FROM generation_admission_counter", Long.class))
+		assertThat(jdbc.queryForList("SELECT count FROM generation_admission_counter WHERE count <> 0", Long.class))
 			.containsExactlyInAnyOrder(1L, 1L, 1L);
 	}
 
@@ -176,17 +200,20 @@ class GenerationAdmissionHttpTest {
     @TestConfiguration
     static class Configuration {
         @Bean @Primary ExternalTokenVerifier verifier() { return InProcessJwtFixture.verifier(); }
-		@Bean @Primary GenerationMediaStore generationMediaStore() {
-			return new GenerationMediaStore() {
-				@Override public void putBounded(StorageKey dest, InputStream source, long maxBytes, String mediaType) { }
-				@Override public ClaimResult claim(com.aifashionvault.platform.objectstore.GenerationClaimCommand command) { throw new UnsupportedOperationException(); }
-				@Override public void preflightProductInput(ProductInputClaimCommand command) {
-					if (command.productUploadId().value().equals(new UUID(0, 0)))
-						throw new com.aifashionvault.platform.objectstore.ObjectStoreExceptions.StagedObjectMissingException("missing staged object");
-				}
-				@Override public ClaimResult claimProductInput(ProductInputClaimCommand command) { return new ClaimResult.Copied(); }
-				@Override public void releaseProductInput(ProductInputClaimCommand command) { }
-			};
+		@Bean @Primary GenerationMediaStore generationMediaStore() { return new ControlledGenerationMediaStore(); }
+	}
+
+	static final class ControlledGenerationMediaStore implements GenerationMediaStore {
+		boolean failRelease;
+		@Override public void putBounded(StorageKey dest, InputStream source, long maxBytes, String mediaType) { }
+		@Override public ClaimResult claim(com.aifashionvault.platform.objectstore.GenerationClaimCommand command) { throw new UnsupportedOperationException(); }
+		@Override public void preflightProductInput(ProductInputClaimCommand command) {
+			if (command.productUploadId().value().equals(new UUID(0, 0)))
+				throw new com.aifashionvault.platform.objectstore.ObjectStoreExceptions.StagedObjectMissingException("missing staged object");
 		}
-        }
+		@Override public ClaimResult claimProductInput(ProductInputClaimCommand command) { return new ClaimResult.Copied(); }
+		@Override public void releaseProductInput(ProductInputClaimCommand command) {
+			if (failRelease) throw new IllegalStateException("sensitive-media-release-detail");
+		}
+	}
 }

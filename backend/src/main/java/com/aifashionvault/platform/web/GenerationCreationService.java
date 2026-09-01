@@ -130,12 +130,12 @@ public class GenerationCreationService {
 
 	private void releaseClaim(ProductInputClaimCommand command, RuntimeException failure) {
 		try { mediaStore.releaseProductInput(command); }
-		catch (RuntimeException compensation) { compensation.addSuppressed(failure); throw compensation; }
+		catch (RuntimeException compensation) { failure.addSuppressed(compensation); }
 	}
 
 	private void releaseReservation(com.aifashionvault.admission.GenerationRateLimiter.Reservation reservation, RuntimeException failure) {
 		try { rateLimiter.release(reservation); }
-		catch (RuntimeException compensation) { compensation.addSuppressed(failure); throw compensation; }
+		catch (RuntimeException compensation) { failure.addSuppressed(compensation); }
 	}
 
 	public GenerationResponse get(UserId userId, String generationId) { return toResponse(requireOwnedJob(userId, generationId)); }
