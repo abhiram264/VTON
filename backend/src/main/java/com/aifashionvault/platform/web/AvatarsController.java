@@ -115,8 +115,10 @@ public class AvatarsController {
 		@AuthenticationPrincipal UserId userId,
 		@PathVariable String id,
 		@RequestHeader(value = HttpHeaders.IF_MATCH, required = false) String ifMatch,
-		@RequestBody AvatarUploadRequest request
+		@RequestBody AvatarUploadRequest request,
+		HttpServletRequest httpRequest
 	) {
+		this.integrity.verify(httpRequest, AppIntegrityOperation.AVATAR_UPLOAD);
 		AvatarProfileId profileId = profileId(id);
 		int revision = requireRevision(userId, profileId, ifMatch);
 		return resource(HttpStatus.OK, workflow().replace(userId, profileId, revision, uploadId(request)));

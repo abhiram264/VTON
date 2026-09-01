@@ -2,6 +2,7 @@ package com.aifashionvault.platform.web;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -58,6 +59,23 @@ class AppIntegrityBoundaryTest {
         verifier.verdict = new AppIntegrityVerdict(AppIntegrityVerdictStatus.INDETERMINATE, AppIntegrityFailureReason.PROVIDER_UNAVAILABLE);
         assertBlocked("/avatars", "{\"uploadId\":\"" + UUID.randomUUID() + "\"}", "secret");
     }
+    @Test void requiredAvatarReplaceIntegrityBlocksBeforeRevisionLookup() throws Exception {
+        String path = "/avatars/" + UUID.randomUUID();
+        String body = "{\"uploadId\":\"" + UUID.randomUUID() + "\"}";
+        assertPatchBlocked(path, body, null);
+        verifier.verdict = new AppIntegrityVerdict(AppIntegrityVerdictStatus.DENIED, AppIntegrityFailureReason.PROVIDER_REJECTED);
+        assertPatchBlocked(path, body, "secret");
+    }
+
+    @Test void verifiedAvatarReplaceProceedsPastIntegrityBoundaryWithoutExposure() throws Exception {
+        verifier.verdict = new AppIntegrityVerdict(AppIntegrityVerdictStatus.VERIFIED, AppIntegrityFailureReason.NONE);
+        mockMvc.perform(patchRequest("/avatars/" + UUID.randomUUID(),
+                "{\"uploadId\":\"" + UUID.randomUUID() + "\"}", "secret"))
+            .andExpect(status().isServiceUnavailable())
+            .andExpect(content().string("{\"code\":\"AVATAR_MEDIA_MISSING\"}"));
+        assertThat(verifier.calls).hasValue(1);
+    }
+
 
     @Test void verifiedEvidenceProceedsPastIntegrityBoundaryWithoutExposure() throws Exception {
         verifier.verdict = new AppIntegrityVerdict(AppIntegrityVerdictStatus.VERIFIED, AppIntegrityFailureReason.NONE);
@@ -75,6 +93,24 @@ class AppIntegrityBoundaryTest {
         mockMvc.perform(action).andExpect(status().isForbidden())
             .andExpect(content().string("{\"code\":\"APP_INTEGRITY_REQUIRED\"}"));
     }
+    private void assertPatchBlocked(String path, String body, String evidence) throws Exception {
+        mockMvc.perform(patchRequest(path, body, evidence)).andExpect(status().isForbidden())
+            .andExpect(content().string("{\"code\":\"APP_INTEGRITY_REQUIRED\"}"));
+    }
+
+    private static org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder patchRequest(
+        String path, String body, String evidence
+    ) {
+        var request = patch(path)
+            .with(SecurityMockMvcRequestPostProcessors.user("integrity-test"))
+            .with(SecurityMockMvcRequestPostProcessors.httpBasic("integrity-test", "integrity-test"))
+            .header("X-App-Integrity-Platform", "ANDROID")
+            .header("X-App-Integrity-Nonce", "nonce")
+            .header(HttpHeaders.IF_MATCH, "\"1\"")
+            .contentType(MediaType.APPLICATION_JSON).content(body);
+        return evidence == null ? request : request.header("X-App-Integrity-Evidence", evidence);
+    }
+
 
     private static org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder request(
         String path, String body, String evidence
