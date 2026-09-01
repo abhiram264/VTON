@@ -31,9 +31,20 @@ class GenerationAbuseControlsTest {
 	void facadeDelegatesAdmissionExactlyOnceAndReturnsTheSameDecision() {
 		var calls = new AtomicInteger();
 		var expected = GenerationAdmissionDecision.accepted(1, 5, LocalDate.parse("2026-08-31"));
-		GenerationRateLimiter limiter = request -> {
-			calls.incrementAndGet();
-			return expected;
+		GenerationRateLimiter limiter = new GenerationRateLimiter() {
+			@Override
+			public Reservation reserve(GenerationAdmissionRequest request) {
+				calls.incrementAndGet();
+				return new Reservation(expected, "reservation-token");
+			}
+
+			@Override
+			public void commit(Reservation reservation) {
+			}
+
+			@Override
+			public void release(Reservation reservation) {
+			}
 		};
 		var controls = new GenerationAdmissionFacade(limiter, request -> unknown(request, POLICY));
 		var request = new GenerationAdmissionRequest(USER_ID, "device", "127.0.0.1", GenerationRiskTier.ORDINARY, NOW);
