@@ -48,6 +48,14 @@ class ObjectStoreConfigurationTest {
 		assertThat(ObjectStoreConfiguration.class.getAnnotation(EnableScheduling.class)).isNotNull();
 	}
 
+	@Test
+	void defaultMalwareScannerFailsClosed() {
+		MalwareScanResult result = new ObjectStoreConfiguration().malwareScanner()
+			.scan(new byte[] { 1 }, "image/jpeg");
+
+		assertThat(result.verdict()).isEqualTo(MalwareVerdict.UNAVAILABLE);
+	}
+
 	@Nested
 	class Development {
 

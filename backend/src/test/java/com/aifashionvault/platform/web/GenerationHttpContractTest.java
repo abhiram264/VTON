@@ -71,11 +71,12 @@ class GenerationHttpContractTest {
 
 	@BeforeEach
 	void clearTables() {
-		jdbc.update("TRUNCATE TABLE look_item, look, quality_result, generation_callback_inbox, generation_work_outbox, "
-			+ "generation_quota_reservation, generation_notification_delivery, generation_notification_event, "
-			+ "generation_provider_capacity_slot, generation_attempt, generation_render_step_item, generation_render_step, "
-			+ "generation_job_product, generation_job, vault_item, studio_item, studio_session, avatar_image, "
-			+ "avatar_profile, identity_mapping, users CASCADE");
+		jdbc.update("TRUNCATE TABLE generation_admission_counter, look_item, look, quality_result, "
+			+ "generation_callback_inbox, generation_work_outbox, generation_quota_reservation, "
+			+ "generation_notification_delivery, generation_notification_event, generation_provider_capacity_slot, "
+			+ "generation_attempt, generation_render_step_item, generation_render_step, generation_job_product, "
+			+ "generation_job, vault_item, studio_item, studio_session, avatar_image, avatar_profile, identity_mapping, "
+			+ "users CASCADE");
 	}
 
 	@Test

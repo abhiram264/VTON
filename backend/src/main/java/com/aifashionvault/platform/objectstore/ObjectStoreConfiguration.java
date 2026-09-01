@@ -62,9 +62,8 @@ public class ObjectStoreConfiguration {
 		return new ImageInspector();
 	}
 	@Bean
-	@ConditionalOnExpression("'${vault.env}' != 'production'")
 	MalwareScanner malwareScanner() {
-		return (bytes, contentType) -> new MalwareScanResult(MalwareVerdict.CLEAN, "clean");
+		return (bytes, contentType) -> new MalwareScanResult(MalwareVerdict.UNAVAILABLE, "scanner unavailable");
 	}
 
 
