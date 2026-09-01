@@ -180,11 +180,12 @@ class GenerationAdmissionHttpTest {
 			return new GenerationMediaStore() {
 				@Override public void putBounded(StorageKey dest, InputStream source, long maxBytes, String mediaType) { }
 				@Override public ClaimResult claim(com.aifashionvault.platform.objectstore.GenerationClaimCommand command) { throw new UnsupportedOperationException(); }
-				@Override public ClaimResult claimProductInput(ProductInputClaimCommand command) {
+				@Override public void preflightProductInput(ProductInputClaimCommand command) {
 					if (command.productUploadId().value().equals(new UUID(0, 0)))
 						throw new com.aifashionvault.platform.objectstore.ObjectStoreExceptions.StagedObjectMissingException("missing staged object");
-					return new ClaimResult.Copied();
 				}
+				@Override public ClaimResult claimProductInput(ProductInputClaimCommand command) { return new ClaimResult.Copied(); }
+				@Override public void releaseProductInput(ProductInputClaimCommand command) { }
 			};
 		}
         }

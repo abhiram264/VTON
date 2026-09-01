@@ -53,20 +53,22 @@ class JdbcGenerationRateLimiterTest {
     void reset() {
         var source = new DriverManagerDataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
         jdbc = new JdbcTemplate(source);
-        jdbc.update("TRUNCATE generation_admission_counter");
+		jdbc.update("TRUNCATE generation_admission_reservation, generation_admission_counter");
     }
 
     @Test
     void acceptedRequestsIncrementDurableCounters() {
         var limiter = limiter(Clock.fixed(REQUESTED_AT, ZoneOffset.UTC));
 
-        var first = limiter.admit(request("device-1", "198.51.100.1"));
-        var second = limiter.admit(request("device-1", "198.51.100.1"));
+		var first = limiter.reserve(request("device-1", "198.51.100.1"));
+		limiter.commit(first);
+		var second = limiter.reserve(request("device-1", "198.51.100.1"));
+		limiter.commit(second);
 
-        assertThat(first.allowed()).isTrue();
-        assertThat(first.used()).isEqualTo(1);
-        assertThat(second.allowed()).isTrue();
-        assertThat(second.used()).isEqualTo(2);
+		assertThat(first.decision().allowed()).isTrue();
+		assertThat(first.decision().used()).isEqualTo(1);
+		assertThat(second.decision().allowed()).isTrue();
+		assertThat(second.decision().used()).isEqualTo(2);
         assertThat(counter("user:" + USER.value())).isEqualTo(2);
         assertThat(counter("device:device-1")).isEqualTo(2);
         assertThat(counter("ip:198.51.100.1")).isEqualTo(2);
@@ -76,10 +78,12 @@ class JdbcGenerationRateLimiterTest {
     void repeatedRequestsRejectAtConfiguredDailyLimit() {
         var limiter = limiter(Clock.fixed(REQUESTED_AT, ZoneOffset.UTC));
 
-        for (int i = 0; i < GenerationRiskTier.ORDINARY.dailyLimit(); i++) {
-            assertThat(limiter.admit(request("device-1", "198.51.100.1")).allowed()).isTrue();
-        }
-        var rejected = limiter.admit(request("device-1", "198.51.100.1"));
+		for (int i = 0; i < GenerationRiskTier.ORDINARY.dailyLimit(); i++) {
+			var reservation = limiter.reserve(request("device-1", "198.51.100.1"));
+			assertThat(reservation.decision().allowed()).isTrue();
+			limiter.commit(reservation);
+		}
+		var rejected = limiter.reserve(request("device-1", "198.51.100.1")).decision();
 
         assertThat(rejected.allowed()).isFalse();
         assertThat(rejected.reason()).isEqualTo("USER_DAILY_LIMIT");
@@ -93,8 +97,12 @@ class JdbcGenerationRateLimiterTest {
         var beforeMidnight = limiter(Clock.fixed(Instant.parse("2026-08-31T23:59:59Z"), ZoneId.of("Pacific/Auckland")));
         var afterMidnight = limiter(Clock.fixed(Instant.parse("2026-09-01T00:00:01Z"), ZoneId.of("America/Los_Angeles")));
 
-        var first = beforeMidnight.admit(request("device-1", "198.51.100.1"));
-        var second = afterMidnight.admit(request("device-1", "198.51.100.1"));
+		var firstReservation = beforeMidnight.reserve(request("device-1", "198.51.100.1"));
+		beforeMidnight.commit(firstReservation);
+		var first = firstReservation.decision();
+		var secondReservation = afterMidnight.reserve(request("device-1", "198.51.100.1"));
+		afterMidnight.commit(secondReservation);
+		var second = secondReservation.decision();
 
         assertThat(first.utcDay()).isEqualTo(java.time.LocalDate.parse("2026-08-31"));
         assertThat(second.utcDay()).isEqualTo(java.time.LocalDate.parse("2026-09-01"));
@@ -109,8 +117,8 @@ class JdbcGenerationRateLimiterTest {
         DataSource source = mock(DataSource.class);
         var limiter = new JdbcGenerationRateLimiter(source, Clock.fixed(REQUESTED_AT, ZoneOffset.UTC));
 
-        var missingDevice = limiter.admit(request(null, "198.51.100.1"));
-        var blankIp = limiter.admit(request("device-1", "  "));
+		var missingDevice = limiter.reserve(request(null, "198.51.100.1")).decision();
+		var blankIp = limiter.reserve(request("device-1", "  ")).decision();
 
         assertThat(missingDevice.allowed()).isFalse();
         assertThat(missingDevice.reason()).isEqualTo("DEVICE_DAILY_LIMIT");
@@ -118,6 +126,30 @@ class JdbcGenerationRateLimiterTest {
         assertThat(blankIp.reason()).isEqualTo("IP_DAILY_LIMIT");
         verifyNoInteractions(source);
     }
+
+	@Test
+	void releasedReservationRefundsExactlyOnce() {
+		var limiter = limiter(Clock.fixed(REQUESTED_AT, ZoneOffset.UTC));
+		var reservation = limiter.reserve(request("device-1", "198.51.100.1"));
+
+		limiter.release(reservation);
+		limiter.release(reservation);
+
+		assertThat(counter("user:" + USER.value())).isZero();
+		assertThat(counter("device:device-1")).isZero();
+		assertThat(counter("ip:198.51.100.1")).isZero();
+	}
+
+	@Test
+	void committedReservationCannotBeRefunded() {
+		var limiter = limiter(Clock.fixed(REQUESTED_AT, ZoneOffset.UTC));
+		var reservation = limiter.reserve(request("device-1", "198.51.100.1"));
+		limiter.commit(reservation);
+
+		limiter.release(reservation);
+
+		assertThat(counter("user:" + USER.value())).isOne();
+	}
 
     private GenerationAdmissionRequest request(String device, String ip) {
         return new GenerationAdmissionRequest(USER, device, ip, GenerationRiskTier.ORDINARY, REQUESTED_AT);

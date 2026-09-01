@@ -3843,6 +3843,18 @@ class GenerationOrchestrationTest {
 			return new ClaimResult.Copied();
 		}
 
+		@Override public void preflightProductInput(com.aifashionvault.platform.objectstore.ProductInputClaimCommand command) {
+			throw new UnsupportedOperationException("product input");
+		}
+
+		@Override public ClaimResult claimProductInput(com.aifashionvault.platform.objectstore.ProductInputClaimCommand command) {
+			throw new UnsupportedOperationException("product input");
+		}
+
+		@Override public void releaseProductInput(com.aifashionvault.platform.objectstore.ProductInputClaimCommand command) {
+			throw new UnsupportedOperationException("product input");
+		}
+
 		@Override
 		public UploadCapability presignStagingPut(UserId userId, UploadId uploadId, MediaDeclaration declaration) {
 			throw new UnsupportedOperationException("presignStagingPut");

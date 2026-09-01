@@ -299,39 +299,55 @@ public final class S3ObjectStore implements ObjectStore, GenerationMediaStore {
 	}
 
 	@Override
+	public void preflightProductInput(ProductInputClaimCommand command) {
+		validateProductInput(command);
+	}
+
+	@Override
 	public ClaimResult claimProductInput(ProductInputClaimCommand command) {
-		if (command == null) {
-			throw new IllegalArgumentException("command is required");
-		}
+		ValidatedProductInput validated = validateProductInput(command);
+		ObjectRef destination = productInputDestination(command);
+		return copyWithClaimMarker(
+			validated.source(),
+			destination,
+			validated.metadata().version(),
+			command.generationId().value() + ":" + command.destinationMediaId().value(),
+			validated.contentType());
+	}
+
+	@Override
+	public void releaseProductInput(ProductInputClaimCommand command) {
+		if (command == null) throw new IllegalArgumentException("command is required");
+		delete(productInputDestination(command));
+	}
+
+	private ValidatedProductInput validateProductInput(ProductInputClaimCommand command) {
+		if (command == null) throw new IllegalArgumentException("command is required");
 		ObjectRef source = new ObjectRef(
 			StorageDomain.TEMP,
 			StorageKeys.stagingKey(command.ownerId(), command.productUploadId(), UploadPurpose.GENERIC).value());
 		ObjectMetadata sourceMetadata = head(source);
-		String normalizedType;
 		try {
-			normalizedType = ImageMediaPolicy.requireDeclaration(
+			String normalizedType = ImageMediaPolicy.requireDeclaration(
 				sourceMetadata.contentType(), sourceMetadata.contentLength());
 			byte[] bytes = readBounded(source, sourceMetadata.version(), boundedReadCap(sourceMetadata.contentLength()));
 			ImageMediaType inspectedType = new ImageInspector().inspect(bytes).mediaType();
 			if (!(normalizedType.equals("image/jpeg") && inspectedType == ImageMediaType.JPEG)
-				&& !(normalizedType.equals("image/png") && inspectedType == ImageMediaType.PNG)) {
+				&& !(normalizedType.equals("image/png") && inspectedType == ImageMediaType.PNG))
 				throw new IllegalArgumentException("image type does not match stored content type");
-			}
+			return new ValidatedProductInput(source, sourceMetadata, normalizedType);
 		}
 		catch (IllegalArgumentException | ObjectStoreExceptions.ImageValidationException ex) {
 			throw new ObjectStoreExceptions.ImageValidationException("invalid product upload");
 		}
-		ObjectRef destination = new ObjectRef(
-			StorageDomain.TEMP,
-			StorageKeys.generationInputKey(
-				command.ownerId(), command.generationId().value(), command.destinationMediaId().value()).value());
-		return copyWithClaimMarker(
-			source,
-			destination,
-			sourceMetadata.version(),
-			command.generationId().value() + ":" + command.destinationMediaId().value(),
-			normalizedType);
 	}
+
+	private static ObjectRef productInputDestination(ProductInputClaimCommand command) {
+		return new ObjectRef(StorageDomain.TEMP, StorageKeys.generationInputKey(
+			command.ownerId(), command.generationId().value(), command.destinationMediaId().value()).value());
+	}
+
+	private record ValidatedProductInput(ObjectRef source, ObjectMetadata metadata, String contentType) {}
 	@Override
 	public void purgeUserObjects(UserId userId) {
 		if (userId == null) {

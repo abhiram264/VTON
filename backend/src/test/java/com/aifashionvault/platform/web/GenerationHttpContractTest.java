@@ -292,7 +292,9 @@ class GenerationHttpContractTest {
                 @Override public ClaimResult claim(com.aifashionvault.platform.objectstore.GenerationClaimCommand command) {
                     throw new UnsupportedOperationException("generation claim");
                 }
-                @Override public ClaimResult claimProductInput(ProductInputClaimCommand command) { return new ClaimResult.Copied(); }
+				@Override public void preflightProductInput(ProductInputClaimCommand command) { }
+				@Override public ClaimResult claimProductInput(ProductInputClaimCommand command) { return new ClaimResult.Copied(); }
+				@Override public void releaseProductInput(ProductInputClaimCommand command) { }
             };
         }
     }

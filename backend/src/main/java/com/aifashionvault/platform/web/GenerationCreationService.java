@@ -82,35 +82,61 @@ public class GenerationCreationService {
         Instant now = clock.instant();
         UUID generationId = UUID.randomUUID();
         MediaAssetId productMediaId = new MediaAssetId(UUID.randomUUID());
-        try {
-            ClaimResult claim = mediaStore.claimProductInput(new ProductInputClaimCommand(
-                userId, new UploadId(request.productUploadId()), new GenerationJobId(generationId), productMediaId));
-            if (claim instanceof ClaimResult.Conflict) throw problem(HttpStatus.CONFLICT, PRODUCT_UPLOAD_ALREADY_CLAIMED);
-        }
-        catch (ObjectStoreExceptions.StagedObjectMissingException ex) { throw problem(HttpStatus.UNPROCESSABLE_ENTITY, PRODUCT_UPLOAD_MISSING); }
-        catch (ObjectStoreExceptions.ImageValidationException | IllegalArgumentException ex) { throw problem(HttpStatus.UNPROCESSABLE_ENTITY, MALFORMED_REQUEST); }
-        if (rateLimiter != null) {
-            String safeDevice = deviceId == null || deviceId.isBlank() ? "http-session" : deviceId;
-            String safeIp = ipAddress == null || ipAddress.isBlank() ? "unknown" : ipAddress;
-            var decision = rateLimiter.admit(new com.aifashionvault.admission.GenerationAdmissionRequest(userId, safeDevice, safeIp,
-                com.aifashionvault.admission.GenerationRiskTier.ORDINARY, clock.instant()));
-            if (!decision.allowed()) throw problem(HttpStatus.TOO_MANY_REQUESTS, decision.reason());
-        }
-        GenerationJob job = new GenerationJob(
-            new GenerationJobId(generationId), userId, null, GenerationJob.QUEUED, "STANDARD",
-            new ClientRequestId(key), now, null, avatar.imageId(), List.of(), null, null,
-            fingerprint, avatar.revision(), 0, now, null, 1, 1, 1,
-            now.plus(GenerationJob.ORCHESTRATION_DEADLINE), null,
-            RetryPolicySnapshot.forStepCountV2(1), Optional.empty());
-        CreateSingleItemGenerationCommand command = new CreateSingleItemGenerationCommand(userId, new UploadId(request.productUploadId()), key);
-        FrozenSingleItemIntent intent = new FrozenSingleItemIntent(job.id(), userId, avatar.imageId(), productMediaId, 1, 1);
-        return switch (store.createSingleItem(command, intent, job)) {
-            case GenerationStore.CreateSingleItemResult.Created created -> toResponse(created.job());
-            case GenerationStore.CreateSingleItemResult.Replayed replayed -> toResponse(replayed.job());
-            case GenerationStore.CreateSingleItemResult.FingerprintConflict ignored -> throw problem(HttpStatus.CONFLICT, IDEMPOTENCY_KEY_CONFLICT);
-            case GenerationStore.CreateSingleItemResult.ProductUploadAlreadyClaimed ignored -> throw problem(HttpStatus.CONFLICT, PRODUCT_UPLOAD_ALREADY_CLAIMED);
-        };
-    }
+		ProductInputClaimCommand claimCommand = new ProductInputClaimCommand(
+			userId, new UploadId(request.productUploadId()), new GenerationJobId(generationId), productMediaId);
+		preflight(claimCommand);
+		com.aifashionvault.admission.GenerationRateLimiter.Reservation reservation = null;
+		if (rateLimiter != null) {
+			String safeDevice = deviceId == null || deviceId.isBlank() ? "http-session" : deviceId;
+			String safeIp = ipAddress == null || ipAddress.isBlank() ? "unknown" : ipAddress;
+			reservation = rateLimiter.reserve(new com.aifashionvault.admission.GenerationAdmissionRequest(userId, safeDevice, safeIp,
+				com.aifashionvault.admission.GenerationRiskTier.ORDINARY, clock.instant()));
+			if (!reservation.decision().allowed()) throw problem(HttpStatus.TOO_MANY_REQUESTS, reservation.decision().reason());
+		}
+		boolean claimed = false;
+		try {
+			ClaimResult claim = mediaStore.claimProductInput(claimCommand);
+			if (claim instanceof ClaimResult.Conflict) throw problem(HttpStatus.CONFLICT, PRODUCT_UPLOAD_ALREADY_CLAIMED);
+			claimed = claim instanceof ClaimResult.Copied;
+			GenerationJob job = new GenerationJob(
+				new GenerationJobId(generationId), userId, null, GenerationJob.QUEUED, "STANDARD",
+				new ClientRequestId(key), now, null, avatar.imageId(), List.of(), null, null,
+				fingerprint, avatar.revision(), 0, now, null, 1, 1, 1,
+				now.plus(GenerationJob.ORCHESTRATION_DEADLINE), null,
+				RetryPolicySnapshot.forStepCountV2(1), Optional.empty());
+			CreateSingleItemGenerationCommand command = new CreateSingleItemGenerationCommand(userId, new UploadId(request.productUploadId()), key);
+			FrozenSingleItemIntent intent = new FrozenSingleItemIntent(job.id(), userId, avatar.imageId(), productMediaId, 1, 1);
+			GenerationResponse response = switch (store.createSingleItem(command, intent, job)) {
+				case GenerationStore.CreateSingleItemResult.Created created -> toResponse(created.job());
+				case GenerationStore.CreateSingleItemResult.Replayed replayed -> toResponse(replayed.job());
+				case GenerationStore.CreateSingleItemResult.FingerprintConflict ignored -> throw problem(HttpStatus.CONFLICT, IDEMPOTENCY_KEY_CONFLICT);
+				case GenerationStore.CreateSingleItemResult.ProductUploadAlreadyClaimed ignored -> throw problem(HttpStatus.CONFLICT, PRODUCT_UPLOAD_ALREADY_CLAIMED);
+			};
+			if (reservation != null) rateLimiter.commit(reservation);
+			return response;
+		}
+		catch (RuntimeException failure) {
+			if (claimed) releaseClaim(claimCommand, failure);
+			if (reservation != null) releaseReservation(reservation, failure);
+			throw failure;
+		}
+ 	}
+
+	private void preflight(ProductInputClaimCommand command) {
+		try { mediaStore.preflightProductInput(command); }
+		catch (ObjectStoreExceptions.StagedObjectMissingException ex) { throw problem(HttpStatus.UNPROCESSABLE_ENTITY, PRODUCT_UPLOAD_MISSING); }
+		catch (ObjectStoreExceptions.ImageValidationException | IllegalArgumentException ex) { throw problem(HttpStatus.UNPROCESSABLE_ENTITY, MALFORMED_REQUEST); }
+	}
+
+	private void releaseClaim(ProductInputClaimCommand command, RuntimeException failure) {
+		try { mediaStore.releaseProductInput(command); }
+		catch (RuntimeException compensation) { compensation.addSuppressed(failure); throw compensation; }
+	}
+
+	private void releaseReservation(com.aifashionvault.admission.GenerationRateLimiter.Reservation reservation, RuntimeException failure) {
+		try { rateLimiter.release(reservation); }
+		catch (RuntimeException compensation) { compensation.addSuppressed(failure); throw compensation; }
+	}
 
 	public GenerationResponse get(UserId userId, String generationId) { return toResponse(requireOwnedJob(userId, generationId)); }
 

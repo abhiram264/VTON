@@ -10,7 +10,9 @@ public interface GenerationMediaStore {
 
 	ClaimResult claim(GenerationClaimCommand command);
 
-	default ClaimResult claimProductInput(ProductInputClaimCommand command) {
-		throw new UnsupportedOperationException("claimProductInput");
-	}
+	void preflightProductInput(ProductInputClaimCommand command);
+
+	ClaimResult claimProductInput(ProductInputClaimCommand command);
+
+	void releaseProductInput(ProductInputClaimCommand command);
 }

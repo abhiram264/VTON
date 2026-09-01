@@ -7,3 +7,13 @@ CREATE TABLE generation_admission_counter (
     CONSTRAINT generation_admission_counter_count_nonnegative CHECK (count >= 0)
 );
 CREATE INDEX generation_admission_counter_day_idx ON generation_admission_counter (bucket_day);
+
+CREATE TABLE generation_admission_reservation (
+    token VARCHAR(36) NOT NULL,
+    bucket_key VARCHAR(300) NOT NULL,
+    bucket_day DATE NOT NULL,
+    committed_at TIMESTAMPTZ,
+    released_at TIMESTAMPTZ,
+    PRIMARY KEY (token, bucket_key),
+    CONSTRAINT generation_admission_reservation_state CHECK (committed_at IS NULL OR released_at IS NULL)
+);

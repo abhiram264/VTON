@@ -13,7 +13,9 @@ public final class GenerationAdmissionFacade implements AbuseControls {
 
 	@Override
 	public GenerationAdmissionDecision admitGeneration(GenerationAdmissionRequest request) {
-		return rateLimiter.admit(Objects.requireNonNull(request, "request"));
+		GenerationRateLimiter.Reservation reservation = rateLimiter.reserve(Objects.requireNonNull(request, "request"));
+		if (reservation.decision().allowed()) rateLimiter.commit(reservation);
+		return reservation.decision();
 	}
 
 	@Override

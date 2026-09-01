@@ -268,5 +268,17 @@ class ObjectStoreGenerationOutputStoreTest {
 			claimAttempts++;
 			throw new AssertionError("claim must not be part of storage recovery");
 		}
+
+		@Override public void preflightProductInput(ProductInputClaimCommand command) {
+			throw new AssertionError("product input is unrelated to output storage");
+		}
+
+		@Override public ClaimResult claimProductInput(ProductInputClaimCommand command) {
+			throw new AssertionError("product input is unrelated to output storage");
+		}
+
+		@Override public void releaseProductInput(ProductInputClaimCommand command) {
+			throw new AssertionError("product input is unrelated to output storage");
+		}
 	}
 }

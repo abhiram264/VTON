@@ -144,7 +144,9 @@ class GenerationCreateConcurrencyTest {
             return new GenerationMediaStore() {
                 @Override public void putBounded(StorageKey dest, InputStream source, long maxBytes, String mediaType) { }
                 @Override public ClaimResult claim(com.aifashionvault.platform.objectstore.GenerationClaimCommand command) { throw new UnsupportedOperationException(); }
-                @Override public ClaimResult claimProductInput(ProductInputClaimCommand command) { return new ClaimResult.Copied(); }
+				@Override public void preflightProductInput(ProductInputClaimCommand command) { }
+				@Override public ClaimResult claimProductInput(ProductInputClaimCommand command) { return new ClaimResult.Copied(); }
+				@Override public void releaseProductInput(ProductInputClaimCommand command) { }
             };
         }
     }
