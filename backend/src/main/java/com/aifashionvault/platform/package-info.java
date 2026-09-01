@@ -7,9 +7,14 @@
                 "user",
                 "generation",
                 "admission",
+                "integrity",
                 "look",
                 "notification",
-                "importer"
+                "importer",
+                "retention",
+                "collection",
+                "vault",
+                "normalization"
 		}
 )
 package com.aifashionvault.platform;

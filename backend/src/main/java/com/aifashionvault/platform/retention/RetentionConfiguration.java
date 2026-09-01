@@ -7,6 +7,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.context.annotation.Bean;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.annotation.Scheduled;
 import com.aifashionvault.platform.objectstore.ObjectStore;
@@ -25,7 +26,10 @@ public class RetentionConfiguration {
     RetentionPolicy retentionPolicy(RetentionProperties properties) { return new RetentionPolicy(properties.temporaryMediaMaxAge(), Clock.systemUTC()); }
 
     @Bean
-    PlatformRetentionInventory platformRetentionInventory(ObjectStore store) { return new PlatformRetentionInventory(store); }
+    PlatformRetentionInventory platformRetentionInventory(ObjectProvider<ObjectStore> stores) {
+        ObjectStore store = stores.orderedStream().findFirst().orElseThrow();
+        return new PlatformRetentionInventory(store);
+    }
 
     @Bean
     RetentionScheduler retentionScheduler(PlatformRetentionInventory inventory, RetentionPolicy policy) {
