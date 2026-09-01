@@ -43,6 +43,10 @@ vault:
     resource-attributes: ${OTEL_RESOURCE_ATTRIBUTES:}
     exporter-otlp-endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:}
     exporter-otlp-headers: ${OTEL_EXPORTER_OTLP_HEADERS:}
+  integrity:
+    required: false
+  avatar:
+    attestation-required: false
   generation:
     multi-item-enabled: false
     admission-paused: false

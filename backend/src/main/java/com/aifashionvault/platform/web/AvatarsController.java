@@ -26,6 +26,10 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
+import jakarta.servlet.http.HttpServletRequest;
+
+import com.aifashionvault.integrity.AppIntegrityOperation;
+import com.aifashionvault.integrity.AppIntegrityVerifier;
 import com.aifashionvault.avatar.AvatarException;
 import com.aifashionvault.avatar.AvatarImage;
 import com.aifashionvault.avatar.AvatarProblemCode;
@@ -50,16 +54,21 @@ public class AvatarsController {
 	private final ObjectProvider<AvatarWorkflow> workflows;
 	private final ObjectStore mediaStore;
 	private final ObjectProvider<GenerationAvatarInvalidation> invalidators;
+	private final AppIntegrityBoundary integrity;
 
 	public AvatarsController(ObjectProvider<AvatarWorkflow> workflows, ObjectProvider<ObjectStore> mediaStores) {
-		this(workflows, mediaStores, null);
+		this(workflows, mediaStores, null, ignored -> new com.aifashionvault.integrity.AppIntegrityVerdict(
+			com.aifashionvault.integrity.AppIntegrityVerdictStatus.INDETERMINATE,
+			com.aifashionvault.integrity.AppIntegrityFailureReason.PROVIDER_UNAVAILABLE), new AvatarApiProperties(false));
 	}
 
 	@Autowired
 	public AvatarsController(
 		ObjectProvider<AvatarWorkflow> workflows,
 		ObjectProvider<ObjectStore> mediaStores,
-		ObjectProvider<GenerationAvatarInvalidation> invalidators
+		ObjectProvider<GenerationAvatarInvalidation> invalidators,
+		AppIntegrityVerifier verifier,
+		AvatarApiProperties properties
 	) {
 		this.workflows = workflows;
 		ObjectStore resolved;
@@ -71,13 +80,16 @@ public class AvatarsController {
 		}
 		this.mediaStore = resolved;
 		this.invalidators = invalidators;
+		this.integrity = new AppIntegrityBoundary(verifier, properties.attestationRequired());
 	}
 
 	@PostMapping
 	public ResponseEntity<AvatarResourceResponse> create(
 		@AuthenticationPrincipal UserId userId,
-		@RequestBody AvatarUploadRequest request
+		@RequestBody AvatarUploadRequest request,
+		HttpServletRequest httpRequest
 	) {
+		this.integrity.verify(httpRequest, AppIntegrityOperation.AVATAR_UPLOAD);
 		UploadId uploadId = uploadId(request);
 		return resource(HttpStatus.CREATED, workflow().create(userId, uploadId));
 	}
@@ -124,6 +136,12 @@ public class AvatarsController {
 		if (invalidator != null) {
 			invalidator.afterAvatarDeleted(userId, profileId, Instant.now());
 		}
+	}
+
+	@ExceptionHandler(AppIntegrityBoundary.Problem.class)
+	ResponseEntity<java.util.Map<String, String>> integrityProblem(AppIntegrityBoundary.Problem ex) {
+		return ResponseEntity.status(ex.status()).contentType(MediaType.APPLICATION_JSON)
+			.body(java.util.Map.of("code", ex.code()));
 	}
 
 	@ExceptionHandler(AvatarException.class)

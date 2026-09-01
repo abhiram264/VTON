@@ -21,6 +21,8 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.aifashionvault.integrity.AppIntegrityOperation;
+import com.aifashionvault.integrity.AppIntegrityVerifier;
 import com.aifashionvault.generation.GenerationStore;
 import com.aifashionvault.generation.JdbcGenerationStore;
 import com.aifashionvault.platform.objectstore.GenerationMediaStore;
@@ -33,14 +35,17 @@ import com.aifashionvault.shared.UserId;
 public class GenerationsController {
 
 	private final GenerationCreationService service;
+	private final AppIntegrityBoundary integrity;
 
 	public GenerationsController(
 		ObjectProvider<GenerationStore> stores,
 		ObjectProvider<DataSource> dataSources,
 		ObjectProvider<GenerationMediaStore> mediaStores,
 		ObjectProvider<ObjectStore> objectStores,
-		GenerationApiProperties properties
+		GenerationApiProperties properties,
+		AppIntegrityVerifier verifier
 	) {
+		this.integrity = new AppIntegrityBoundary(verifier, properties.isAttestationRequired());
 		DataSource dataSource = first(dataSources);
 		if (dataSource == null) {
 			this.service = null;
@@ -62,6 +67,7 @@ public class GenerationsController {
         @RequestBody(required = false) GenerationRequest request,
         HttpServletRequest httpRequest
     ) {
+        this.integrity.verify(httpRequest, AppIntegrityOperation.GENERATION_CREATION);
         GenerationResponse body = service().create(userId, idempotencyKey, request,
             httpRequest.getHeader("X-Device-Id"), httpRequest.getRemoteAddr());
 		return ResponseEntity.accepted()
@@ -84,6 +90,12 @@ public class GenerationsController {
 		@PathVariable String generationId
 	) {
 		return service().cancel(userId, generationId);
+	}
+
+	@ExceptionHandler(AppIntegrityBoundary.Problem.class)
+	ResponseEntity<GenerationProblemResponse> integrityProblem(AppIntegrityBoundary.Problem ex) {
+		return ResponseEntity.status(ex.status()).contentType(MediaType.APPLICATION_JSON)
+			.body(new GenerationProblemResponse(ex.code()));
 	}
 
 	@ExceptionHandler(GenerationCreationService.Problem.class)
