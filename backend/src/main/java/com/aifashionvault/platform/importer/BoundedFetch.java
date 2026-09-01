@@ -21,10 +21,12 @@ final class BoundedFetch {
 
 	private final ImportHttpFetcher fetcher;
 	private final ImportDns dns;
+	private final GenericOpenGraphResolver.Clock clock;
 
-	BoundedFetch(ImportHttpFetcher fetcher, ImportDns dns) {
+	BoundedFetch(ImportHttpFetcher fetcher, ImportDns dns, GenericOpenGraphResolver.Clock clock) {
 		this.fetcher = fetcher;
 		this.dns = dns;
+		this.clock = clock;
 	}
 
 	/**
@@ -97,8 +99,8 @@ final class BoundedFetch {
 		};
 	}
 
-	private static void ensureBudget(Instant deadline) {
-		if (deadline != null && Instant.now().isAfter(deadline)) {
+	private void ensureBudget(Instant deadline) {
+		if (deadline != null && clock.instant().isAfter(deadline)) {
 			throw new ImportNetworkException(FailureKind.TIMEOUT, "total resolution budget exhausted");
 		}
 	}

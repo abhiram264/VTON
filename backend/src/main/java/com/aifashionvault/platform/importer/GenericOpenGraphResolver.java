@@ -94,7 +94,7 @@ public final class GenericOpenGraphResolver implements SourceResolver {
 
 	private ResolutionResult resolveUnderPolicy(SourceReference source) {
 		Instant deadline = clock.instant().plus(ImportResolverLimits.TOTAL_RESOLUTION_TIMEOUT);
-		BoundedFetch bounded = new BoundedFetch(fetcher, dns);
+		BoundedFetch bounded = new BoundedFetch(fetcher, dns, clock);
 		BoundedFetch.Fetched page = bounded.fetch(source.url(), ImportResolverLimits.MAX_HTML_BYTES, deadline);
 		if (page.statusCode() >= 500) {
 			throw retryable(ResolutionReason.DEPENDENCY_UNAVAILABLE);

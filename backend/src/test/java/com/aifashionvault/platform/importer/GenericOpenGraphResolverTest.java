@@ -336,7 +336,7 @@ class GenericOpenGraphResolverTest {
 		dns.answerDefault(HOST);
 		dns.answer(HOST, Fakes.publicV4(), Fakes.address("192.168.1.10"));
 
-		assertThatThrownBy(() -> new BoundedFetch(transport, dns).fetch(PAGE, 1024, null))
+		assertThatThrownBy(() -> new BoundedFetch(transport, dns, clock).fetch(PAGE, 1024, null))
 			.extracting(ex -> ((ImportNetworkException) ex).kind())
 			.isEqualTo(FailureKind.UNSAFE_URL);
 		assertThat(transport.requested).isEmpty();
@@ -442,15 +442,22 @@ class GenericOpenGraphResolverTest {
 	// --- Acceptance 10: budget exhaustion ---
 
 	@Test
-	void exhaustedTotalBudgetIsRetryableResolutionTimeout() {
-		dns.answerDefault(HOST);
-		transport.hops.put(PAGE.toString(), Fakes.FakeTransport.serve(200, "text/html", page(null, "t", null)));
-		clock.now = java.time.Instant.now().minus(ImportResolverLimits.TOTAL_RESOLUTION_TIMEOUT).minusSeconds(1);
+	void fixedClockFetchUsesResolverClockDomain() {
+		serveHappyPath();
 
-		assertThatThrownBy(() -> resolver().resolve(urlSource()))
-			.isInstanceOf(ImporterRetryableException.class)
-			.extracting(Fakes::retryableReason)
-			.isEqualTo(ResolutionReason.RESOLUTION_TIMEOUT);
+		assertThat(resolver().resolve(urlSource()).status()).isEqualTo(ResolutionStatus.RESOLVED);
+	}
+
+	@Test
+	void expiredDeadlineTimesOutBeforeTransport() {
+		dns.answerDefault(HOST);
+		Instant deadline = clock.now.minusSeconds(1);
+
+		assertThatThrownBy(() -> new BoundedFetch(transport, dns, clock).fetch(PAGE, 1024, deadline))
+			.isInstanceOf(ImportNetworkException.class)
+			.extracting(ex -> ((ImportNetworkException) ex).kind())
+			.isEqualTo(FailureKind.TIMEOUT);
+		assertThat(transport.requested).isEmpty();
 	}
 
 	// --- Acceptance 4 adjunct: resolver precedence in chain ---
