@@ -50,6 +50,9 @@ import com.aifashionvault.platform.objectstore.ClaimResult;
 import com.aifashionvault.platform.objectstore.ImageInspector;
 import com.aifashionvault.platform.objectstore.ImageInspectorAvatarBytesInspector;
 import com.aifashionvault.platform.objectstore.ObjectStoreAvatarMediaAccess;
+import com.aifashionvault.platform.objectstore.MalwareScanResult;
+import com.aifashionvault.platform.objectstore.MalwareScanner;
+import com.aifashionvault.platform.objectstore.MalwareVerdict;
 import com.aifashionvault.platform.objectstore.MediaDeclaration;
 import com.aifashionvault.platform.objectstore.ObjectMetadata;
 import com.aifashionvault.platform.objectstore.ObjectRef;
@@ -588,6 +591,12 @@ class AvatarsApiTest {
 		@Primary
 		FakeAvatarObjectStore fakeAvatarObjectStore() {
 			return new FakeAvatarObjectStore();
+		}
+
+		@Bean
+		@Primary
+		MalwareScanner cleanMalwareScanner() {
+			return (bytes, contentType) -> new MalwareScanResult(MalwareVerdict.CLEAN, "clean test fixture");
 		}
 
 		@Bean
