@@ -11,7 +11,7 @@ import com.aifashionvault.vault.JdbcVaultStore;
 @Configuration(proxyBeanMethods=false)
 class VaultConfiguration {
 	@Bean FactoryBean<VaultService> vaultService(ObjectProvider<DataSource> sources,ObjectProvider<ObjectStore> stores){return new FactoryBean<>(){
-		public VaultService getObject(){DataSource source=sources.getIfAvailable();ObjectStore store=stores.getIfAvailable();return source==null||store==null?null:new VaultService(new JdbcVaultStore(source),store);}
+		public VaultService getObject(){DataSource source=sources.getIfAvailable();ObjectStore store=stores.orderedStream().findFirst().orElse(null);return source==null||store==null?null:new VaultService(new JdbcVaultStore(source),store);}
 		public Class<?> getObjectType(){return VaultService.class;} public boolean isSingleton(){return true;}
 	};}
 }
