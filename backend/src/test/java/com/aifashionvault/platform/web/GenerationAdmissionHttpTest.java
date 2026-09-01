@@ -125,6 +125,26 @@ class GenerationAdmissionHttpTest {
 		assertNoEffects();
 	}
 
+	@Test
+	void invalidUploadsDoNotConsumeQuotaAndAcceptedCreationConsumesOne() throws Exception {
+		Owner owner = seedOwner(true);
+		for (int attempt = 0; attempt < 6; attempt++) {
+			mockMvc.perform(post("/generations").header(HttpHeaders.AUTHORIZATION, bearer(owner.token()))
+					.header("Idempotency-Key", "invalid-upload-" + attempt)
+					.contentType(MediaType.APPLICATION_JSON).content(body(new UUID(0, 0))))
+				.andExpect(status().isUnprocessableEntity())
+				.andExpect(content().string("{\"code\":\"PRODUCT_UPLOAD_MISSING\"}"));
+		}
+		assertThat(jdbc.queryForObject("SELECT COALESCE(SUM(count), 0) FROM generation_admission_counter", Long.class)).isZero();
+
+		mockMvc.perform(post("/generations").header(HttpHeaders.AUTHORIZATION, bearer(owner.token()))
+				.header("Idempotency-Key", "accepted-upload")
+				.contentType(MediaType.APPLICATION_JSON).content(body(owner.uploadId())))
+			.andExpect(status().isAccepted());
+		assertThat(jdbc.queryForList("SELECT count FROM generation_admission_counter", Long.class))
+			.containsExactlyInAnyOrder(1L, 1L, 1L);
+	}
+
 	private Owner seedOwner(boolean model) throws Exception {
 		String token = InProcessJwtFixture.bearerToken();
 		mockMvc.perform(get("/me").header(HttpHeaders.AUTHORIZATION, bearer(token))).andExpect(status().isOk());
@@ -156,12 +176,16 @@ class GenerationAdmissionHttpTest {
     @TestConfiguration
     static class Configuration {
         @Bean @Primary ExternalTokenVerifier verifier() { return InProcessJwtFixture.verifier(); }
-        @Bean @Primary GenerationMediaStore generationMediaStore() {
-            return new GenerationMediaStore() {
-                @Override public void putBounded(StorageKey dest, InputStream source, long maxBytes, String mediaType) { }
-                @Override public ClaimResult claim(com.aifashionvault.platform.objectstore.GenerationClaimCommand command) { throw new UnsupportedOperationException(); }
-                @Override public ClaimResult claimProductInput(ProductInputClaimCommand command) { return new ClaimResult.Copied(); }
-            };
+		@Bean @Primary GenerationMediaStore generationMediaStore() {
+			return new GenerationMediaStore() {
+				@Override public void putBounded(StorageKey dest, InputStream source, long maxBytes, String mediaType) { }
+				@Override public ClaimResult claim(com.aifashionvault.platform.objectstore.GenerationClaimCommand command) { throw new UnsupportedOperationException(); }
+				@Override public ClaimResult claimProductInput(ProductInputClaimCommand command) {
+					if (command.productUploadId().value().equals(new UUID(0, 0)))
+						throw new com.aifashionvault.platform.objectstore.ObjectStoreExceptions.StagedObjectMissingException("missing staged object");
+					return new ClaimResult.Copied();
+				}
+			};
+		}
         }
-    }
 }

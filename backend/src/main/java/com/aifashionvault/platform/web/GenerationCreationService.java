@@ -79,13 +79,6 @@ public class GenerationCreationService {
                 return toResponse(existing);
             }
         }
-        if (rateLimiter != null) {
-            String safeDevice = deviceId == null || deviceId.isBlank() ? "http-session" : deviceId;
-            String safeIp = ipAddress == null || ipAddress.isBlank() ? "unknown" : ipAddress;
-            var decision = rateLimiter.admit(new com.aifashionvault.admission.GenerationAdmissionRequest(userId, safeDevice, safeIp,
-                com.aifashionvault.admission.GenerationRiskTier.ORDINARY, clock.instant()));
-            if (!decision.allowed()) throw problem(HttpStatus.TOO_MANY_REQUESTS, decision.reason());
-        }
         Instant now = clock.instant();
         UUID generationId = UUID.randomUUID();
         MediaAssetId productMediaId = new MediaAssetId(UUID.randomUUID());
@@ -96,6 +89,13 @@ public class GenerationCreationService {
         }
         catch (ObjectStoreExceptions.StagedObjectMissingException ex) { throw problem(HttpStatus.UNPROCESSABLE_ENTITY, PRODUCT_UPLOAD_MISSING); }
         catch (ObjectStoreExceptions.ImageValidationException | IllegalArgumentException ex) { throw problem(HttpStatus.UNPROCESSABLE_ENTITY, MALFORMED_REQUEST); }
+        if (rateLimiter != null) {
+            String safeDevice = deviceId == null || deviceId.isBlank() ? "http-session" : deviceId;
+            String safeIp = ipAddress == null || ipAddress.isBlank() ? "unknown" : ipAddress;
+            var decision = rateLimiter.admit(new com.aifashionvault.admission.GenerationAdmissionRequest(userId, safeDevice, safeIp,
+                com.aifashionvault.admission.GenerationRiskTier.ORDINARY, clock.instant()));
+            if (!decision.allowed()) throw problem(HttpStatus.TOO_MANY_REQUESTS, decision.reason());
+        }
         GenerationJob job = new GenerationJob(
             new GenerationJobId(generationId), userId, null, GenerationJob.QUEUED, "STANDARD",
             new ClientRequestId(key), now, null, avatar.imageId(), List.of(), null, null,
