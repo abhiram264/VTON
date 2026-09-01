@@ -1159,9 +1159,10 @@ class GenerationOrchestrationTest {
 		assertThat(completed.failureCode()).isEqualTo("QUALITY_REJECTED");
 		assertThat(completed.creditsUsed()).isEqualByComparingTo("1.50");
 		assertThat(completed.actualBilledUnits()).isEqualByComparingTo("1.50");
-		assertThat(completed.estimatedCost()).isEqualByComparingTo("0.20");
+		assertThat(completed.estimatedCost()).isEqualByComparingTo("0.10");
+		assertThat(completed.actualCost()).isEqualByComparingTo("0.20");
 		assertThat(completed.currency()).isEqualTo("USD");
-		assertThat(completed.costStatus()).isEqualTo(PricingSnapshot.COST_ESTIMATED);
+		assertThat(completed.costStatus()).isEqualTo(PricingSnapshot.COST_FINAL);
 		assertThat(completed.pricingObservedAt()).isEqualTo(NOW);
 		assertThat(completed.billingUnit()).isEqualTo("generation");
 		GenerationJob job = generationStore.findJob(JOB_ID).orElseThrow();
@@ -1209,9 +1210,10 @@ class GenerationOrchestrationTest {
 		assertThat(completed.failureCode()).isEqualTo("QUALITY_REJECTED");
 		assertThat(completed.creditsUsed()).isEqualByComparingTo("1.50");
 		assertThat(completed.actualBilledUnits()).isEqualByComparingTo("1.50");
-		assertThat(completed.estimatedCost()).isEqualByComparingTo("0.20");
+		assertThat(completed.estimatedCost()).isEqualByComparingTo("0.10");
+		assertThat(completed.actualCost()).isEqualByComparingTo("0.20");
 		assertThat(completed.currency()).isEqualTo("USD");
-		assertThat(completed.costStatus()).isEqualTo(PricingSnapshot.COST_ESTIMATED);
+		assertThat(completed.costStatus()).isEqualTo(PricingSnapshot.COST_FINAL);
 		assertThat(completed.pricingObservedAt()).isEqualTo(NOW);
 		assertThat(completed.billingUnit()).isEqualTo("generation");
 		GenerationJob job = generationStore.findJob(JOB_ID).orElseThrow();
@@ -1257,9 +1259,10 @@ class GenerationOrchestrationTest {
 		assertThat(completed.failureCode()).isEqualTo("QUALITY_REJECTED");
 		assertThat(completed.creditsUsed()).isEqualByComparingTo("1.50");
 		assertThat(completed.actualBilledUnits()).isEqualByComparingTo("1.50");
-		assertThat(completed.estimatedCost()).isEqualByComparingTo("0.20");
+		assertThat(completed.estimatedCost()).isEqualByComparingTo("0.10");
+		assertThat(completed.actualCost()).isEqualByComparingTo("0.20");
 		assertThat(completed.currency()).isEqualTo("USD");
-		assertThat(completed.costStatus()).isEqualTo(PricingSnapshot.COST_ESTIMATED);
+		assertThat(completed.costStatus()).isEqualTo(PricingSnapshot.COST_FINAL);
 		assertThat(completed.pricingObservedAt()).isEqualTo(NOW);
 		assertThat(completed.billingUnit()).isEqualTo("generation");
 		assertThat(generationStore.findJob(JOB_ID).orElseThrow().status()).isEqualTo(GenerationJob.FAILED);
@@ -1405,16 +1408,17 @@ class GenerationOrchestrationTest {
 	void qualityRejectedProviderSuccessKeepsAttemptEconomics() {
 		generationStore.insertJob(queuedJob());
 		qualityGate.decision = QualityDecision.FAIL;
+		provider.usage(new ProviderUsage(new BigDecimal("1.50"), new BigDecimal("0.20"), "usd"));
 
 		processor.process(lease);
 
 		GenerationAttempt attempt = generationStore.listAttempts(JOB_ID).getFirst();
 		assertThat(attempt.failureCode()).isEqualTo("QUALITY_REJECTED");
 		assertThat(attempt.technicalOutcome()).isEqualTo("SUCCESS");
-		assertThat(attempt.costStatus()).isEqualTo(PricingSnapshot.COST_ESTIMATED);
-		assertThat(attempt.pricingCatalogVersion()).isEqualTo("unpriced");
-		assertThat(attempt.estimatedCost()).isNull();
-		assertThat(attempt.actualCost()).isNull();
+		assertThat(attempt.costStatus()).isEqualTo(PricingSnapshot.COST_FINAL);
+		assertThat(attempt.pricingCatalogVersion()).isEqualTo("mvp-2026-08");
+		assertThat(attempt.estimatedCost()).isEqualByComparingTo("0.10");
+		assertThat(attempt.actualCost()).isEqualByComparingTo("0.20");
 	}
 
 	@Test
@@ -1657,9 +1661,10 @@ class GenerationOrchestrationTest {
 		GenerationAttempt attempt = generationStore.listAttempts(JOB_ID).getFirst();
 		assertThat(attempt.creditsUsed()).isEqualByComparingTo("1.50");
 		assertThat(attempt.actualBilledUnits()).isEqualByComparingTo("1.50");
-		assertThat(attempt.estimatedCost()).isEqualByComparingTo("0.20");
+		assertThat(attempt.estimatedCost()).isEqualByComparingTo("0.10");
+		assertThat(attempt.actualCost()).isEqualByComparingTo("0.20");
 		assertThat(attempt.currency()).isEqualTo("USD");
-		assertThat(attempt.costStatus()).isEqualTo(PricingSnapshot.COST_ESTIMATED);
+		assertThat(attempt.costStatus()).isEqualTo(PricingSnapshot.COST_FINAL);
 		assertThat(attempt.pricingObservedAt()).isEqualTo(NOW);
 		assertThat(attempt.billingUnit()).isEqualTo("generation");
 	}

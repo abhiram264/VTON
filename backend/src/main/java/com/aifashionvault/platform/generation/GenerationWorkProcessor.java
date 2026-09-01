@@ -2507,7 +2507,6 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 			return attempt;
 		}
 		ProviderUsage mapped = usage.get();
-		BigDecimal estimated = attempt.estimatedCost() != null ? attempt.estimatedCost() : mapped.estimatedCost();
 		String currency = attempt.currency() != null ? attempt.currency() : mapped.currency();
 		return new GenerationAttempt(
 			attempt.id(),
@@ -2520,7 +2519,7 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 			attempt.completedAt(),
 			attempt.latencyMs(),
 			mapped.creditsUsed(),
-			estimated,
+			attempt.estimatedCost(),
 			currency,
 			attempt.failureCode(),
 			attempt.technicalOutcome(),
@@ -2539,8 +2538,8 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 			attempt.estimatedUnits(),
 			attempt.unitPrice(),
 			attempt.estimatedCostCeiling(),
-			attempt.actualCost(),
-			attempt.costStatus(),
+			mapped.estimatedCost(),
+			PricingSnapshot.COST_FINAL,
 			mapped.creditsUsed(),
 			attempt.pricingObservedAt(),
 			attempt.billingUnit());
