@@ -60,6 +60,18 @@ class GenerationAbuseControlsTest {
 	}
 
 	@Test
+	void providerCeilingAggregatesEveryModelRoute() {
+		var metrics = new StubMetrics(BigDecimal.ZERO, new BigDecimal("49"), BigDecimal.ZERO, "USD");
+		var decision = new AggregateBackedCostCircuitBreaker(metrics, POLICY).authorize(request("2", "USD"));
+
+		assertThat(decision.reason()).isEqualTo(AbuseDecisionReason.PROVIDER_BUDGET_EXHAUSTED);
+		assertThat(metrics.queries).anySatisfy(query -> {
+			assertThat(query.providerKey()).isEqualTo("provider");
+			assertThat(query.modelRouteAuditIdentity()).isNull();
+		});
+	}
+
+	@Test
 	void appliesGlobalThenProviderThenUserPrecedence() {
 		assertThat(decide(new BigDecimal("99"), new BigDecimal("49"), new BigDecimal("19"), "2").reason())
 			.isEqualTo(AbuseDecisionReason.GLOBAL_COST_CIRCUIT_OPEN);

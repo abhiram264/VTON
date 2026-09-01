@@ -35,7 +35,7 @@ public final class AggregateBackedCostCircuitBreaker implements GlobalCostCircui
 				policy.globalCeiling(), request.currency(), start, end);
 		}
 
-		var provider = aggregate(null, request.providerKey(), request.modelRouteAuditIdentity(), start, end);
+		var provider = aggregate(null, request.providerKey(), null, start, end);
 		if (known(provider) && exhausted(provider.totalCost(), projection, providerCeiling)) {
 			return decision(false, AbuseDecisionReason.PROVIDER_BUDGET_EXHAUSTED, provider.totalCost(),
 				providerCeiling, request.currency(), start, end);
