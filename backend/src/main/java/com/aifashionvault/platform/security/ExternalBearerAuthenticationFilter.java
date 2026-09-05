@@ -8,6 +8,7 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 
+import org.slf4j.MDC;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
@@ -16,6 +17,7 @@ import org.springframework.security.core.context.SecurityContext;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.filter.OncePerRequestFilter;
 
+import com.aifashionvault.platform.logging.LoggingPolicy;
 import com.aifashionvault.shared.UserId;
 import com.aifashionvault.user.IdentityProvisioning;
 import com.aifashionvault.user.IdentityResolution;
@@ -53,27 +55,34 @@ public final class ExternalBearerAuthenticationFilter extends OncePerRequestFilt
 		HttpServletResponse response,
 		FilterChain filterChain
 	) throws ServletException, IOException {
-		String token = bearerToken(request.getHeader(HttpHeaders.AUTHORIZATION));
-		if (token == null) {
-			unauthorized(response);
-			return;
-		}
+		MDC.remove(LoggingPolicy.KEY_USER_ID);
 		try {
-			VerifiedExternalIdentity identity = verifier.verify(token);
-			IdentityProvisioning provisioning = identityProvisioning.getIfAvailable();
-			if (provisioning == null) {
+			String token = bearerToken(request.getHeader(HttpHeaders.AUTHORIZATION));
+			if (token == null) {
 				unauthorized(response);
 				return;
 			}
-			if (provisioning.resolve(identity.issuer(), identity.subject()) instanceof IdentityResolution.Active active) {
-				authenticate(active.userId());
-				filterChain.doFilter(request, response);
-				return;
+			try {
+				VerifiedExternalIdentity identity = verifier.verify(token);
+				IdentityProvisioning provisioning = identityProvisioning.getIfAvailable();
+				if (provisioning == null) {
+					unauthorized(response);
+					return;
+				}
+				if (provisioning.resolve(identity.issuer(), identity.subject()) instanceof IdentityResolution.Active active) {
+					authenticate(active.userId());
+					MDC.put(LoggingPolicy.KEY_USER_ID, active.userId().value().toString());
+					filterChain.doFilter(request, response);
+					return;
+				}
+				unauthorized(response);
 			}
-			unauthorized(response);
+			catch (TokenVerificationException exception) {
+				unauthorized(response);
+			}
 		}
-		catch (TokenVerificationException exception) {
-			unauthorized(response);
+		finally {
+			MDC.remove(LoggingPolicy.KEY_USER_ID);
 		}
 	}
 

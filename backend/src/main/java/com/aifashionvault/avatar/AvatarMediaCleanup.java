@@ -5,9 +5,12 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 public class AvatarMediaCleanup {
 
-	private static final System.Logger LOG = System.getLogger(AvatarMediaCleanup.class.getName());
+	private static final Logger log = LoggerFactory.getLogger(AvatarMediaCleanup.class);
 	private static final Duration PERSISTENT_ORPHAN_DELETE_AGE = Duration.ofHours(20);
 
 	private final JdbcAvatarStore store;
@@ -34,19 +37,18 @@ public class AvatarMediaCleanup {
 	}
 
 	public void reconcile() {
-		for (AvatarImage image : store.listDeletionPending()) {
+		for (AvatarImage pending : store.listDeletionPending()) {
 			try {
-				mediaAccess.deletePersistent(image.storageKey());
+				mediaAccess.deletePersistent(pending.storageKey());
 			}
 			catch (RuntimeException ex) {
-				LOG.log(
-					System.Logger.Level.WARNING,
-					"avatar media cleanup failed for image {0} profile {1}",
-					image.id().value(),
-					image.profileId().value());
+				log.warn(
+					"avatar media cleanup failed for item {} profile {}",
+					pending.id().value(),
+					pending.profileId().value());
 				continue;
 			}
-			store.markReconciled(image.id());
+			store.markReconciled(pending.id());
 		}
 		reconcilePersistentOrphans();
 	}
@@ -57,7 +59,7 @@ public class AvatarMediaCleanup {
 			objects = mediaAccess.listPersistentAvatars();
 		}
 		catch (RuntimeException ex) {
-			LOG.log(System.Logger.Level.WARNING, "persistent avatar orphan listing failed");
+			log.warn("persistent avatar orphan listing failed");
 			return;
 		}
 
@@ -73,7 +75,7 @@ public class AvatarMediaCleanup {
 				}
 			}
 			catch (RuntimeException ex) {
-				LOG.log(System.Logger.Level.WARNING, "persistent avatar orphan reconciliation failed");
+				log.warn("persistent avatar orphan reconciliation failed");
 			}
 		}
 	}

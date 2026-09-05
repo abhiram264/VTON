@@ -3,17 +3,20 @@ package com.aifashionvault.platform.security;
 import java.util.UUID;
 
 import jakarta.servlet.FilterChain;
+import jakarta.servlet.ServletException;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 
+import com.aifashionvault.platform.logging.LoggingPolicy;
 import com.aifashionvault.shared.UserId;
 import com.aifashionvault.user.IdentityProvisioning;
 import com.aifashionvault.user.IdentityResolution;
@@ -51,11 +54,13 @@ class ExternalBearerAuthenticationFilterTest {
 		when(provisioningProvider.getIfAvailable()).thenReturn(provisioning);
 		filter = new ExternalBearerAuthenticationFilter(verifier, provisioningProvider);
 		chain = mock(FilterChain.class);
+		MDC.clear();
 	}
 
 	@AfterEach
-	void clearSecurityContext() {
+	void tearDown() {
 		SecurityContextHolder.clearContext();
+		MDC.clear();
 	}
 
 	@Test
@@ -68,6 +73,7 @@ class ExternalBearerAuthenticationFilterTest {
 		verifyNoInteractions(verifier);
 		verify(chain, never()).doFilter(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
 		assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
+		assertThat(MDC.get(LoggingPolicy.KEY_USER_ID)).isNull();
 	}
 
 	@Test
@@ -82,6 +88,7 @@ class ExternalBearerAuthenticationFilterTest {
 		verifyNoInteractions(verifier);
 		verify(chain, never()).doFilter(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
 		assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
+		assertThat(MDC.get(LoggingPolicy.KEY_USER_ID)).isNull();
 	}
 
 	@Test
@@ -95,6 +102,7 @@ class ExternalBearerAuthenticationFilterTest {
 		assertThat(response.getStatus()).isEqualTo(401);
 		verifyNoInteractions(verifier);
 		verify(chain, never()).doFilter(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+		assertThat(MDC.get(LoggingPolicy.KEY_USER_ID)).isNull();
 	}
 
 	@Test
@@ -120,6 +128,58 @@ class ExternalBearerAuthenticationFilterTest {
 	}
 
 	@Test
+	void activeResolutionExposesUserIdInMdcDuringChainAndCleansUpInFinally() throws Exception {
+		when(verifier.verify(TOKEN)).thenReturn(new VerifiedExternalIdentity(ISSUER, SUBJECT));
+		when(provisioning.resolve(ISSUER, SUBJECT)).thenReturn(new IdentityResolution.Active(USER_ID));
+		MockHttpServletRequest request = bearerRequest();
+		MockHttpServletResponse response = new MockHttpServletResponse();
+
+		final String[] capturedUserId = new String[1];
+		filter.doFilter(request, response, (req, res) -> {
+			capturedUserId[0] = MDC.get(LoggingPolicy.KEY_USER_ID);
+			assertThat(capturedUserId[0]).isEqualTo(USER_ID.value().toString());
+			assertThat(capturedUserId[0]).doesNotContain(TOKEN, SUBJECT, ISSUER);
+		});
+
+		assertThat(capturedUserId[0]).isEqualTo(USER_ID.value().toString());
+		assertThat(MDC.get(LoggingPolicy.KEY_USER_ID)).isNull();
+	}
+
+	@Test
+	void removesStaleUserIdInFinallyEvenWhenPreviouslySet() throws Exception {
+		when(verifier.verify(TOKEN)).thenReturn(new VerifiedExternalIdentity(ISSUER, SUBJECT));
+		when(provisioning.resolve(ISSUER, SUBJECT)).thenReturn(new IdentityResolution.Active(USER_ID));
+		String priorUserId = "prior-user-uuid";
+		MDC.put(LoggingPolicy.KEY_USER_ID, priorUserId);
+		MockHttpServletRequest request = bearerRequest();
+		MockHttpServletResponse response = new MockHttpServletResponse();
+
+		filter.doFilter(request, response, (req, res) -> {
+			assertThat(MDC.get(LoggingPolicy.KEY_USER_ID)).isEqualTo(USER_ID.value().toString());
+		});
+
+		assertThat(MDC.get(LoggingPolicy.KEY_USER_ID)).isNull();
+	}
+
+	@Test
+	void consecutiveRequestsOnSameThreadDoNotLeakUserId() throws Exception {
+		when(verifier.verify(TOKEN)).thenReturn(new VerifiedExternalIdentity(ISSUER, SUBJECT));
+		when(provisioning.resolve(ISSUER, SUBJECT)).thenReturn(new IdentityResolution.Active(USER_ID));
+		MockHttpServletRequest request1 = bearerRequest();
+		MockHttpServletResponse response1 = new MockHttpServletResponse();
+
+		filter.doFilter(request1, response1, (req, res) -> {
+			assertThat(MDC.get(LoggingPolicy.KEY_USER_ID)).isEqualTo(USER_ID.value().toString());
+		});
+		assertThat(MDC.get(LoggingPolicy.KEY_USER_ID)).isNull();
+
+		// Second request is unauthenticated, should not see USER_ID
+		MockHttpServletResponse response2 = new MockHttpServletResponse();
+		filter.doFilter(new MockHttpServletRequest("GET", "/me"), response2, chain);
+		assertThat(MDC.get(LoggingPolicy.KEY_USER_ID)).isNull();
+	}
+
+	@Test
 	void deletedResolutionReturns401() throws Exception {
 		when(verifier.verify(TOKEN)).thenReturn(new VerifiedExternalIdentity(ISSUER, SUBJECT));
 		when(provisioning.resolve(ISSUER, SUBJECT)).thenReturn(new IdentityResolution.Deleted(USER_ID));
@@ -132,6 +192,7 @@ class ExternalBearerAuthenticationFilterTest {
 		verify(provisioning).resolve(ISSUER, SUBJECT);
 		verify(chain, never()).doFilter(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
 		assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
+		assertThat(MDC.get(LoggingPolicy.KEY_USER_ID)).isNull();
 	}
 
 	@Test
@@ -153,6 +214,7 @@ class ExternalBearerAuthenticationFilterTest {
 				assertThat(event.getFormattedMessage()).doesNotContain(TOKEN, "Authorization", "super-secret-payload"));
 			verify(provisioning, never()).resolve(anyString(), anyString());
 			verify(chain, never()).doFilter(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+			assertThat(MDC.get(LoggingPolicy.KEY_USER_ID)).isNull();
 		}
 		finally {
 			logger.detachAppender(appender);
@@ -172,6 +234,25 @@ class ExternalBearerAuthenticationFilterTest {
 		verify(provisioning, never()).resolve(anyString(), anyString());
 		verify(chain, never()).doFilter(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
 		assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
+		assertThat(MDC.get(LoggingPolicy.KEY_USER_ID)).isNull();
+	}
+
+	@Test
+	void cleansUpMdcEvenWhenDownstreamThrows() {
+		when(verifier.verify(TOKEN)).thenReturn(new VerifiedExternalIdentity(ISSUER, SUBJECT));
+		when(provisioning.resolve(ISSUER, SUBJECT)).thenReturn(new IdentityResolution.Active(USER_ID));
+		MockHttpServletRequest request = bearerRequest();
+		MockHttpServletResponse response = new MockHttpServletResponse();
+
+		try {
+			filter.doFilter(request, response, (req, res) -> {
+				throw new ServletException("Controller boom");
+			});
+		}
+		catch (Exception ignored) {
+		}
+
+		assertThat(MDC.get(LoggingPolicy.KEY_USER_ID)).isNull();
 	}
 
 	@Test
@@ -185,6 +266,80 @@ class ExternalBearerAuthenticationFilterTest {
 		verifyNoInteractions(verifier);
 		verify(chain).doFilter(request, response);
 		assertThat(response.getStatus()).isEqualTo(200);
+	}
+
+	@Test
+	void missingBearerTokenRemovesStaleUserIdDuringFilterAndCleansUpAfterward() throws Exception {
+		String staleUserId = "stale-user-uuid";
+		MDC.put(LoggingPolicy.KEY_USER_ID, staleUserId);
+		MockHttpServletResponse response = new MockHttpServletResponse();
+
+		filter.doFilter(new MockHttpServletRequest("GET", "/me"), response, chain);
+
+		assertThat(response.getStatus()).isEqualTo(401);
+		assertThat(MDC.get(LoggingPolicy.KEY_USER_ID)).isNull();
+	}
+
+	@Test
+	void invalidBearerTokenRemovesStaleUserIdDuringFilterAndCleansUpAfterward() throws Exception {
+		when(verifier.verify(TOKEN)).thenThrow(new TokenVerificationException(TokenVerificationFailure.INVALID));
+		String staleUserId = "stale-user-uuid";
+		MDC.put(LoggingPolicy.KEY_USER_ID, staleUserId);
+		MockHttpServletResponse response = new MockHttpServletResponse();
+
+		filter.doFilter(bearerRequest(), response, chain);
+
+		assertThat(response.getStatus()).isEqualTo(401);
+		assertThat(MDC.get(LoggingPolicy.KEY_USER_ID)).isNull();
+	}
+
+	@Test
+	void missingIdentityProvisioningRemovesStaleUserIdDuringFilterAndCleansUpAfterward() throws Exception {
+		when(verifier.verify(TOKEN)).thenReturn(new VerifiedExternalIdentity(ISSUER, SUBJECT));
+		when(provisioningProvider.getIfAvailable()).thenReturn(null);
+		String staleUserId = "stale-user-uuid";
+		MDC.put(LoggingPolicy.KEY_USER_ID, staleUserId);
+		MockHttpServletResponse response = new MockHttpServletResponse();
+
+		filter.doFilter(bearerRequest(), response, chain);
+
+		assertThat(response.getStatus()).isEqualTo(401);
+		assertThat(MDC.get(LoggingPolicy.KEY_USER_ID)).isNull();
+	}
+
+	@Test
+	void deletedResolutionRemovesStaleUserIdDuringFilterAndCleansUpAfterward() throws Exception {
+		when(verifier.verify(TOKEN)).thenReturn(new VerifiedExternalIdentity(ISSUER, SUBJECT));
+		when(provisioning.resolve(ISSUER, SUBJECT)).thenReturn(new IdentityResolution.Deleted(USER_ID));
+		String staleUserId = "stale-user-uuid";
+		MDC.put(LoggingPolicy.KEY_USER_ID, staleUserId);
+		MockHttpServletResponse response = new MockHttpServletResponse();
+
+		filter.doFilter(bearerRequest(), response, chain);
+
+		assertThat(response.getStatus()).isEqualTo(401);
+		assertThat(MDC.get(LoggingPolicy.KEY_USER_ID)).isNull();
+	}
+
+	@Test
+	void activeResolutionRemovesStaleUserIdEvenWhenDownstreamThrows() {
+		when(verifier.verify(TOKEN)).thenReturn(new VerifiedExternalIdentity(ISSUER, SUBJECT));
+		when(provisioning.resolve(ISSUER, SUBJECT)).thenReturn(new IdentityResolution.Active(USER_ID));
+		String staleUserId = "stale-user-uuid";
+		MDC.put(LoggingPolicy.KEY_USER_ID, staleUserId);
+		MockHttpServletRequest request = bearerRequest();
+		MockHttpServletResponse response = new MockHttpServletResponse();
+
+		try {
+			filter.doFilter(request, response, (req, res) -> {
+				assertThat(MDC.get(LoggingPolicy.KEY_USER_ID)).isEqualTo(USER_ID.value().toString());
+				throw new ServletException("Downstream error");
+			});
+		}
+		catch (Exception ignored) {
+		}
+
+		assertThat(MDC.get(LoggingPolicy.KEY_USER_ID)).isNull();
 	}
 
 	private static MockHttpServletRequest bearerRequest() {

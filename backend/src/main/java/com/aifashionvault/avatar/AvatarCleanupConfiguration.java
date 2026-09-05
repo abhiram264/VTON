@@ -4,6 +4,9 @@ import java.util.concurrent.TimeUnit;
 
 import javax.sql.DataSource;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -13,7 +16,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 @ConditionalOnBean(DataSource.class)
 public class AvatarCleanupConfiguration {
 
-	private static final System.Logger LOG = System.getLogger(AvatarCleanupConfiguration.class.getName());
+	private static final Logger log = LoggerFactory.getLogger(AvatarCleanupConfiguration.class);
 
 	@Bean
 	AvatarMediaCleanup avatarMediaCleanup(JdbcAvatarStore store, AvatarMediaAccess mediaAccess) {
@@ -39,7 +42,7 @@ public class AvatarCleanupConfiguration {
 				cleanup.reconcile();
 			}
 			catch (RuntimeException ex) {
-				LOG.log(System.Logger.Level.WARNING, "avatar media cleanup failed");
+				log.warn("avatar media cleanup failed");
 			}
 		}
 	}

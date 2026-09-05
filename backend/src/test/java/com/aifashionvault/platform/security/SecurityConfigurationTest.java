@@ -4,6 +4,8 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
+import java.util.UUID;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -11,7 +13,9 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
 
+import com.aifashionvault.platform.web.RequestIdFilter;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -37,9 +41,37 @@ class SecurityConfigurationTest {
 	}
 
 	@Test
-	void unauthenticatedRequestIsUnauthorized() throws Exception {
-		mockMvc.perform(get("/me"))
-			.andExpect(status().isUnauthorized());
+	void unauthenticatedRequestIsUnauthorizedAndEchoesRequestId() throws Exception {
+		MvcResult result = mockMvc.perform(get("/me"))
+			.andExpect(status().isUnauthorized())
+			.andExpect(header().exists(RequestIdFilter.HEADER_NAME))
+			.andReturn();
+
+		String requestId = result.getResponse().getHeader(RequestIdFilter.HEADER_NAME);
+		assertThat(requestId).isNotNull();
+		assertThat(UUID.fromString(requestId)).isNotNull();
+	}
+
+	@Test
+	void unauthenticatedRequestEchoesValidClientRequestId() throws Exception {
+		String customRequestId = "123e4567-e89b-12d3-a456-426614174000";
+		mockMvc.perform(get("/me").header(RequestIdFilter.HEADER_NAME, customRequestId))
+			.andExpect(status().isUnauthorized())
+			.andExpect(header().string(RequestIdFilter.HEADER_NAME, customRequestId));
+	}
+
+	@Test
+	void unauthenticatedRequestReplacesInvalidClientRequestId() throws Exception {
+		String invalidRequestId = "not-a-valid-uuid";
+		MvcResult result = mockMvc.perform(get("/me").header(RequestIdFilter.HEADER_NAME, invalidRequestId))
+			.andExpect(status().isUnauthorized())
+			.andExpect(header().exists(RequestIdFilter.HEADER_NAME))
+			.andReturn();
+
+		String echoed = result.getResponse().getHeader(RequestIdFilter.HEADER_NAME);
+		assertThat(echoed).isNotNull();
+		assertThat(echoed).isNotEqualTo(invalidRequestId);
+		assertThat(UUID.fromString(echoed)).isNotNull();
 	}
 
 	@Test
@@ -63,10 +95,22 @@ class SecurityConfigurationTest {
 	}
 
 	@Test
-	void filterChainIncludesExternalBearerFilterAndNotOauth2ResourceServer() {
-		assertThat(securityFilterChain.getFilters())
-			.anyMatch(ExternalBearerAuthenticationFilter.class::isInstance);
-		assertThat(securityFilterChain.getFilters())
+	void filterChainIncludesRequestIdFilterBeforeExternalBearerFilterAndNotOauth2ResourceServer() {
+		List<jakarta.servlet.Filter> filters = securityFilterChain.getFilters();
+		int requestIdFilterIndex = -1;
+		int externalBearerFilterIndex = -1;
+		for (int i = 0; i < filters.size(); i++) {
+			jakarta.servlet.Filter f = filters.get(i);
+			if (f instanceof RequestIdFilter) {
+				requestIdFilterIndex = i;
+			}
+			else if (f instanceof ExternalBearerAuthenticationFilter) {
+				externalBearerFilterIndex = i;
+			}
+		}
+		assertThat(requestIdFilterIndex).isGreaterThanOrEqualTo(0);
+		assertThat(externalBearerFilterIndex).isGreaterThan(requestIdFilterIndex);
+		assertThat(filters)
 			.noneMatch(filter -> filter.getClass().getName().contains("oauth2")
 				|| filter.getClass().getSimpleName().equals("BearerTokenAuthenticationFilter"));
 	}

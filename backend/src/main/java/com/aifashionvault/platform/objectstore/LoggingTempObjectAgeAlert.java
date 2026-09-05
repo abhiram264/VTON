@@ -2,9 +2,12 @@ package com.aifashionvault.platform.objectstore;
 
 import java.time.Duration;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 public final class LoggingTempObjectAgeAlert implements TempObjectAgeAlert {
 
-	private static final System.Logger LOG = System.getLogger(LoggingTempObjectAgeAlert.class.getName());
+	private static final Logger log = LoggerFactory.getLogger(LoggingTempObjectAgeAlert.class);
 
 	private LastAlert lastAlert;
 
@@ -23,7 +26,7 @@ public final class LoggingTempObjectAgeAlert implements TempObjectAgeAlert {
 		}
 		LastAlert event = new LastAlert(object.objectKey(), age.toHours());
 		this.lastAlert = event;
-		LOG.log(System.Logger.Level.WARNING, event.toString());
+		log.warn("temp object aged key={} ageHours={}", event.key(), event.ageHours());
 	}
 
 	public LastAlert lastAlert() {
