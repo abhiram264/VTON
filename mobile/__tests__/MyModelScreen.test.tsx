@@ -54,6 +54,32 @@ function emptyResponse(status: number): Promise<Response> {
   } as unknown as Response);
 }
 
+const JPEG_BYTES = new Uint8Array([0xff, 0xd8, 0xff, 0xe0]).buffer;
+
+function bytesResponse(
+  bytes: ArrayBuffer,
+  contentType: string,
+): Promise<Response> {
+  return Promise.resolve({
+    ok: true,
+    status: 200,
+    headers: { get: () => contentType },
+    json: () => Promise.resolve({}),
+    arrayBuffer: () => Promise.resolve(bytes),
+    text: () => Promise.resolve(''),
+  } as unknown as Response);
+}
+
+const CLEAR_PHOTO_CODES = [
+  'AVATAR_PERSON_NOT_SINGLE',
+  'AVATAR_FACE_NOT_VISIBLE',
+  'AVATAR_BODY_NOT_VISIBLE',
+  'AVATAR_TOO_BLURRED',
+  'AVATAR_TOO_DARK',
+  'AVATAR_RESOLUTION_INSUFFICIENT',
+  'AVATAR_ASPECT_RATIO',
+] as const;
+
 function requestUrl(input: RequestInfo | URL): string {
   if (typeof input === 'string') {
     return input;
@@ -175,5 +201,112 @@ describe('MyModelScreen', () => {
     expect(screen.queryByLabelText('My Model preview')).toBeNull();
     expect(screen.getByRole('button', { name: 'Take photo' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Choose photo' })).toBeTruthy();
+  });
+
+  test.each(CLEAR_PHOTO_CODES)(
+    'semantic 422 code %s displays clearer photo copy with polite live region and no sensitive leaks',
+    async code => {
+      takePhotoMock.mockResolvedValue({ uri: 'file:///photo.jpg' });
+      fetchMock.mockImplementation((input, init) => {
+        const url = requestUrl(input);
+        const method = (init?.method ?? 'GET').toUpperCase();
+        if (url.endsWith('/avatars') && method === 'GET') {
+          return jsonResponse(200, []);
+        }
+        if (url === 'file:///photo.jpg') {
+          return bytesResponse(JPEG_BYTES, 'image/jpeg');
+        }
+        if (url.includes('/uploads') && method === 'POST') {
+          if (url.includes('/complete')) {
+            return jsonResponse(200, { id: 'up-1', status: 'READY' });
+          }
+          return jsonResponse(200, {
+            id: 'up-1',
+            method: 'PUT',
+            url: 'https://upload.invalid/1',
+            headers: { 'Content-Type': 'image/jpeg' },
+            expiresAt: '2026-08-23T12:00:00Z',
+          });
+        }
+        if (url === 'https://upload.invalid/1' && method === 'PUT') {
+          return emptyResponse(200);
+        }
+        if (url.endsWith('/avatars') && method === 'POST') {
+          return jsonResponse(422, { code });
+        }
+        throw new Error(`unexpected fetch ${method} ${url}`);
+      });
+      await render(<MyModelScreen />);
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: 'Take photo' })).toBeTruthy();
+      });
+
+      await act(async () => {
+        fireEvent.press(screen.getByRole('button', { name: 'Take photo' }));
+      });
+
+      const notice = await screen.findByText(
+        'We need a clearer full-body photo to create an accurate preview.',
+      );
+      expect(notice).toBeTruthy();
+      expect(notice.props.accessibilityLiveRegion).toBe('polite');
+      expect(screen.queryByText(code)).toBeNull();
+      expect(screen.queryByText(/https?:\/\//)).toBeNull();
+      expect(screen.queryByText(/photo\.jpg/)).toBeNull();
+    },
+  );
+
+  test('avatar preflight unavailable 503 retains generic error notice', async () => {
+    takePhotoMock.mockResolvedValue({ uri: 'file:///photo.jpg' });
+    fetchMock.mockImplementation((input, init) => {
+      const url = requestUrl(input);
+      const method = (init?.method ?? 'GET').toUpperCase();
+      if (url.endsWith('/avatars') && method === 'GET') {
+        return jsonResponse(200, []);
+      }
+      if (url === 'file:///photo.jpg') {
+        return bytesResponse(JPEG_BYTES, 'image/jpeg');
+      }
+      if (url.includes('/uploads') && method === 'POST') {
+        if (url.includes('/complete')) {
+          return jsonResponse(200, { id: 'up-1', status: 'READY' });
+        }
+        return jsonResponse(200, {
+          id: 'up-1',
+          method: 'PUT',
+          url: 'https://upload.invalid/1',
+          headers: { 'Content-Type': 'image/jpeg' },
+          expiresAt: '2026-08-23T12:00:00Z',
+        });
+      }
+      if (url === 'https://upload.invalid/1' && method === 'PUT') {
+        return emptyResponse(200);
+      }
+      if (url.endsWith('/avatars') && method === 'POST') {
+        return jsonResponse(503, { code: 'AVATAR_PREFLIGHT_UNAVAILABLE' });
+      }
+      throw new Error(`unexpected fetch ${method} ${url}`);
+    });
+    await render(<MyModelScreen />);
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Take photo' })).toBeTruthy();
+    });
+
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Take photo' }));
+    });
+
+    const notice = await screen.findByText(
+      'Could not save My Model. Try another photo.',
+    );
+    expect(notice).toBeTruthy();
+    expect(notice.props.accessibilityLiveRegion).toBe('polite');
+    expect(
+      screen.queryByText(
+        'We need a clearer full-body photo to create an accurate preview.',
+      ),
+    ).toBeNull();
+    expect(screen.queryByText('AVATAR_PREFLIGHT_UNAVAILABLE')).toBeNull();
+    expect(screen.queryByText(/https?:\/\//)).toBeNull();
   });
 });
