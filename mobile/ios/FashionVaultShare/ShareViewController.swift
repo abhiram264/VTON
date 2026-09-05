@@ -18,22 +18,6 @@ final class ShareViewController: UIViewController {
 
 	// MARK: Handoff constants (frozen seams)
 
-	private enum HandoffAction: String {
-		case tryWithMyModel = "try_with_my_model"
-		case addToVault = "add_to_vault"
-	}
-
-	private enum RecordKind: String {
-		case url
-		case image
-		case imageURL = "image_url"
-	}
-
-	private enum HandoffError: Error {
-		case storageUnavailable
-		case imageRejected
-		case invalidRecord
-	}
 
 	// MARK: Bounds (spec: item count, metadata length, byte size, time)
 
@@ -328,27 +312,8 @@ final class ShareViewController: UIViewController {
 	private static func writeHandoffRecord(
 		shareId: String, action: HandoffAction, kind: RecordKind, url: String?, stagedFile: String?
 	) throws {
-		guard let defaults = UserDefaults(suiteName: appGroupID) else {
-			throw HandoffError.storageUnavailable
-		}
-		var record: [String: Any] = [
-			"schemaVersion": 1,
-			"shareId": shareId,
-			"kind": kind.rawValue,
-			"action": action.rawValue,
-			"createdAt": Int(Date().timeIntervalSince1970),
-			"expiresAt": Int(Date().timeIntervalSince1970 + recordTTLSeconds),
-		]
-		if let url { record["url"] = url }
-		if let stagedFile { record["stagedFile"] = stagedFile }
-		// sourcePackage: iOS share extensions cannot observe the source app bundle ID;
-		// omitted rather than guessed.
-
-		guard JSONSerialization.isValidJSONObject(record),
-			let data = try? JSONSerialization.data(withJSONObject: record)
-		else { throw HandoffError.invalidRecord }
-		defaults.set(data, forKey: recordKeyPrefix + shareId)
-		// Durable write before completeRequest: the extension process dies right after.
-		_ = defaults.synchronize()
+		try HandoffRecord.writeHandoffRecord(
+			shareId: shareId, action: action, kind: kind, url: url, stagedFile: stagedFile
+		)
 	}
 }

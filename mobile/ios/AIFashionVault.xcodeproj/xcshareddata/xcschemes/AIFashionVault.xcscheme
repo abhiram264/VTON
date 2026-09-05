@@ -38,6 +38,16 @@
                ReferencedContainer = "container:AIFashionVault.xcodeproj">
             </BuildableReference>
          </TestableReference>
+         <TestableReference
+            skipped = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "761781352CA45674006654EE"
+               BuildableName = "FashionVaultShareTests.xctest"
+               BlueprintName = "FashionVaultShareTests"
+               ReferencedContainer = "container:AIFashionVault.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
       </Testables>
    </TestAction>
    <LaunchAction
