@@ -585,6 +585,11 @@ describe('ShareImportScreen flow', () => {
       <ShareImportScreen payload={{ kind: 'url', url: SOURCE_URL }} api={api()} />,
     );
     expect(await view.findByText('Add a photo to continue')).toBeTruthy();
+    const body = view.getByText(
+      "We found the product link, but couldn't reliably extract the item image.",
+    );
+    expect(body).toBeTruthy();
+    expect(body.props.accessibilityLiveRegion).toBe('polite');
     expect(view.getByText('Choose Screenshot')).toBeTruthy();
     expect(view.getByText('Upload Image')).toBeTruthy();
     expect(view.queryByText('Try Again')).toBeNull();

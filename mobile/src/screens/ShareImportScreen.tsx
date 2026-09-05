@@ -13,6 +13,11 @@ import {apiConfig, type ShareImportApiConfig} from './share-import/apiConfig';
 import {attachRecoveryImage} from './share-import/recoveryClient';
 import type {SharePayload} from '../features/share/types';
 import type {LocalPhoto} from '../features/my-model/types';
+import {
+  ACTION_CHOOSE_SCREENSHOT,
+  ACTION_UPLOAD_IMAGE,
+  EXTRACTION_FAILURE_BODY,
+} from '../features/generation/failureContract';
 
 // Screen flow states are the frozen response statuses plus the transient
 // lease-exhausted view (bounded backoff spent inside the client; after the
@@ -222,9 +227,8 @@ export default function ShareImportScreen({
       {state.view === 'NEEDS_IMAGE' ? (
         <>
           <Text style={styles.title}>Add a photo to continue</Text>
-          <Text style={styles.body}>
-            We could not read an image from this share. Choose a screenshot or
-            another image of the item.
+          <Text accessibilityLiveRegion="polite" style={styles.body}>
+            {EXTRACTION_FAILURE_BODY}
           </Text>
           <View style={styles.actions}>
             <Pressable
@@ -233,7 +237,7 @@ export default function ShareImportScreen({
               onPress={() => recover('CHOOSE_SCREENSHOT')}
               style={[styles.button, styles.primary, busy && styles.disabled]}
             >
-              <Text style={styles.primaryLabel}>Choose Screenshot</Text>
+              <Text style={styles.primaryLabel}>{ACTION_CHOOSE_SCREENSHOT}</Text>
             </Pressable>
             <Pressable
               accessibilityRole="button"
@@ -241,7 +245,7 @@ export default function ShareImportScreen({
               onPress={() => recover('UPLOAD_IMAGE')}
               style={[styles.button, styles.secondary, busy && styles.disabled]}
             >
-              <Text style={styles.secondaryLabel}>Upload Image</Text>
+              <Text style={styles.secondaryLabel}>{ACTION_UPLOAD_IMAGE}</Text>
             </Pressable>
           </View>
         </>

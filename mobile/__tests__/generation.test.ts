@@ -8,6 +8,10 @@ import {
   clearActiveGeneration,
   getActiveGeneration,
 } from '../src/features/generation/activeGeneration';
+import {
+  classifyGenerationFailure,
+  OUTAGE_FAILURE_CODES,
+} from '../src/features/generation/failureContract';
 
 const BASE_URL = 'https://api.example.invalid';
 const SIGNED_URL =
@@ -527,6 +531,84 @@ describe('createLook', () => {
 
     expect(result).toEqual({ outcome: 'failed', reason: 'error' });
   });
+  test('uncoded fetch network rejection sets networkLevel truthful origin signal', async () => {
+    fetchMock.mockImplementation((input, init) => {
+      const url = requestUrl(input);
+      const method = (init?.method ?? 'GET').toUpperCase();
+      if (url === LOCAL_URI) {
+        return bytesResponse(PNG_BYTES, 'image/png');
+      }
+      if (url === `${BASE_URL}/uploads` && method === 'POST') {
+        return Promise.reject(new TypeError('Network request failed'));
+      }
+      throw new Error(`unexpected fetch ${method} ${url}`);
+    });
+
+    const result = await createLook({
+      picker: PRODUCT_PICKER,
+      upload: upload(),
+      api: api(),
+    });
+
+    expect(result).toEqual({
+      outcome: 'failed',
+      reason: 'error',
+      networkLevel: true,
+    });
+  });
+
+  test('retained photo input bypasses picker and proceeds with upload and generation', async () => {
+    const pickerMock = jest.fn();
+    fetchMock.mockImplementation((input, init) => {
+      const url = requestUrl(input);
+      const method = (init?.method ?? 'GET').toUpperCase();
+      if (url === LOCAL_URI) {
+        return bytesResponse(PNG_BYTES, 'image/png');
+      }
+      if (url === `${BASE_URL}/uploads` && method === 'POST') {
+        return jsonResponse(200, {
+          id: UPLOAD_ID,
+          method: 'PUT',
+          url: SIGNED_URL,
+          headers: { 'Content-Type': 'image/png', 'Content-Length': '4' },
+          expiresAt: '2026-08-23T12:00:00Z',
+        });
+      }
+      if (url === SIGNED_URL && method === 'PUT') {
+        return emptyResponse(200);
+      }
+      if (url === `${BASE_URL}/uploads/${UPLOAD_ID}/complete` && method === 'POST') {
+        return jsonResponse(200, { id: UPLOAD_ID, status: 'READY' });
+      }
+      if (url === `${BASE_URL}/generations` && method === 'POST') {
+        return jsonResponse(202, generationResource());
+      }
+      if (url === `${BASE_URL}/generations/${GENERATION_ID}`) {
+        return jsonResponse(
+          200,
+          generationResource({ status: 'COMPLETED', phase: 'READY', lookId: LOOK_ID }),
+        );
+      }
+      if (url === `${BASE_URL}/looks/${LOOK_ID}`) {
+        return jsonResponse(
+          200,
+          lookResource('https://signed.example.invalid/read?token=a'),
+        );
+      }
+      throw new Error(`unexpected fetch ${method} ${url}`);
+    });
+
+    const result = await createLook({
+      picker: pickerMock,
+      upload: upload(),
+      api: api(),
+      delay: noDelay,
+      photo: { uri: LOCAL_URI },
+    });
+
+    expect(result).toEqual({ outcome: 'ready', lookId: LOOK_ID });
+    expect(pickerMock).not.toHaveBeenCalled();
+  });
 });
 
 describe('generationApi', () => {
@@ -560,5 +642,48 @@ describe('generationApi', () => {
     await expect(api.get(GENERATION_ID)).rejects.toThrow(
       'Unknown generation status',
     );
+  });
+});
+
+describe('classifyGenerationFailure', () => {
+  test.each(OUTAGE_FAILURE_CODES)(
+    'maps outage code %s to OUTAGE when networkLevel is false',
+    code => {
+      expect(classifyGenerationFailure(code, false)).toBe('OUTAGE');
+    },
+  );
+
+  test('maps network-level failures to OUTAGE with precedence over codes', () => {
+    expect(classifyGenerationFailure(undefined, true)).toBe('OUTAGE');
+    expect(classifyGenerationFailure('UNKNOWN_CODE', true)).toBe('OUTAGE');
+    expect(classifyGenerationFailure('QUALITY_REJECTED', true)).toBe('OUTAGE');
+    expect(classifyGenerationFailure('MY_MODEL_MISSING', true)).toBe('OUTAGE');
+  });
+
+  test('maps QUALITY_REJECTED to QUALITY', () => {
+    expect(classifyGenerationFailure('QUALITY_REJECTED', false)).toBe('QUALITY');
+  });
+
+  test('maps MY_MODEL_MISSING to MODEL_MISSING', () => {
+    expect(classifyGenerationFailure('MY_MODEL_MISSING', false)).toBe(
+      'MODEL_MISSING',
+    );
+  });
+
+  test.each([
+    'RATE_LIMITED',
+    'RATE_LIMIT',
+    'PROVIDER_RATE_LIMIT_EXHAUSTED',
+    'PROVIDER_RATE_LIMIT',
+    'TOO_MANY_REQUESTS',
+    '429',
+  ])('maps rate limit code %s to RATE_LIMITED', code => {
+    expect(classifyGenerationFailure(code, false)).toBe('RATE_LIMITED');
+  });
+
+  test('maps unknown codes and undefined to GENERIC', () => {
+    expect(classifyGenerationFailure('UNKNOWN_ERROR', false)).toBe('GENERIC');
+    expect(classifyGenerationFailure('FOO_BAR', false)).toBe('GENERIC');
+    expect(classifyGenerationFailure(undefined, false)).toBe('GENERIC');
   });
 });

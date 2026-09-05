@@ -1,5 +1,10 @@
 import { useEffect, useState } from 'react';
 import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import {
+  AVATAR_CLEAR_PHOTO_CODES,
+  AVATAR_FAILURE_BODY,
+} from '../features/generation/failureContract';
+import { ApiProblemError } from '../features/my-model/http';
 import { avatarApi } from '../features/my-model/avatarApi';
 import {
   choosePhoto,
@@ -53,8 +58,15 @@ export default function MyModelScreen({
         : await avatarApi.create(photo);
       setAvatar(next);
       setPicking(false);
-    } catch {
-      setNotice('Could not save My Model. Try another photo.');
+    } catch (error) {
+      if (
+        error instanceof ApiProblemError &&
+        AVATAR_CLEAR_PHOTO_CODES.has(error.code)
+      ) {
+        setNotice(AVATAR_FAILURE_BODY);
+      } else {
+        setNotice('Could not save My Model. Try another photo.');
+      }
     } finally {
       setBusy(false);
     }
@@ -118,7 +130,11 @@ export default function MyModelScreen({
               },
             ]}
           />
-          {notice ? <Text style={styles.notice}>{notice}</Text> : null}
+          {notice ? (
+            <Text accessibilityLiveRegion="polite" style={styles.notice}>
+              {notice}
+            </Text>
+          ) : null}
           <View style={styles.actions}>
             {picking ? (
               <>
@@ -188,7 +204,11 @@ export default function MyModelScreen({
               This photo is stored privately as your My Model until you replace
               or delete it.
             </Text>
-            {notice ? <Text style={styles.notice}>{notice}</Text> : null}
+            {notice ? (
+              <Text accessibilityLiveRegion="polite" style={styles.notice}>
+                {notice}
+              </Text>
+            ) : null}
           </View>
           <View style={styles.actions}>
             <Pressable
