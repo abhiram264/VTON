@@ -27,7 +27,7 @@ export type ShareImportFlowState =
   | {view: 'RESOLVING'}
   | {view: 'READY'}
   | {view: 'NEEDS_IMAGE'; importId: string}
-  | {view: 'FAILED_RETRYABLE'}
+  | {view: 'FAILED_RETRYABLE'; reason?: 'DEPENDENCY_UNAVAILABLE' | 'RESOLUTION_TIMEOUT'; importId?: string}
   | {view: 'FAILED_TERMINAL'}
   | {view: 'LEASE_EXPIRED'};
 
@@ -60,7 +60,7 @@ function toFlowState(response: ShareImportResponse): ShareImportFlowState {
     case 'NEEDS_IMAGE':
       return {view: 'NEEDS_IMAGE', importId: response.importId};
     case 'FAILED_RETRYABLE':
-      return {view: 'FAILED_RETRYABLE'};
+      return {view: 'FAILED_RETRYABLE', reason: response.reason, importId: response.importId};
     case 'FAILED_TERMINAL':
       return {view: 'FAILED_TERMINAL'};
     case 'RESOLVING':
@@ -163,7 +163,13 @@ export default function ShareImportScreen({
 
   const recover = useCallback(
     async (source: 'CHOOSE_SCREENSHOT' | 'UPLOAD_IMAGE') => {
-      if (busy || state.view !== 'NEEDS_IMAGE') {
+      const importId =
+        state.view === 'NEEDS_IMAGE'
+          ? state.importId
+          : state.view === 'FAILED_RETRYABLE' && state.reason === 'DEPENDENCY_UNAVAILABLE'
+          ? state.importId
+          : undefined;
+      if (busy || !importId) {
         return;
       }
       let photo: LocalPhoto | null = null;
@@ -187,7 +193,7 @@ export default function ShareImportScreen({
       try {
         const result = await attachRecoveryImage(
           api,
-          state.importId,
+          importId,
           photo,
           controller.signal,
         );
@@ -263,6 +269,27 @@ export default function ShareImportScreen({
             >
               <Text style={styles.primaryLabel}>Try Again</Text>
             </Pressable>
+            {state.view === 'FAILED_RETRYABLE' &&
+            state.reason === 'DEPENDENCY_UNAVAILABLE' ? (
+              <>
+                <Pressable
+                  accessibilityRole="button"
+                  disabled={busy}
+                  onPress={() => recover('CHOOSE_SCREENSHOT')}
+                  style={[styles.button, styles.primary, busy && styles.disabled]}
+                >
+                  <Text style={styles.primaryLabel}>{ACTION_CHOOSE_SCREENSHOT}</Text>
+                </Pressable>
+                <Pressable
+                  accessibilityRole="button"
+                  disabled={busy}
+                  onPress={() => recover('UPLOAD_IMAGE')}
+                  style={[styles.button, styles.secondary, busy && styles.disabled]}
+                >
+                  <Text style={styles.secondaryLabel}>{ACTION_UPLOAD_IMAGE}</Text>
+                </Pressable>
+              </>
+            ) : null}
           </View>
         </>
       ) : null}

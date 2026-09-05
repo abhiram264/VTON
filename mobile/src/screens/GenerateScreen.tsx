@@ -7,6 +7,7 @@ import { generationApi } from '../features/generation/generationApi';
 import { productUploader } from '../features/generation/productUpload';
 import type {
   CoarseGenerationPhase,
+  GenerationApi,
   ProductPicker,
 } from '../features/generation/types';
 import {
@@ -15,10 +16,13 @@ import {
   OUTAGE_BODY,
   OUTAGE_TITLE,
   QUALITY_FAILURE_BODY,
-  classifyGenerationFailure,
+  isProviderOutage,
 } from '../features/generation/failureContract';
 import type { LocalPhoto } from '../features/my-model/types';
 import { vaultApi } from '../features/vault/vaultApi';
+import { saveToVaultFallback } from '../features/vault/vaultFallback';
+import type { ShareImportResolver } from '../features/share/importTypes';
+import type { SharePayload } from '../features/share/types';
 
 const PHASE_LABELS: Record<CoarseGenerationPhase, string> = {
   QUEUED: 'Queued',
@@ -40,6 +44,8 @@ type Props = {
   onCreateLook?: (lookId: string) => void;
   onMissingModel?: () => void;
   vault?: typeof vaultApi;
+  api?: GenerationApi;
+  importer?: ShareImportResolver;
 };
 
 export default function GenerateScreen({
@@ -47,6 +53,8 @@ export default function GenerateScreen({
   onCreateLook,
   onMissingModel,
   vault = vaultApi,
+  api = generationApi,
+  importer,
 }: Props = {}) {
   const [busy, setBusy] = useState(false);
   const [phase, setPhase] = useState<CoarseGenerationPhase | null>(null);
@@ -79,7 +87,7 @@ export default function GenerateScreen({
             return photo;
           },
           upload: productUploader,
-          api: generationApi,
+          api,
           onUpdate: generation => setPhase(generation.phase),
           photo: retryPhoto,
         });
@@ -112,22 +120,41 @@ export default function GenerateScreen({
         );
         return;
       }
-      const failureClass = classifyGenerationFailure(
-        result.code,
-        result.reason === 'error' && Boolean(result.networkLevel),
-      );
-      if (failureClass === 'QUALITY') {
+      if (result.code === 'QUALITY_REJECTED') {
         setIsQualityFailure(true);
         return;
       }
-      if (failureClass === 'OUTAGE') {
+      const isOutage = isProviderOutage(
+        result.code,
+        result.reason === 'error' && Boolean(result.networkLevel),
+      );
+      if (isOutage) {
         setOutageState('pending');
         const photoToSave = pickedPhoto ?? retainedPhoto;
         if (photoToSave) {
-          try {
-            await vault.createFromPhoto(photoToSave);
+          const effectiveImporter: ShareImportResolver =
+            importer ??
+            (async (payload: SharePayload) => {
+              if (payload.kind === 'image') {
+                const item = await vault.createFromPhoto({
+                  uri: payload.localImageUri,
+                });
+                return { status: 'READY', importId: item.id };
+              }
+              return {
+                status: 'FAILED_TERMINAL',
+                importId: '',
+                reason: 'INVALID_SOURCE',
+              };
+            });
+
+          const outcome = await saveToVaultFallback({
+            photo: photoToSave,
+            importer: effectiveImporter,
+          });
+          if (outcome.outcome === 'saved') {
             setOutageState('saved');
-          } catch {
+          } else {
             setOutageState('save_failed');
           }
         } else {

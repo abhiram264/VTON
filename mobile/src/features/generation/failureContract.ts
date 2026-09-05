@@ -19,6 +19,19 @@ export type GenerationFailureClass =
   | 'RATE_LIMITED'
   | 'GENERIC';
 
+export const PROVIDER_OUTAGE_TRIGGER_CODES: readonly string[] = [
+  'PROVIDER_UNAVAILABLE',
+  'PROVIDER_RATE_LIMIT_EXHAUSTED',
+  'PROVIDER_TIMEOUT_EXHAUSTED',
+  'PROVIDER_QUOTA_EXHAUSTED',
+  'NO_ELIGIBLE_PROVIDER',
+  'RETRY_BUDGET_EXHAUSTED',
+];
+
+const PROVIDER_OUTAGE_TRIGGER_SET: ReadonlySet<string> = new Set(
+  PROVIDER_OUTAGE_TRIGGER_CODES,
+);
+
 export const OUTAGE_FAILURE_CODES: readonly string[] = [
   'PROVIDER_UNAVAILABLE',
   'PROVIDER_EXECUTION_FAILED',
@@ -64,6 +77,19 @@ export function classifyGenerationFailure(
     return 'RATE_LIMITED';
   }
   return 'GENERIC';
+}
+
+export function isProviderOutage(
+  code: string | undefined,
+  networkLevel: boolean,
+): boolean {
+  if (networkLevel) {
+    return true;
+  }
+  if (!code) {
+    return false;
+  }
+  return PROVIDER_OUTAGE_TRIGGER_SET.has(code);
 }
 
 export const AVATAR_CLEAR_PHOTO_CODES: ReadonlySet<string> = new Set([

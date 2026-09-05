@@ -12,7 +12,7 @@ import {
   OUTAGE_BODY,
   OUTAGE_TITLE,
   QUALITY_FAILURE_BODY,
-  OUTAGE_FAILURE_CODES,
+  PROVIDER_OUTAGE_TRIGGER_CODES,
 } from '../src/features/generation/failureContract';
 import type { LocalPhoto } from '../src/features/my-model/types';
 import type { VaultItemSummary } from '../src/features/vault/vaultApi';
@@ -458,7 +458,7 @@ describe('GenerateScreen', () => {
     expect(screen.queryByText(/https?:\/\//)).toBeNull();
   });
 
-  test('create-time ADMISSION_PAUSED 503 triggers outage flow with Vault persist', async () => {
+  test('create-time ADMISSION_PAUSED 503 produces generic notice without outage or Vault persist', async () => {
     const picker = jest.fn().mockResolvedValue(PHOTO_A);
     const vaultSave = jest.fn().mockResolvedValue({
       id: 'vault-1',
@@ -483,12 +483,16 @@ describe('GenerateScreen', () => {
       );
     });
 
-    expect(await screen.findByText(OUTAGE_TITLE)).toBeTruthy();
-    expect(screen.getByText(OUTAGE_BODY)).toBeTruthy();
-    expect(vaultSave).toHaveBeenCalledWith(PHOTO_A);
-    expect(
-      screen.queryByText('Could not create the look. Try again.'),
-    ).toBeNull();
+    const notice = await screen.findByText(
+      'Could not create the look. Try again.',
+    );
+    expect(notice).toBeTruthy();
+    expect(notice.props.accessibilityLiveRegion).toBe('polite');
+    expect(screen.queryByText(OUTAGE_TITLE)).toBeNull();
+    expect(screen.queryByText(OUTAGE_BODY)).toBeNull();
+    expect(vaultSave).not.toHaveBeenCalled();
+    expect(screen.queryByText('ADMISSION_PAUSED')).toBeNull();
+    expect(screen.queryByText(/product-a\.png/)).toBeNull();
   });
 
   test('uncoded network failure during generation triggers outage flow with Vault persist', async () => {
@@ -544,7 +548,7 @@ describe('GenerateScreen', () => {
     ).toBeNull();
   });
 
-  test.each(OUTAGE_FAILURE_CODES)(
+  test.each(PROVIDER_OUTAGE_TRIGGER_CODES)(
     'terminal outage failureCode %s triggers outage view',
     async failureCode => {
       const picker = jest.fn().mockResolvedValue(PHOTO_A);
@@ -579,6 +583,62 @@ describe('GenerateScreen', () => {
 
       expect(await screen.findByText(OUTAGE_TITLE)).toBeTruthy();
       expect(screen.getByText(OUTAGE_BODY)).toBeTruthy();
+      expect(vaultSave).toHaveBeenCalledWith(PHOTO_A);
+      expect(screen.queryByText(failureCode)).toBeNull();
+    },
+  );
+
+  test.each([
+    'PROVIDER_EXECUTION_FAILED',
+    'PROVIDER_EXECUTION_DEADLINE',
+    'PROVIDER_INDETERMINATE',
+    'SUBMISSION_OUTCOME_UNKNOWN',
+    'SUBMISSION_RECOVERY_DEADLINE',
+    'UNSAFE_REPLAY_BLOCKED',
+    'PROVIDER_OUTPUT_INVALID',
+    'ORCHESTRATION_DEADLINE_EXCEEDED',
+    'ADMISSION_PAUSED',
+  ])(
+    'legacy outage failureCode %s produces generic notice without outage view or Vault save',
+    async failureCode => {
+      const picker = jest.fn().mockResolvedValue(PHOTO_A);
+      const vaultSave = jest.fn().mockResolvedValue({ id: 'v-1' } as VaultItemSummary);
+
+      fetchMock.mockImplementation(
+        mockGenerationFetch({
+          pollResponse: () =>
+            jsonResponse(200, {
+              id: 'gen-1',
+              status: 'FAILED',
+              phase: 'FAILED',
+              failureCode,
+              statusVersion: 1,
+              createdAt: '2026-08-23T12:00:00Z',
+              updatedAt: '2026-08-23T12:00:00Z',
+            }),
+        }),
+      );
+
+      await render(
+        <GenerateScreen
+          picker={picker}
+          vault={{ createFromPhoto: vaultSave } as unknown as typeof import('../src/features/vault/vaultApi').vaultApi}
+        />,
+      );
+      await act(async () => {
+        fireEvent.press(
+          screen.getByRole('button', { name: 'Choose product photo' }),
+        );
+      });
+
+      const notice = await screen.findByText(
+        'Could not create the look. Try again.',
+      );
+      expect(notice).toBeTruthy();
+      expect(notice.props.accessibilityLiveRegion).toBe('polite');
+      expect(screen.queryByText(OUTAGE_TITLE)).toBeNull();
+      expect(screen.queryByText(OUTAGE_BODY)).toBeNull();
+      expect(vaultSave).not.toHaveBeenCalled();
       expect(screen.queryByText(failureCode)).toBeNull();
     },
   );
