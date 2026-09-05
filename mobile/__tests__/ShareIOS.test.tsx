@@ -93,7 +93,7 @@ describe('iOS share-import flag gate', () => {
     expect(flagSpy).toHaveBeenCalledWith('SHARE_IMPORT_IOS');
     expect(consumeShareMock()).not.toHaveBeenCalled();
     expect(screen.queryByText('Preparing shared item')).toBeNull();
-    expect(screen.getByText('Application ready')).toBeTruthy();
+    expect(screen.getByText('Home')).toBeTruthy();
 
     flagSpy.mockRestore();
   });
@@ -111,7 +111,7 @@ describe('iOS share-import flag gate', () => {
 
     expect(flagSpy).toHaveBeenCalledWith('SHARE_IMPORT_IOS');
     expect(consumeShareMock()).not.toHaveBeenCalled();
-    expect(screen.getByText('Application ready')).toBeTruthy();
+    expect(screen.getByText('Home')).toBeTruthy();
 
     flagSpy.mockRestore();
   });
@@ -200,7 +200,7 @@ describe('iOS look deep link handling', () => {
     await flush();
 
     expect(screen.queryByText('Look')).toBeNull();
-    expect(screen.getByText('Application ready')).toBeTruthy();
+    expect(screen.getByText('Home')).toBeTruthy();
     expect(getLook).not.toHaveBeenCalled();
     expect(consumeShareMock()).not.toHaveBeenCalled();
 

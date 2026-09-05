@@ -268,7 +268,7 @@ describe('share handoff routing', () => {
 
     expect(consumeShareMock()).not.toHaveBeenCalled();
     expect(screen.queryByText('Preparing shared item')).toBeNull();
-    expect(screen.getByText('Application ready')).toBeTruthy();
+    expect(screen.getByText('Home')).toBeTruthy();
   });
 
   test('a payload violating its kind-specific shape at the bridge boundary never navigates', async () => {
@@ -287,7 +287,7 @@ describe('share handoff routing', () => {
 
     expect(consumeShareMock()).toHaveBeenCalledTimes(1);
     expect(screen.queryByText('Preparing shared item')).toBeNull();
-    expect(screen.getByText('Application ready')).toBeTruthy();
+    expect(screen.getByText('Home')).toBeTruthy();
   });
 
   test('a typed consume failure stays on the current screen without reconstructing or replaying data', async () => {
@@ -300,7 +300,7 @@ describe('share handoff routing', () => {
     await flush();
 
     expect(screen.queryByText('Preparing shared item')).toBeNull();
-    expect(screen.getByText('Application ready')).toBeTruthy();
+    expect(screen.getByText('Home')).toBeTruthy();
   });
 
   test('every typed consume failure code never navigates and is never replayed', async () => {
@@ -320,7 +320,7 @@ describe('share handoff routing', () => {
       await flush();
 
       expect(screen.queryByText('Preparing shared item')).toBeNull();
-      expect(screen.getByText('Application ready')).toBeTruthy();
+      expect(screen.getByText('Home')).toBeTruthy();
     }
 
     // Each id was consumed exactly once: a typed failure is final, so the
