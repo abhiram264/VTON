@@ -12,6 +12,7 @@ import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.access.intercept.AuthorizationFilter;
 import org.springframework.security.web.authentication.HttpStatusEntryPoint;
 
+import com.aifashionvault.platform.web.RequestIdFilter;
 import com.aifashionvault.user.IdentityProvisioning;
 
 @Configuration(proxyBeanMethods = false)
@@ -37,6 +38,7 @@ public class SecurityConfiguration {
 			.authorizeHttpRequests(authorize -> authorize
 				.requestMatchers(HttpMethod.GET, "/actuator/health").permitAll()
 				.anyRequest().authenticated())
+			.addFilterBefore(new RequestIdFilter(), AuthorizationFilter.class)
 			.addFilterBefore(filter, AuthorizationFilter.class);
 		return http.build();
 	}

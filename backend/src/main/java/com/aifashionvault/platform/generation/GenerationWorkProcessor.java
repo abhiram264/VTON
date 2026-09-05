@@ -18,7 +18,8 @@ import java.util.function.DoubleSupplier;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
+import org.slf4j.MDC;
+import com.aifashionvault.platform.logging.LoggingPolicy;
 import com.aifashionvault.admission.GlobalCostCircuitBreaker;
 import com.aifashionvault.admission.ProviderExecutionBudgetRequest;
 import com.aifashionvault.generation.CallbackInbox;
@@ -199,12 +200,19 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 		if (lease == null) {
 			throw new IllegalArgumentException("lease is required");
 		}
+
 		ScheduledExecutorService heartbeat = Executors.newSingleThreadScheduledExecutor(task -> {
 			Thread thread = new Thread(task, "generation-work-heartbeat");
 			thread.setDaemon(true);
 			return thread;
 		});
 		try {
+			MDC.put(LoggingPolicy.KEY_GENERATION_ID, lease.generationJobId().toString());
+			MDC.remove(LoggingPolicy.KEY_PROVIDER);
+			MDC.remove(LoggingPolicy.KEY_STATUS);
+			MDC.remove(LoggingPolicy.KEY_LATENCY_MS);
+			MDC.remove(LoggingPolicy.KEY_ERROR_CODE);
+
 			extendVisibility(lease);
 			heartbeat.scheduleAtFixedRate(
 				() -> extendVisibility(lease),
@@ -215,6 +223,50 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 		}
 		finally {
 			heartbeat.shutdownNow();
+			MDC.remove(LoggingPolicy.KEY_GENERATION_ID);
+			MDC.remove(LoggingPolicy.KEY_PROVIDER);
+			MDC.remove(LoggingPolicy.KEY_STATUS);
+			MDC.remove(LoggingPolicy.KEY_LATENCY_MS);
+			MDC.remove(LoggingPolicy.KEY_ERROR_CODE);
+		}
+	}
+
+	private static void enrichWorkerScope(GenerationAttempt attempt, VtonProvider active, GenerationJob job) {
+		if (active != null && active.providerKey() != null && active.providerKey().value() != null) {
+			MDC.put(LoggingPolicy.KEY_PROVIDER, active.providerKey().value());
+		}
+		else if (attempt != null && attempt.provider() != null && !attempt.provider().isBlank()) {
+			MDC.put(LoggingPolicy.KEY_PROVIDER, attempt.provider());
+		}
+
+		if (attempt != null && attempt.technicalOutcome() != null && !attempt.technicalOutcome().isBlank()) {
+			MDC.put(LoggingPolicy.KEY_STATUS, attempt.technicalOutcome());
+		}
+		else if (job != null && job.status() != null && !job.status().isBlank()) {
+			MDC.put(LoggingPolicy.KEY_STATUS, job.status());
+		}
+
+		if (attempt != null && attempt.latencyMs() != null && attempt.latencyMs() >= 0) {
+			MDC.put(LoggingPolicy.KEY_LATENCY_MS, String.valueOf(attempt.latencyMs()));
+		}
+
+		if (attempt != null && attempt.failureCode() != null && !attempt.failureCode().isBlank()) {
+			MDC.put(LoggingPolicy.KEY_ERROR_CODE, attempt.failureCode());
+		}
+	}
+
+	private static void enrichWorkerScope(String provider, String status, Integer latencyMs, String errorCode) {
+		if (provider != null && !provider.isBlank()) {
+			MDC.put(LoggingPolicy.KEY_PROVIDER, provider);
+		}
+		if (status != null && !status.isBlank()) {
+			MDC.put(LoggingPolicy.KEY_STATUS, status);
+		}
+		if (latencyMs != null && latencyMs >= 0) {
+			MDC.put(LoggingPolicy.KEY_LATENCY_MS, String.valueOf(latencyMs));
+		}
+		if (errorCode != null && !errorCode.isBlank()) {
+			MDC.put(LoggingPolicy.KEY_ERROR_CODE, errorCode);
 		}
 	}
 
@@ -236,6 +288,7 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 			&& generationStore.failIfDeadlineExceeded(jobId, now)) {
 			recordDeadlineExpired(job);
 			notifyFailed(job);
+			enrichWorkerScope(null, GenerationJob.FAILED, null, CODE_ORCHESTRATION_DEADLINE);
 			log.info("generation jobId={} code={}", jobId.value(), CODE_ORCHESTRATION_DEADLINE);
 			queue.delete(lease);
 			return;
@@ -405,7 +458,9 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 			return;
 		}
 		VtonProvider active = resolveProvider(attempt);
+		enrichWorkerScope(attempt, active, job);
 		attempt = confirmCallbackCandidate(job, attempt, active);
+		enrichWorkerScope(attempt, active, job);
 		if (attemptDeadlineExceeded(job, attempt, lease)) {
 			return;
 		}
@@ -428,13 +483,13 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 		if (ownedWithoutExecution(attempt) && decision == AttemptRedeliveryPolicy.Decision.SUBMIT) {
 			decision = AttemptRedeliveryPolicy.Decision.REPLAY_SAME_KEY;
 		}
+		enrichWorkerScope(attempt, active, job);
 		log.info(
 			"generation jobId={} attemptId={} provider={} decision={}",
 			jobId.value(),
 			attempt.id().value(),
 			active.providerKey().value(),
 			decision);
-
 		switch (decision) {
 			case STOP -> queue.delete(lease);
 			case BLOCK_UNSAFE_REPLAY -> {
@@ -533,6 +588,7 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 			failTerminal(job, attempt, lease, TerminalReason.INTERNAL_INVARIANT_FAILURE.name(), false);
 			return;
 		}
+		enrichWorkerScope(attempt, active, job);
 		log.info(
 			"generation jobId={} attemptId={} provider={} transfer={}",
 			job.id().value(),
@@ -794,6 +850,7 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
         }
 		QualityEvaluationRequest request = qualityEvaluationRequest(job, attempt, bytes);
 		QualityEvaluationOutcome outcome = qualityGate.evaluate(request);
+		enrichWorkerScope(attempt, resolveProvider(attempt), job);
 		log.info(
 			"generation jobId={} attemptId={} policy={} outcome={}",
 			job.id().value(),
@@ -979,7 +1036,7 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 		notifyReady(job, stored.get());
 		recordCost(job, finished);
 		releaseCapacity(attempt);
-
+		enrichWorkerScope(finished, active, job);
 		log.info(
 			"generation jobId={} attemptId={} provider={} code=LOOK_READY count={}",
 			job.id().value(),
@@ -1329,6 +1386,7 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 		recordLogicalAttempt(true);
 		recordAdditionalBudget(false);
 		recordCost(job, finished);
+		enrichWorkerScope(finished, resolveProvider(finished), job);
 		log.info(
 			"generation jobId={} attemptId={} code={} retryNotBeforeAt={}",
 			job.id().value(),
@@ -1357,6 +1415,7 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 					true);
 				return;
 			}
+			enrichWorkerScope(active.providerKey().value(), attempt.technicalOutcome(), attempt.latencyMs(), CODE_INDETERMINATE);
 			log.info(
 				"generation jobId={} attemptId={} provider={} code=INDETERMINATE_REPLAY_SAFE",
 				job.id().value(),
@@ -1373,6 +1432,7 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 		// enters bounded indeterminate recovery (mark + wait/reconcile); only
 		// the submission recovery deadline terminates this as
 		// SUBMISSION_OUTCOME_INDETERMINATE.
+		enrichWorkerScope(active.providerKey().value(), attempt.technicalOutcome(), attempt.latencyMs(), CODE_INDETERMINATE);
 		log.info(
 			"generation jobId={} attemptId={} provider={} code=INDETERMINATE_RECOVERY_WAIT",
 			job.id().value(),
@@ -1743,6 +1803,7 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 			releaseCapacity(attempt);
 			notifyFailed(job);
 		}
+		enrichWorkerScope(finished, resolveProvider(attempt), job);
 		log.info(
 			"generation jobId={} attemptId={} provider={} code={}",
 			job.id().value(),
@@ -1795,6 +1856,7 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
             completeAttemptAfterSubjectDeletion(job, finished);
         }
         releaseCapacity(attempt);
+        enrichWorkerScope(finished, resolveProvider(attempt), job);
         log.info("generation jobId={} attemptId={} code={}", job.id().value(), attempt.id().value(), failureCode);
         queue.delete(lease);
     }
@@ -2691,6 +2753,7 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 				PROVIDER_CAPACITY_SLOTS);
 		}
 		catch (RuntimeException ex) {
+			enrichWorkerScope(attempt, active, job);
 			log.info("generation jobId={} attemptId={} code=CAPACITY_LEASE_UNAVAILABLE", job.id().value(), attempt.id().value());
 			return false;
 		}

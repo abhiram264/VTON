@@ -2,6 +2,9 @@ package com.aifashionvault.platform.objectstore;
 
 import java.net.URI;
 import java.time.Clock;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import java.util.concurrent.TimeUnit;
 
 import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
@@ -30,7 +33,7 @@ import software.amazon.awssdk.services.s3.presigner.S3Presigner;
 @EnableScheduling
 public class ObjectStoreConfiguration {
 
-	private static final System.Logger LOG = System.getLogger(ObjectStoreConfiguration.class.getName());
+	private static final Logger log = LoggerFactory.getLogger(ObjectStoreConfiguration.class);
 
 	@Bean(destroyMethod = "close")
 	S3Client s3Client(VaultEnvironmentProperties properties) {
@@ -148,7 +151,7 @@ public class ObjectStoreConfiguration {
 			store.cleanupTemp();
 		}
 		catch (RuntimeException ex) {
-			LOG.log(System.Logger.Level.WARNING, "temp object cleanup failed");
+			log.warn("temp object cleanup failed");
 		}
 	}
 
