@@ -8,6 +8,7 @@
     "lint": "eslint .",
     "start": "react-native start",
     "test": "jest",
+    "test:ci": "jest --runInBand",
     "typecheck": "tsc --noEmit",
     "format:check": "prettier --check .",
     "format-fix": "prettier --write ."
