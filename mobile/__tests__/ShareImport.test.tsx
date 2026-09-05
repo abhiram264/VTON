@@ -695,7 +695,7 @@ describe('ShareImportScreen flow', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  test('FAILED_RETRYABLE offers retry, not screenshot; retry re-invokes the resolver', async () => {
+  test('FAILED_RETRYABLE offers retry alongside screenshot and upload recovery for resolver outage; retry re-invokes the resolver', async () => {
     const outcomes: ShareImportResponse[] = [
       {
         importId: IMPORT_ID,
@@ -716,13 +716,33 @@ describe('ShareImportScreen flow', () => {
       />,
     );
     expect(await view.findByText('Try Again')).toBeTruthy();
-    expect(view.queryByText('Choose Screenshot')).toBeNull();
+    expect(await view.findByText('Choose Screenshot')).toBeTruthy();
+    expect(await view.findByText('Upload Image')).toBeTruthy();
 
     fireEvent.press(view.getByText('Try Again'));
     await waitFor(() =>
       expect(view.getByText('Shared item ready')).toBeTruthy(),
     );
     expect(resolver).toHaveBeenCalledTimes(2);
+  });
+
+  test('FAILED_RETRYABLE with RESOLUTION_TIMEOUT offers retry only; screenshot and upload actions are absent', async () => {
+    const resolver = jest.fn(
+      async (_p: unknown, _s: AbortSignal): Promise<ShareImportResponse> => ({
+        importId: IMPORT_ID,
+        status: 'FAILED_RETRYABLE',
+        reason: 'RESOLUTION_TIMEOUT',
+      }),
+    );
+    const view = await render(
+      <ShareImportScreen
+        payload={{ kind: 'url', url: SOURCE_URL }}
+        resolver={resolver as unknown as ShareImportResolver}
+      />,
+    );
+    expect(await view.findByText('Try Again')).toBeTruthy();
+    expect(view.queryByText('Choose Screenshot')).toBeNull();
+    expect(view.queryByText('Upload Image')).toBeNull();
   });
 
   test('retry without a resolver prop reuses one idempotency key across both POSTs', async () => {

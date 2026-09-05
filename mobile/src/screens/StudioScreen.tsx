@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { isFeatureEnabled } from '../config/featureFlags';
 import { studioApi } from '../features/studio/studioApi';
 
 type Props = {
@@ -28,7 +29,7 @@ export default function StudioScreen({ studioSessionId, sourceLookId, selectedVa
       await studioApi.command(studioSessionId, text);
       setCommand('');
     } catch {
-      setNotice('Could not apply command. Try again.');
+      setNotice('Could not apply command. Use manual controls below.');
     } finally {
       setBusy(false);
     }
@@ -47,10 +48,14 @@ export default function StudioScreen({ studioSessionId, sourceLookId, selectedVa
       <Text>{selectedVaultItemId ? 'Selected Vault item is ready to confirm.' : 'No items in outfit slots.'}</Text>
       <Action label="Add from Vault" onPress={() => studioSessionId && onAddFromVault(studioSessionId)} disabled={!hasSession} />
       {!hasSession ? <Text>Start or load a Studio session to add from Vault.</Text> : null}
-      <TextInput accessibilityLabel="Natural-language command" editable={hasSession} multiline onChangeText={setCommand} placeholder="Describe an outfit change" style={styles.input} value={command} />
-      <Action label="Apply command" onPress={applyCommand} disabled={!hasSession || command.trim().length === 0 || busy} />
-      {notice ? <Text accessibilityLiveRegion="polite">{notice}</Text> : null}
-      {!hasSession ? <Text>Commands require an authorized Studio session.</Text> : null}
+{isFeatureEnabled('NATURAL_LANGUAGE_STUDIO') ? (
+  <>
+    <TextInput accessibilityLabel="Natural-language command" editable={hasSession} multiline onChangeText={setCommand} placeholder="Describe an outfit change" style={styles.input} value={command} />
+    <Action label="Apply command" onPress={applyCommand} disabled={!hasSession || command.trim().length === 0 || busy} />
+    {notice ? <Text accessibilityLiveRegion="polite">{notice}</Text> : null}
+    {!hasSession ? <Text>Commands require an authorized Studio session.</Text> : null}
+  </>
+) : null}
       <Action label="Generate" onPress={onGenerate} disabled={!canGenerate} />
       {!canGenerate ? <Text>Add an avatar session and a compatible item before generating.</Text> : null}
     </View>
