@@ -144,14 +144,6 @@ resource "aws_security_group" "api" {
   description = "Security group for API tasks."
   vpc_id      = aws_vpc.vault.id
 
-  ingress {
-    description     = "Allow inbound HTTP from ALB"
-    from_port       = 8080
-    to_port         = 8080
-    protocol        = "tcp"
-    security_groups = [aws_security_group.alb.id]
-  }
-
   egress {
     description = "Allow all outbound traffic"
     from_port   = 0
@@ -161,6 +153,16 @@ resource "aws_security_group" "api" {
   }
 
   tags = local.tags
+}
+
+resource "aws_security_group_rule" "api_ingress_from_alb" {
+  description              = "Allow inbound HTTP from ALB"
+  type                     = "ingress"
+  security_group_id        = aws_security_group.api.id
+  from_port                = 8080
+  to_port                  = 8080
+  protocol                 = "tcp"
+  source_security_group_id = aws_security_group.alb.id
 }
 
 resource "aws_security_group" "worker" {

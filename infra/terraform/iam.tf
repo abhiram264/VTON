@@ -1,66 +1,66 @@
 # Terraform code only — apply prohibited for slice-55.
 
 resource "aws_iam_role" "execution" {
-  name               = "${local.name_prefix}-execution"
+  name = "${local.name_prefix}-execution"
   assume_role_policy = jsonencode({
-    Version   = "2012-10-17"
+    Version = "2012-10-17"
     Statement = [
       {
-        Effect    = "Allow"
+        Effect = "Allow"
         Principal = {
           Service = "ecs-tasks.amazonaws.com"
         }
-        Action    = "sts:AssumeRole"
+        Action = "sts:AssumeRole"
       }
     ]
   })
-  tags               = local.tags
+  tags = local.tags
 }
 
 resource "aws_iam_role" "api_task" {
-  name               = "${local.name_prefix}-api-task"
+  name = "${local.name_prefix}-api-task"
   assume_role_policy = jsonencode({
-    Version   = "2012-10-17"
+    Version = "2012-10-17"
     Statement = [
       {
-        Effect    = "Allow"
+        Effect = "Allow"
         Principal = {
           Service = "ecs-tasks.amazonaws.com"
         }
-        Action    = "sts:AssumeRole"
+        Action = "sts:AssumeRole"
       }
     ]
   })
-  tags               = local.tags
+  tags = local.tags
 }
 
 resource "aws_iam_role" "worker_task" {
-  name               = "${local.name_prefix}-worker-task"
+  name = "${local.name_prefix}-worker-task"
   assume_role_policy = jsonencode({
-    Version   = "2012-10-17"
+    Version = "2012-10-17"
     Statement = [
       {
-        Effect    = "Allow"
+        Effect = "Allow"
         Principal = {
           Service = "ecs-tasks.amazonaws.com"
         }
-        Action    = "sts:AssumeRole"
+        Action = "sts:AssumeRole"
       }
     ]
   })
-  tags               = local.tags
+  tags = local.tags
 }
 
 resource "aws_iam_role_policy" "execution_logs_policy" {
-  name   = "${local.name_prefix}-execution-logs"
-  role   = aws_iam_role.execution.id
+  name = "${local.name_prefix}-execution-logs"
+  role = aws_iam_role.execution.id
   policy = jsonencode({
-    Version   = "2012-10-17"
+    Version = "2012-10-17"
     Statement = [
       {
-        Sid      = "ExecutionLogWrites"
-        Effect   = "Allow"
-        Action   = [
+        Sid    = "ExecutionLogWrites"
+        Effect = "Allow"
+        Action = [
           "logs:CreateLogStream",
           "logs:PutLogEvents"
         ]
@@ -74,15 +74,15 @@ resource "aws_iam_role_policy" "execution_logs_policy" {
 }
 
 resource "aws_iam_role_policy" "execution_secrets_policy" {
-  name   = "${local.name_prefix}-execution-secrets"
-  role   = aws_iam_role.execution.id
+  name = "${local.name_prefix}-execution-secrets"
+  role = aws_iam_role.execution.id
   policy = jsonencode({
-    Version   = "2012-10-17"
+    Version = "2012-10-17"
     Statement = [
       {
-        Sid      = "ExecutionSecretReads"
-        Effect   = "Allow"
-        Action   = "secretsmanager:GetSecretValue"
+        Sid    = "ExecutionSecretReads"
+        Effect = "Allow"
+        Action = "secretsmanager:GetSecretValue"
         Resource = [
           aws_db_instance.vault.master_user_secret[0].secret_arn,
           aws_secretsmanager_secret.fashn_api_key.arn
@@ -93,15 +93,15 @@ resource "aws_iam_role_policy" "execution_secrets_policy" {
 }
 
 resource "aws_iam_role_policy" "api_task_policy" {
-  name   = "${local.name_prefix}-api-task"
-  role   = aws_iam_role.api_task.id
+  name = "${local.name_prefix}-api-task"
+  role = aws_iam_role.api_task.id
   policy = jsonencode({
-    Version   = "2012-10-17"
+    Version = "2012-10-17"
     Statement = [
       {
-        Sid      = "S3ObjectAccess"
-        Effect   = "Allow"
-        Action   = [
+        Sid    = "S3ObjectAccess"
+        Effect = "Allow"
+        Action = [
           "s3:GetObject",
           "s3:PutObject",
           "s3:DeleteObject",
@@ -115,9 +115,9 @@ resource "aws_iam_role_policy" "api_task_policy" {
         ]
       },
       {
-        Sid      = "S3BucketList"
-        Effect   = "Allow"
-        Action   = "s3:ListBucket"
+        Sid    = "S3BucketList"
+        Effect = "Allow"
+        Action = "s3:ListBucket"
         Resource = [
           aws_s3_bucket.avatar.arn,
           aws_s3_bucket.vault_assets.arn,
@@ -132,9 +132,9 @@ resource "aws_iam_role_policy" "api_task_policy" {
         Resource = aws_sqs_queue.generation_work.arn
       },
       {
-        Sid      = "AdotMetricsAndTraces"
-        Effect   = "Allow"
-        Action   = [
+        Sid    = "AdotMetricsAndTraces"
+        Effect = "Allow"
+        Action = [
           "cloudwatch:PutMetricData",
           "xray:PutTraceSegments",
           "xray:PutTelemetryRecords"
@@ -142,9 +142,9 @@ resource "aws_iam_role_policy" "api_task_policy" {
         Resource = "*"
       },
       {
-        Sid      = "AdotLogWrites"
-        Effect   = "Allow"
-        Action   = [
+        Sid    = "AdotLogWrites"
+        Effect = "Allow"
+        Action = [
           "logs:CreateLogGroup",
           "logs:CreateLogStream",
           "logs:PutLogEvents"
@@ -158,15 +158,15 @@ resource "aws_iam_role_policy" "api_task_policy" {
 }
 
 resource "aws_iam_role_policy" "worker_task_policy" {
-  name   = "${local.name_prefix}-worker-task"
-  role   = aws_iam_role.worker_task.id
+  name = "${local.name_prefix}-worker-task"
+  role = aws_iam_role.worker_task.id
   policy = jsonencode({
-    Version   = "2012-10-17"
+    Version = "2012-10-17"
     Statement = [
       {
-        Sid      = "S3ObjectAccess"
-        Effect   = "Allow"
-        Action   = [
+        Sid    = "S3ObjectAccess"
+        Effect = "Allow"
+        Action = [
           "s3:GetObject",
           "s3:PutObject",
           "s3:DeleteObject",
@@ -180,9 +180,9 @@ resource "aws_iam_role_policy" "worker_task_policy" {
         ]
       },
       {
-        Sid      = "S3BucketList"
-        Effect   = "Allow"
-        Action   = "s3:ListBucket"
+        Sid    = "S3BucketList"
+        Effect = "Allow"
+        Action = "s3:ListBucket"
         Resource = [
           aws_s3_bucket.avatar.arn,
           aws_s3_bucket.vault_assets.arn,
@@ -191,9 +191,9 @@ resource "aws_iam_role_policy" "worker_task_policy" {
         ]
       },
       {
-        Sid      = "GenerationQueueConsume"
-        Effect   = "Allow"
-        Action   = [
+        Sid    = "GenerationQueueConsume"
+        Effect = "Allow"
+        Action = [
           "sqs:SendMessage",
           "sqs:ReceiveMessage",
           "sqs:DeleteMessage",
@@ -207,9 +207,9 @@ resource "aws_iam_role_policy" "worker_task_policy" {
         ]
       },
       {
-        Sid      = "AdotMetricsAndTraces"
-        Effect   = "Allow"
-        Action   = [
+        Sid    = "AdotMetricsAndTraces"
+        Effect = "Allow"
+        Action = [
           "cloudwatch:PutMetricData",
           "xray:PutTraceSegments",
           "xray:PutTelemetryRecords"
@@ -217,9 +217,9 @@ resource "aws_iam_role_policy" "worker_task_policy" {
         Resource = "*"
       },
       {
-        Sid      = "AdotLogWrites"
-        Effect   = "Allow"
-        Action   = [
+        Sid    = "AdotLogWrites"
+        Effect = "Allow"
+        Action = [
           "logs:CreateLogGroup",
           "logs:CreateLogStream",
           "logs:PutLogEvents"

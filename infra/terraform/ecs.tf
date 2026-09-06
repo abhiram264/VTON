@@ -18,7 +18,7 @@ resource "aws_ecs_task_definition" "api" {
 
   runtime_platform {
     operating_system_family = "LINUX"
-    cpu_architecture        = "AMD64"
+    cpu_architecture        = "X86_64"
   }
 
   container_definitions = jsonencode([
@@ -85,7 +85,7 @@ resource "aws_ecs_task_definition" "worker" {
 
   runtime_platform {
     operating_system_family = "LINUX"
-    cpu_architecture        = "AMD64"
+    cpu_architecture        = "X86_64"
   }
 
   container_definitions = jsonencode([
@@ -150,7 +150,6 @@ resource "aws_ecs_service" "api" {
   launch_type                       = "FARGATE"
   desired_count                     = var.api_desired_count
   platform_version                  = "LATEST"
-  health_check_type                 = "ALB"
   health_check_grace_period_seconds = 120
   enable_execute_command            = true
 

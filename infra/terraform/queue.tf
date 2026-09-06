@@ -13,9 +13,9 @@ resource "aws_sqs_queue" "generation_work" {
   visibility_timeout_seconds = 120
   receive_wait_time_seconds  = 20
   message_retention_seconds  = 345600
-  redrive_policy             = jsonencode({
+  redrive_policy = jsonencode({
     deadLetterTargetArn = aws_sqs_queue.generation_work_dlq.arn
     maxReceiveCount     = 5
   })
-  tags                       = local.tags
+  tags = local.tags
 }
