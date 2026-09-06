@@ -162,7 +162,7 @@ export default function ShareImportScreen({
   }, [busy, activeResolver]);
 
   const recover = useCallback(
-    async (source: 'CHOOSE_SCREENSHOT' | 'UPLOAD_IMAGE') => {
+    async (_source: 'CHOOSE_SCREENSHOT' | 'UPLOAD_IMAGE') => {
       const importId =
         state.view === 'NEEDS_IMAGE'
           ? state.importId

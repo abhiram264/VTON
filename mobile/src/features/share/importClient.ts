@@ -1,5 +1,4 @@
 import {
-  ApiProblemError,
   apiRequest,
   rejectDataUri,
   requireOk,
