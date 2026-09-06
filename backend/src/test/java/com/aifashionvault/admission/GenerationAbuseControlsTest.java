@@ -8,7 +8,9 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -135,6 +137,15 @@ class GenerationAbuseControlsTest {
 		assertThat(policy.providerCeilings()).containsOnlyKeys("provider");
 		assertThatThrownBy(() -> new AbuseDecision(true, AbuseDecisionReason.COST_UNKNOWN, null, null, "USD",
 			NOW.minusSeconds(1), NOW)).isInstanceOf(IllegalArgumentException.class);
+		var compatible = new AbuseDecision(true, AbuseDecisionReason.ALLOWED, BigDecimal.ONE, BigDecimal.TEN, "USD",
+			NOW.minusSeconds(1), NOW);
+		assertThat(compatible.indicators()).isNull();
+		var actions = new HashSet<>(Set.of(CostBreachAction.PREFER_CHEAPER_PROVIDER));
+		var indicators = new CostBreachIndicators(SoftBreachDimension.GLOBAL, null, actions);
+		actions.add(CostBreachAction.TEMPORARILY_QUEUE);
+		assertThat(indicators.actions()).containsExactly(CostBreachAction.PREFER_CHEAPER_PROVIDER);
+		assertThatThrownBy(() -> indicators.actions().add(CostBreachAction.RESTRICT_MULTI_ITEM))
+			.isInstanceOf(UnsupportedOperationException.class);
 	}
 
 	private static AbuseDecision decide(BigDecimal global, BigDecimal provider, BigDecimal user, String projection) {
