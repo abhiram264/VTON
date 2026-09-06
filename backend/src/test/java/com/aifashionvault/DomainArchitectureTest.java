@@ -110,7 +110,7 @@ class DomainArchitectureTest {
 	}
 
 	@Test
-    void flywayAllowsOnlyTheFrozenV022MigrationAbovePublishedV017() throws IOException {
+    void flywayAllowsOnlyTheFrozenV023MigrationAbovePublishedV017() throws IOException {
         Path migrations = migrationRoot();
         List<String> violations = new ArrayList<>();
         if (Files.isDirectory(migrations)) {
@@ -118,7 +118,7 @@ class DomainArchitectureTest {
                 files.filter(file -> file.getFileName().toString().matches("V\\d+__.*\\.sql"))
                     .forEach(file -> {
                         String name = file.getFileName().toString();
-                        if (Integer.parseInt(name.substring(1, 4)) > 20 && !name.equals("V021__product_normalization.sql") && !name.equals("V021__privacy_deletion_workflow.sql") && !name.equals("V022__generation_admission.sql"))
+                        if (Integer.parseInt(name.substring(1, 4)) > 20 && !name.equals("V021__product_normalization.sql") && !name.equals("V021__privacy_deletion_workflow.sql") && !name.equals("V022__generation_admission.sql") && !name.equals("V023__provider_performance.sql"))
                             violations.add(display(migrations, file) + " unexpected V021+ Flyway file");
                     });
             }

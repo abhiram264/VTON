@@ -21,7 +21,7 @@ class FlywayDeploymentPolicyTest {
 
 	private static final Pattern MIGRATION_FILE_PATTERN = Pattern.compile("^V(\\d{3})__[a-z0-9_]+\\.sql$");
 	private static final int PUBLISHED_CEILING_VERSION = 22;
-	private static final int RESERVED_NEXT_VERSION = 23;
+	private static final int RESERVED_NEXT_VERSION = 24;
 	private static final List<String> FORBIDDEN_FILE_PREFIXES = List.of("U", "R__", "B__");
 	private static final Pattern DESTRUCTIVE_PATTERN = Pattern.compile(
 		"(?i)\\b(DROP\\s+TABLE|DROP\\s+COLUMN|DROP\\s+CONSTRAINT|TRUNCATE|ALTER\\s+COLUMN)");
@@ -104,7 +104,7 @@ class FlywayDeploymentPolicyTest {
 	}
 
 	@Test
-	void v023StaysReservedUntilProviderEvolutionClaimsIt() throws IOException {
+	void v024StaysReservedUntilClaimed() throws IOException {
 		Path migrations = migrationRoot();
 		List<String> violations = new ArrayList<>();
 		try (Stream<Path> stream = Files.list(migrations)) {
