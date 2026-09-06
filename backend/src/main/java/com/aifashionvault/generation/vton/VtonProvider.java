@@ -9,7 +9,7 @@ public interface VtonProvider {
 
     default ProviderTurnOutcome submitTurn(VtonRequest request, SubmissionKey submissionKey) {
         return switch (submit(request, submissionKey)) {
-            case GenerationSubmission.Accepted accepted -> new ProviderTurnOutcome.Accepted(accepted.providerJobId());
+            case GenerationSubmission.Accepted accepted -> new ProviderTurnOutcome.Accepted(accepted.providerJobId(), accepted.usage());
             case GenerationSubmission.Rejected rejected -> new ProviderTurnOutcome.Rejected(rejected.failure());
             case GenerationSubmission.Indeterminate indeterminate -> new ProviderTurnOutcome.Indeterminate(indeterminate.failure());
         };

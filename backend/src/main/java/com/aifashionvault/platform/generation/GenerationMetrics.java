@@ -10,7 +10,9 @@ import java.util.HashSet;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 import com.aifashionvault.generation.CostAggregate;
 import com.aifashionvault.generation.CostQuery;
@@ -22,8 +24,10 @@ import com.aifashionvault.generation.RetryDisposition;
 import com.aifashionvault.shared.GenerationAttemptId;
 import com.aifashionvault.shared.QualityDecision;
 import com.aifashionvault.shared.TerminalReason;
+import com.aifashionvault.generation.vton.ProviderKey;
 
 import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.DistributionSummary;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
@@ -56,6 +60,15 @@ public final class GenerationMetrics implements GenerationCostMetrics {
 	public static final String CAS_CONFLICTS = "generation.retry.cas.conflicts";
 	public static final String EVALUATOR_RETRIES = "generation.retry.evaluator.retries";
 	public static final String STORAGE_UNAVAILABLE = "generation.retry.storage.unavailable";
+	public static final String GENERATION_COUNT = "generation.count";
+	public static final String GENERATION_LATENCY = "generation.latency";
+	public static final String GENERATION_PROVIDER_LATENCY = "generation.provider_latency";
+	public static final String GENERATION_COST_AMOUNT = "generation.cost.amount";
+	public static final String PROVIDER_ATTEMPTS = "provider.attempts";
+	public static final String PROVIDER_ERROR = "provider.error";
+	public static final String PROVIDER_CREDIT_BALANCE = "provider.credit_balance";
+	public static final String QUEUE_WAIT = "generation.queue_wait";
+
 
 	public static final String PROVIDER_TIMEOUT = "PROVIDER_TIMEOUT";
 	public static final String PROVIDER_RATE_LIMIT = "PROVIDER_RATE_LIMIT";
@@ -92,6 +105,7 @@ public final class GenerationMetrics implements GenerationCostMetrics {
 	private final Clock clock;
 	private final Map<GenerationAttemptId, RecordedCostFact> costFacts = new HashMap<>();
 	private final AtomicLong outboxLagMillis = new AtomicLong();
+	private final Map<String, AtomicReference<Double>> providerCreditBalances = new ConcurrentHashMap<>();
 
 	public GenerationMetrics(MeterRegistry registry) {
 		this(registry, Clock.systemUTC());
@@ -190,6 +204,9 @@ public final class GenerationMetrics implements GenerationCostMetrics {
 		}
 		costFacts.put(fact.attemptId(), new RecordedCostFact(fact, existing == null ? clock.instant() : existing.recordedAt()));
 		recordCostFactMetric(fact);
+		if (PricingSnapshot.COST_FINAL.equals(fact.costStatus()) && fact.cost() != null) {
+			recordGenerationCostAmount(fact.providerKey(), fact.currency(), fact.cost());
+		}
 	}
 
 	@Override
@@ -368,6 +385,157 @@ public final class GenerationMetrics implements GenerationCostMetrics {
 	public void recordTerminal(String category) {
 		recordCounter(TERMINAL, "category", requireTerminalCategory(category));
 	}
+
+	/**
+	 * Records one durably created generation job (slice-53 D3). Emitted only
+	 * for a new insert, never for idempotent replays or rejections. The counter
+	 * is untagged.
+	 */
+	public void recordGenerationCount() {
+		try {
+			Counter.builder(GENERATION_COUNT)
+				.register(registry)
+				.increment();
+		}
+		catch (RuntimeException ignored) {
+			// Observability must never fail the creation path (slice-53 §37).
+		}
+	}
+
+	/**
+	 * Records one provider invocation attempt (submit, replay, or poll),
+	 * regardless of outcome (slice-53 D3).
+	 */
+	public void recordProviderAttempt(String provider) {
+		String providerKey = new ProviderKey(provider).value();
+		try {
+			Counter.builder(PROVIDER_ATTEMPTS)
+				.tag("provider", providerKey)
+				.register(registry)
+				.increment();
+		}
+		catch (RuntimeException ignored) {
+			// Observability must never fail provider execution paths (slice-53 §37).
+		}
+	}
+
+	/** Records the once-per-job fenced end-to-end latency (slice-53 D3). */
+	public void recordGenerationLatency(Duration endToEnd) {
+		requireNonNegative(endToEnd, "endToEnd");
+		try {
+			Timer.builder(GENERATION_LATENCY)
+				.register(registry)
+				.record(endToEnd);
+		}
+		catch (RuntimeException ignored) {
+			// Observability must never fail the terminal write (slice-53 §37).
+		}
+	}
+
+	/** Records one persisted per-attempt provider latency (slice-53 D3). */
+	public void recordProviderLatency(String provider, Duration latency) {
+		String providerKey = new ProviderKey(provider).value();
+		requireNonNegative(latency, "latency");
+		try {
+			Timer.builder(GENERATION_PROVIDER_LATENCY)
+				.tag("provider", providerKey)
+				.register(registry)
+				.record(latency);
+		}
+		catch (RuntimeException ignored) {
+			// Observability must never fail the attempt-completion path (slice-53 §37).
+		}
+	}
+
+	/** Records one provider failure with its bounded safe code (slice-53 D3). */
+	public void recordProviderError(String provider, String errorCode) {
+		String providerKey = new ProviderKey(provider).value();
+		String boundedCode = requireProviderErrorCode(errorCode);
+		try {
+			Counter.builder(PROVIDER_ERROR)
+				.tag("provider", providerKey)
+				.tag("error_code", boundedCode)
+				.register(registry)
+				.increment();
+		}
+		catch (RuntimeException ignored) {
+			// Observability must never fail the provider-failure path (slice-53 §37).
+		}
+	}
+
+	/** Records one mapped per-attempt cost amount (slice-53 D3). */
+	public void recordGenerationCostAmount(String provider, String currency, BigDecimal amount) {
+		if (amount == null || amount.signum() < 0) {
+			throw new IllegalArgumentException("amount must be non-negative");
+		}
+		if (currency == null || !currency.strip().matches("[A-Za-z]{3}")) {
+			throw new IllegalArgumentException("currency must be an ISO-style three-letter code");
+		}
+		String providerKey = new ProviderKey(provider).value();
+		String boundedCurrency = currency.strip().toUpperCase(Locale.ROOT);
+		try {
+			DistributionSummary.builder(GENERATION_COST_AMOUNT)
+				.tag("provider", providerKey)
+				.tag("currency", boundedCurrency)
+				.register(registry)
+				.record(amount.doubleValue());
+		}
+		catch (RuntimeException ignored) {
+			// Observability must never fail the cost path (slice-53 §37).
+		}
+	}
+
+	/**
+	 * Records the persisted queue age (createdAt to the first successful
+	 * QUEUED→PREFLIGHT claim) exactly once per job (slice-53 D3). The span
+	 * marks the claim itself; this timer carries the historical duration
+	 * honestly instead of a backdated span.
+	 */
+	public void recordQueueWait(Duration wait) {
+		requireNonNegative(wait, "wait");
+		try {
+			Timer.builder(QUEUE_WAIT).register(registry).record(wait);
+		}
+		catch (RuntimeException ignored) {
+			// Observability must never fail the claim path (slice-53 §37).
+		}
+	}
+
+	/**
+	 * Registers and updates the provider credit-balance gauge (slice-53 D3).
+	 * The gauge is absent until the first finite, non-negative report, so
+	 * absence means unknown, never zero; the value holder stays strongly
+	 * referenced by this metrics instance.
+	 */
+	public void updateProviderCreditBalance(String provider, double balance) {
+		String providerKey = new ProviderKey(provider).value();
+		if (!Double.isFinite(balance) || balance < 0d) {
+			throw new IllegalArgumentException("balance must be finite and non-negative");
+		}
+		try {
+			providerCreditBalances
+				.computeIfAbsent(providerKey, key -> {
+					AtomicReference<Double> value = new AtomicReference<>(balance);
+					Gauge.builder(PROVIDER_CREDIT_BALANCE, value, AtomicReference::get)
+						.tag("provider", key)
+						.register(registry);
+					return value;
+				})
+				.set(balance);
+		}
+		catch (RuntimeException ignored) {
+			// Observability must never fail the balance report (slice-53 §37).
+		}
+	}
+
+
+	private static String requireProviderErrorCode(String errorCode) {
+		if (errorCode == null || !errorCode.matches("[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}")) {
+			throw new IllegalArgumentException("errorCode must be a bounded provider diagnostic code");
+		}
+		return errorCode;
+	}
+
 
 	/**
 	 * Records one executed retry disposition (Q2/Q67). The label is the

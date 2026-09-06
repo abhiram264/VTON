@@ -364,6 +364,7 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 		else {
 			if (GenerationJob.QUEUED.equals(job.status()) && generationStore.markPreflight(jobId)) {
 				recordTransition(job.status(), GenerationJob.PREFLIGHT);
+				recordQueueWait(job);
 				job = generationStore.findJob(jobId).orElse(job);
 				if (acknowledgeUnavailableOrTerminal(job, lease)) {
 					return;
@@ -611,6 +612,7 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 				queue.delete(lease);
 				return;
 			}
+			recordProviderAttempt(active);
 			submission = active.submitTurn(request, attempt.submissionKey());
 		}
 		catch (RuntimeException ex) {
@@ -630,7 +632,7 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 				if (generationStore.markSubmitted(job.id())) {
 					recordTransition(job.status(), GenerationJob.SUBMITTED);
 				}
-				attempt = withProviderJobId(attempt, accepted.providerJobId().value());
+				attempt = withUsage(withProviderJobId(attempt, accepted.providerJobId().value()), accepted.usage());
 				GenerationAttempt persisted = generationStore.findAttempt(attempt.id()).orElse(attempt);
 				attempt = mergePersistedTransmission(persisted, attempt);
 				capture(job, attempt, lease, accepted.providerJobId(), active);
@@ -651,6 +653,7 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 			recordTransition(job.status(), GenerationJob.SUBMITTED);
 		}
 		ProviderJobId providerJobId = new ProviderJobId(attempt.providerJobId());
+		recordProviderAttempt(active);
 		StatusQueryResult result = active.getStatus(providerJobId);
 		if (result == null) {
 			failTerminal(job, attempt, lease, TerminalReason.SUBMISSION_OUTCOME_INDETERMINATE.name(), true);
@@ -702,6 +705,7 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 		if (attemptDeadlineExceeded(job, attempt, lease)) {
 			return;
 		}
+		recordProviderAttempt(active);
 		StatusQueryResult result = active.getStatus(providerJobId);
 		if (result == null) {
 			failTerminal(job, attempt, lease, TerminalReason.SUBMISSION_OUTCOME_INDETERMINATE.name(), true);
@@ -967,6 +971,7 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 				outputRef);
 			if (generationStore.completeTerminalIfActive(finished, clock.instant())) {
 				recordTerminalCategory(GenerationMetrics.TERMINAL_COMPLETED);
+				recordGenerationLatency(job);
 				recordCost(job, finished);
 				releaseCapacity(attempt);
 				notifyReady(job, existing.get());
@@ -1029,6 +1034,7 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 		boolean won = generationStore.completeTerminalIfActive(finished, clock.instant());
 		if (won) {
 			recordTerminalCategory(GenerationMetrics.TERMINAL_COMPLETED);
+			recordGenerationLatency(job);
 		}
 		if (!won) {
 			generationStore.completeAttempt(finished);
@@ -1108,6 +1114,7 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 		GenerationAttempt finished = finishedAttempt(attempt, "SUCCESS", CODE_QUALITY_REJECTED, temp.storageKey(), outputRef);
 		if (generationStore.completeTerminalIfActive(finished, clock.instant())) {
 			recordTerminalCategory(GenerationMetrics.TERMINAL_FAILED);
+			recordGenerationLatency(job);
 			recordCost(job, finished);
 			releaseCapacity(attempt);
 			notifyFailed(job);
@@ -1289,6 +1296,9 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 			return;
 		}
 		recordProviderOutcome(failure);
+		if (metrics != null) {
+			metrics.recordProviderError(active.providerKey().value(), failure.safeCode());
+		}
 		GenerationAttempt finished = finishedAttempt(
 			attempt,
 			"FAILED",
@@ -1792,6 +1802,7 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 				terminalCategory == null
 					? terminalCategoryFor(latest, failureCode, indeterminate)
 					: terminalCategory);
+			recordGenerationLatency(job);
 			recordCost(job, finished);
 			releaseCapacity(attempt);
 			notifyFailed(job);
@@ -1819,6 +1830,7 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 		if (won) {
 			GenerationJob latest = generationStore.findJob(job.id()).orElse(job);
 			recordTerminalCategory(terminalCategoryFor(latest, attempt.failureCode(), false));
+			recordGenerationLatency(job);
 		}
 		ensureNotification(job, attempt);
 		queue.delete(lease);
@@ -1851,6 +1863,7 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
         boolean won = generationStore.completeTerminalIfActive(finished, clock.instant());
         if (won) {
             recordTerminalCategory(GenerationMetrics.TERMINAL_SUBJECT_DELETED);
+            recordGenerationLatency(job);
         }
         if (!won) {
             completeAttemptAfterSubjectDeletion(job, finished);
@@ -2349,6 +2362,7 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 			if (candidate == null || candidate.isBlank()) {
 				continue;
 			}
+			recordProviderAttempt(active);
 			StatusQueryResult result = active.getStatus(new ProviderJobId(candidate));
 			if (!(result instanceof StatusQueryResult.Observed)) {
 				continue;
@@ -2569,7 +2583,7 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 			return attempt;
 		}
 		ProviderUsage mapped = usage.get();
-		String currency = attempt.currency() != null ? attempt.currency() : mapped.currency();
+		String currency = mapped.currency();
 		return new GenerationAttempt(
 			attempt.id(),
 			attempt.generationJobId(),
@@ -2786,6 +2800,7 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 		}
 		metrics.recordDeadlineExpired();
 		metrics.recordTerminal(GenerationMetrics.TERMINAL_DEADLINE_EXPIRED);
+		recordGenerationLatency(job);
 		recordTransition(job.status(), GenerationJob.FAILED);
 	}
 
@@ -2793,6 +2808,29 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 		if (metrics != null) {
 			metrics.recordTerminal(category);
 		}
+	}
+
+	private void recordQueueWait(GenerationJob job) {
+		if (metrics == null) {
+			return;
+		}
+		Duration wait = Duration.between(job.createdAt(), clock.instant());
+		metrics.recordQueueWait(wait.isNegative() ? Duration.ZERO : wait);
+	}
+
+	private void recordProviderAttempt(VtonProvider active) {
+		if (metrics == null) {
+			return;
+		}
+		metrics.recordProviderAttempt(active.providerKey().value());
+	}
+
+	private void recordGenerationLatency(GenerationJob job) {
+		if (metrics == null) {
+			return;
+		}
+		Duration latency = Duration.between(job.createdAt(), clock.instant());
+		metrics.recordGenerationLatency(latency.isNegative() ? Duration.ZERO : latency);
 	}
 
 	private void recordAmbiguity() {
@@ -2818,6 +2856,9 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 	private void recordCost(GenerationJob job, GenerationAttempt attempt) {
 		if (metrics == null) {
 			return;
+		}
+		if (attempt.latencyMs() != null && attempt.latencyMs() >= 0) {
+			metrics.recordProviderLatency(attempt.provider(), Duration.ofMillis(attempt.latencyMs()));
 		}
 		String costStatus = attempt.costStatus();
 		BigDecimal cost = PricingSnapshot.COST_FINAL.equals(costStatus)

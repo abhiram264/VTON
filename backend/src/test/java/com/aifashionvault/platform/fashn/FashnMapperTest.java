@@ -1,6 +1,7 @@
 package com.aifashionvault.platform.fashn;
 
 import java.util.Base64;
+import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
@@ -19,6 +20,7 @@ import com.aifashionvault.generation.vton.ProviderFailure;
 import com.aifashionvault.generation.vton.ProviderFailureCategory;
 import com.aifashionvault.generation.vton.ProviderJobId;
 import com.aifashionvault.generation.vton.ProviderOutputRef;
+import com.aifashionvault.generation.vton.ProviderUsage;
 import com.aifashionvault.generation.vton.StatusQueryResult;
 import com.aifashionvault.generation.vton.SubmissionReplaySafety;
 import com.aifashionvault.shared.StorageDomain;
@@ -119,7 +121,8 @@ class FashnMapperTest {
     @Test
     void runMappingCoversAcceptanceRejectionAndIndeterminate() {
         assertThat(mapper.mapRun(FashnHttpResponse.http(200, "2", JSON.readTree(FashnTestSupport.runSuccess()), false)))
-            .isEqualTo(new GenerationSubmission.Accepted(new ProviderJobId(FashnTestSupport.PREDICTION_ID), Optional.empty()));
+            .isEqualTo(new GenerationSubmission.Accepted(new ProviderJobId(FashnTestSupport.PREDICTION_ID),
+                Optional.of(new ProviderUsage(new BigDecimal("2"), new BigDecimal("2"), "CRD"))));
         assertThat(mapper.mapRun(FashnHttpResponse.http(200, null, JSON.readTree("{\"id\":\"\",\"error\":null}"), false)))
             .isInstanceOf(GenerationSubmission.Indeterminate.class);
         assertThat(mapper.mapRun(FashnHttpResponse.unsent()))
@@ -262,7 +265,7 @@ class FashnMapperTest {
             .isInstanceOfSatisfying(GenerationStatus.Succeeded.class, succeeded -> {
                 assertThat(succeeded.outputs()).containsExactly(new ProviderOutputRef(FashnTestSupport.PREDICTION_ID + ":0"));
                 assertThat(succeeded.outputs().get(0).value()).doesNotContain("data:", "https:");
-                assertThat(succeeded.usage()).isEmpty();
+                assertThat(succeeded.usage()).contains(new ProviderUsage(new BigDecimal("3"), new BigDecimal("3"), "CRD"));
             });
         assertThat(observed(mapper.mapStatus(FashnTestSupport.PREDICTION_ID, httpStatus("failed", "null"))))
             .isInstanceOf(GenerationStatus.Failed.class);
@@ -326,11 +329,33 @@ class FashnMapperTest {
     }
 
     @Test
-    void creditsNeverInventUsage() {
-        assertThat(mapper.usage("3")).isEmpty();
+    void consumedCreditsHeaderParsesIntoCreditDenominatedUsage() {
+        assertThat(mapper.usage("1.5"))
+            .contains(new ProviderUsage(new BigDecimal("1.5"), new BigDecimal("1.5"), "CRD"));
+        assertThat(mapper.usage("3"))
+            .contains(new ProviderUsage(new BigDecimal("3"), new BigDecimal("3"), "CRD"));
+        assertThat(mapper.usage(" 0.25 "))
+            .contains(new ProviderUsage(new BigDecimal("0.25"), new BigDecimal("0.25"), "CRD"));
+        assertThat(mapper.usage("0"))
+            .contains(new ProviderUsage(BigDecimal.ZERO, BigDecimal.ZERO, "CRD"));
+        assertThat(mapper.mapRun(FashnHttpResponse.http(200, "1.5", JSON.readTree(FashnTestSupport.runSuccess()), false)))
+            .isInstanceOfSatisfying(GenerationSubmission.Accepted.class, accepted ->
+                assertThat(accepted.usage()).contains(new ProviderUsage(new BigDecimal("1.5"), new BigDecimal("1.5"), "CRD")));
+    }
+
+    @Test
+    void invalidCreditsHeadersStayAbsentWithoutThrowing() {
         assertThat(mapper.usage(null)).isEmpty();
+        assertThat(mapper.usage("")).isEmpty();
+        assertThat(mapper.usage("   ")).isEmpty();
         assertThat(mapper.usage("not-a-number")).isEmpty();
-        assertThat(mapper.mapRun(FashnHttpResponse.http(200, "3", JSON.readTree(FashnTestSupport.runSuccess()), false)))
+        assertThat(mapper.usage("1.5.5")).isEmpty();
+        assertThat(mapper.usage("-1")).isEmpty();
+        assertThat(mapper.usage("-0.5")).isEmpty();
+        assertThat(mapper.usage("Infinity")).isEmpty();
+        assertThat(mapper.usage("NaN")).isEmpty();
+        assertThat(mapper.usage("1e999999999")).isEmpty();
+        assertThat(mapper.mapRun(FashnHttpResponse.http(200, null, JSON.readTree(FashnTestSupport.runSuccess()), false)))
             .isInstanceOfSatisfying(GenerationSubmission.Accepted.class, accepted -> assertThat(accepted.usage()).isEmpty());
     }
 

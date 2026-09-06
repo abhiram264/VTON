@@ -8,6 +8,11 @@ import java.util.concurrent.ThreadLocalRandom;
 
 import com.aifashionvault.notification.FcmClient.FcmSendResult;
 import com.aifashionvault.notification.NotificationEventStore.DueDelivery;
+import com.aifashionvault.shared.ObservationFacade;
+
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.observation.Observation;
+import io.micrometer.observation.ObservationRegistry;
 
 public final class FcmDeliveryWorker {
 
@@ -15,6 +20,8 @@ public final class FcmDeliveryWorker {
 	private final FcmClient client;
 	private final NotificationDeliveryConfiguration config;
 	private final Random random;
+	private final NotificationMetrics metrics;
+	private final ObservationFacade observations;
 
 	public FcmDeliveryWorker(
 		NotificationEventStore store,
@@ -29,6 +36,17 @@ public final class FcmDeliveryWorker {
 		FcmClient client,
 		NotificationDeliveryConfiguration config,
 		Random random
+	) {
+		this(store, client, config, random, null, null);
+	}
+
+	public FcmDeliveryWorker(
+		NotificationEventStore store,
+		FcmClient client,
+		NotificationDeliveryConfiguration config,
+		Random random,
+		MeterRegistry meterRegistry,
+		ObservationRegistry observationRegistry
 	) {
 		if (store == null) {
 			throw new IllegalArgumentException("store is required");
@@ -46,6 +64,8 @@ public final class FcmDeliveryWorker {
 		this.client = client;
 		this.config = config;
 		this.random = random;
+		this.metrics = new NotificationMetrics(meterRegistry);
+		this.observations = new ObservationFacade(observationRegistry);
 	}
 
 	public void enqueue(NotificationEvent event, List<String> deviceIdentities) {
@@ -79,18 +99,42 @@ public final class FcmDeliveryWorker {
 			store.markTerminal(delivery.id(), delivery.attemptCount(), DeviceDelivery.ATTEMPTS_EXHAUSTED, now);
 			return true;
 		}
-		FcmSendResult result = client.send(delivery.deviceIdentity(), event.pushPayload(), now);
+		long started = System.nanoTime();
+		Observation observation = observations.start(ObservationFacade.NOTIFICATION_SEND);
+		FcmSendResult result;
+		try {
+			result = client.send(delivery.deviceIdentity(), event.pushPayload(), now);
+		}
+		catch (RuntimeException | Error failure) {
+			observations.error(observation, failure);
+			observations.stop(observation);
+			throw failure;
+		}
 		int attempts = delivery.attemptCount() + 1;
+		String outcome = sendOutcome(result, attempts, now, event.deadlineAt());
+		observations.keyValue(observation, "outcome", outcome);
+		observations.stop(observation);
+		metrics.recordSend("FCM", outcome, Duration.ofNanos(System.nanoTime() - started));
 		if (result.accepted()) {
 			store.markAccepted(delivery.id(), attempts, result.providerMessageId(), now);
 			return true;
 		}
-		if (!result.retryable() || attempts >= config.getMaxAttempts() || !now.isBefore(event.deadlineAt())) {
-			store.markTerminal(delivery.id(), attempts, terminalFailure(result, now, event.deadlineAt()), now);
+		if (result.retryable() && attempts < config.getMaxAttempts() && now.isBefore(event.deadlineAt())) {
+			store.scheduleRetry(delivery.id(), attempts, now.plus(retryDelay(attempts, result.retryAfter())));
 			return true;
 		}
-		store.scheduleRetry(delivery.id(), attempts, now.plus(retryDelay(attempts, result.retryAfter())));
+		store.markTerminal(delivery.id(), attempts, outcome, now);
 		return true;
+	}
+
+	private String sendOutcome(FcmSendResult result, int attempts, Instant now, Instant deadlineAt) {
+		if (result.accepted()) {
+			return "ACCEPTED";
+		}
+		if (result.retryable() && attempts < config.getMaxAttempts() && now.isBefore(deadlineAt)) {
+			return "RETRY_SCHEDULED";
+		}
+		return terminalFailure(result, now, deadlineAt);
 	}
 
 	Duration retryDelay(int attemptCount, Duration retryAfter) {

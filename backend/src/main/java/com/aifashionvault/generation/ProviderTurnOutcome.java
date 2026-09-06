@@ -1,14 +1,21 @@
 package com.aifashionvault.generation;
 
+import java.util.Optional;
+
 import com.aifashionvault.generation.vton.ProviderFailure;
 import com.aifashionvault.generation.vton.ProviderJobId;
+import com.aifashionvault.generation.vton.ProviderUsage;
 
 public sealed interface ProviderTurnOutcome
 	permits ProviderTurnOutcome.Accepted, ProviderTurnOutcome.Rejected, ProviderTurnOutcome.Indeterminate {
 
-	record Accepted(ProviderJobId providerJobId) implements ProviderTurnOutcome {
+	record Accepted(ProviderJobId providerJobId, Optional<ProviderUsage> usage) implements ProviderTurnOutcome {
 		public Accepted {
 			if (providerJobId == null) throw new IllegalArgumentException("providerJobId is required");
+			if (usage == null) throw new IllegalArgumentException("usage is required");
+		}
+		public Accepted(ProviderJobId providerJobId) {
+			this(providerJobId, Optional.empty());
 		}
 	}
 

@@ -12,12 +12,30 @@ import com.aifashionvault.shared.*;
 import com.aifashionvault.vault.*;
 import com.aifashionvault.vault.VaultContracts.*;
 
+import io.micrometer.observation.Observation;
+
 public final class VaultService {
-	private final JdbcVaultStore store; private final ObjectStore media; private final Clock clock;
-	public VaultService(JdbcVaultStore store,ObjectStore media){this(store,media,Clock.systemUTC());}
-	public VaultService(JdbcVaultStore store,ObjectStore media,Clock clock){this.store=store;this.media=media;this.clock=clock;}
+	final JdbcVaultStore store; final ObjectStore media; private final Clock clock; private final ObservationFacade spans;
+	public VaultService(JdbcVaultStore store,ObjectStore media){this(store,media,Clock.systemUTC(),null);}
+	public VaultService(JdbcVaultStore store,ObjectStore media,Clock clock){this(store,media,clock,null);}
+	public VaultService(JdbcVaultStore store,ObjectStore media,ObservationFacade spans){this(store,media,Clock.systemUTC(),spans);}
+	public VaultService(JdbcVaultStore store,ObjectStore media,Clock clock,ObservationFacade spans){this.store=store;this.media=media;this.clock=clock;this.spans=spans==null?new ObservationFacade(null):spans;}
 
 	public VaultItem create(UserId user,VaultItemCreateRequest request){
+		Observation span=spans.start(ObservationFacade.VAULT_CREATE);
+		String outcome="REJECTED";
+		try{
+			VaultItem item=doCreate(user,request);
+			outcome="CREATED";
+			return item;
+		}catch(RuntimeException e){
+			spans.error(span,e);
+			throw e;
+		}finally{
+			spans.keyValue(span,"outcome",outcome);spans.stop(span);
+		}
+	}
+	private VaultItem doCreate(UserId user,VaultItemCreateRequest request){
 		validateAttributes(request.attributes()); UploadId upload=parseUpload(request.uploadId()); SourceReferenceId source=parseSource(request.sourceReferenceId());
 		if(source!=null&&!store.sourceExists(source))throw problem(ProblemCode.VAULT_SOURCE_NOT_FOUND);
 		ObjectMetadata metadata;

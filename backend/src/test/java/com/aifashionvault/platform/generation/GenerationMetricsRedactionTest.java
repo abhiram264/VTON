@@ -265,6 +265,35 @@ class GenerationMetricsRedactionTest {
 			.isInstanceOf(IllegalArgumentException.class);
 	}
 
+	@Test
+	void standaloneAliasMetersAbsentAndExistingTerminalQualityMetersRetained() {
+		SimpleMeterRegistry registry = new SimpleMeterRegistry();
+		GenerationMetrics metrics = new GenerationMetrics(registry);
+
+		metrics.recordTerminal(GenerationMetrics.TERMINAL_COMPLETED);
+		metrics.recordTerminal(GenerationMetrics.TERMINAL_FAILED);
+		metrics.recordQuality("quality-v2", QualityDecision.RETRY, "IMAGE_INVALID");
+		metrics.recordQuality("quality-v2", QualityDecision.FAIL, "IMAGE_TOO_SMALL");
+		metrics.recordProviderAttempt("recording");
+		metrics.recordGenerationCount();
+
+		assertThat(registry.find("generation.success").meter()).isNull();
+		assertThat(registry.find("generation.failure").meter()).isNull();
+		assertThat(registry.find("generation.quality_reject").meter()).isNull();
+
+		assertThat(registry.find(GenerationMetrics.TERMINAL).tag("category", GenerationMetrics.TERMINAL_COMPLETED).counter()).isNotNull();
+		assertThat(registry.find(GenerationMetrics.TERMINAL).tag("category", GenerationMetrics.TERMINAL_FAILED).counter()).isNotNull();
+		assertThat(registry.find(GenerationMetrics.QUALITY).tag("decision", "RETRY").counter()).isNotNull();
+		assertThat(registry.find(GenerationMetrics.QUALITY).tag("decision", "FAIL").counter()).isNotNull();
+		assertThat(registry.find(GenerationMetrics.PROVIDER_ATTEMPTS).tag("provider", "recording").counter()).isNotNull();
+		assertThat(registry.find(GenerationMetrics.GENERATION_COUNT).counter()).isNotNull();
+
+		assertThat(Arrays.stream(GenerationMetrics.class.getDeclaredFields()).map(java.lang.reflect.Field::getName))
+			.doesNotContain("GENERATION_SUCCESS", "GENERATION_FAILURE", "GENERATION_QUALITY_REJECT");
+		assertThat(Arrays.stream(GenerationMetrics.class.getDeclaredMethods()).map(Method::getName))
+			.doesNotContain("recordGenerationSuccess", "recordGenerationFailure", "recordQualityReject");
+	}
+
 	private String render(Meter meter) {
 		Meter.Id id = meter.getId();
 		StringBuilder text = new StringBuilder(id.getName());

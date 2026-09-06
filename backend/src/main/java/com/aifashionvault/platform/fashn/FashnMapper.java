@@ -1,5 +1,6 @@
 package com.aifashionvault.platform.fashn;
 
+import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -47,6 +48,9 @@ public final class FashnMapper {
     static final Duration SIGNED_READ_TTL = Duration.ofMinutes(5);
     static final String CREDITS_HEADER = "x-fashn-credits-used";
     static final String OUTPUT_INDEX = "0";
+    static final String CREDITS_CURRENCY = "CRD";
+    /** Non-finite/overflow guard: any value beyond this is not a plausible per-response credit consumption. */
+    private static final BigDecimal MAX_CREDITS = BigDecimal.ONE.scaleByPowerOfTen(18);
 
     /**
      * Q48: adapter error-mapping contract version stamped on every
@@ -238,8 +242,29 @@ public final class FashnMapper {
         return value.substring(0, split);
     }
 
+    /**
+     * Parses the FASHN consumed-credits response header into provider usage.
+     * This is consumed credits, not a provider credit balance: FASHN V1
+     * reports no balance API, so only the per-response consumption is
+     * recorded, denominated in credits (CRD) since no fiat amount is
+     * determinable from the header (ADR-014). Blank, malformed, negative,
+     * or non-finite values yield {@link Optional#empty()} without throwing;
+     * the raw value never enters tags, span attributes, or logs.
+     */
     Optional<ProviderUsage> usage(String creditsHeader) {
-        return Optional.empty();
+        if (creditsHeader == null || creditsHeader.isBlank()) {
+            return Optional.empty();
+        }
+        BigDecimal credits;
+        try {
+            credits = new BigDecimal(creditsHeader.strip());
+        } catch (NumberFormatException ex) {
+            return Optional.empty();
+        }
+        if (credits.signum() < 0 || credits.compareTo(MAX_CREDITS) > 0) {
+            return Optional.empty();
+        }
+        return Optional.of(new ProviderUsage(credits, credits, CREDITS_CURRENCY));
     }
 
     Optional<ObjectRef> objectRef(StorageKey storageKey) {

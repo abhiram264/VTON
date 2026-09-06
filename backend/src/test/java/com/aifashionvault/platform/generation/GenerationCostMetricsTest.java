@@ -16,6 +16,7 @@ import com.aifashionvault.shared.GenerationAttemptId;
 import com.aifashionvault.shared.GenerationJobId;
 import com.aifashionvault.shared.UserId;
 
+import io.micrometer.core.instrument.DistributionSummary;
 import io.micrometer.core.instrument.Tag;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 
@@ -125,6 +126,66 @@ class GenerationCostMetricsTest {
 			.tag("technical_outcome", "SUCCESS").tag("quality_outcome", "PASS").tag("cost_status", PricingSnapshot.COST_FINAL).counter()).isNotNull();
 		assertThat(registry.getMeters().stream().flatMap(m -> m.getId().getTags().stream()).map(Tag::getKey))
 			.doesNotContain("user", "user_id", "job", "generation", "attempt", "url", "body", "media", "secret");
+	}
+
+	@Test
+	void knownCostFactRecordsCostAmountOnceAndReplayDoesNotInflate() {
+		SimpleMeterRegistry registry = new SimpleMeterRegistry();
+		GenerationMetrics metrics = new GenerationMetrics(registry, CLOCK);
+		GenerationCostFact finalFact = fact("provider-a", "route-a", "SUCCESS", "PASS", "2.50", PricingSnapshot.COST_FINAL, true, true, true);
+		metrics.recordAttempt(finalFact);
+
+		DistributionSummary amount = registry.find(GenerationMetrics.GENERATION_COST_AMOUNT)
+			.tag("provider", "provider-a")
+			.tag("currency", "USD")
+			.summary();
+		assertThat(amount).isNotNull();
+		assertThat(amount.count()).isEqualTo(1);
+		assertThat(amount.totalAmount()).isEqualTo(2.50);
+
+		metrics.recordAttempt(finalFact);
+
+		assertThat(registry.find(GenerationMetrics.GENERATION_COST_AMOUNT).summary().count()).isEqualTo(1);
+	}
+
+	@Test
+	void estimatedToFinalReconciliationRecordsEachAcceptedFactOnceAndReplaysAddNone() {
+		SimpleMeterRegistry registry = new SimpleMeterRegistry();
+		GenerationMetrics metrics = new GenerationMetrics(registry, CLOCK);
+		GenerationCostFact estimated = fact("provider-a", "route-a", "SUCCESS", "PASS", "4.00", PricingSnapshot.COST_ESTIMATED, true, false, false);
+		GenerationCostFact settled = replacement(estimated, "3.25", PricingSnapshot.COST_FINAL);
+
+		metrics.recordAttempt(estimated);
+		assertThat(registry.find(GenerationMetrics.GENERATION_COST_AMOUNT).summary()).isNull();
+
+		metrics.recordAttempt(settled);
+		metrics.recordAttempt(settled);
+
+		DistributionSummary amount = registry.find(GenerationMetrics.GENERATION_COST_AMOUNT).summary();
+		assertThat(amount).isNotNull();
+		assertThat(amount.count()).isEqualTo(1);
+		assertThat(amount.totalAmount()).isEqualTo(3.25);
+	}
+	@Test
+	void unknownCostFactRecordsNoAmountSample() {
+		SimpleMeterRegistry registry = new SimpleMeterRegistry();
+		new GenerationMetrics(registry, CLOCK).recordAttempt(
+			fact("provider-a", "route-a", "SUCCESS", "PASS", null, PricingSnapshot.COST_UNKNOWN, true, false, false));
+
+		assertThat(registry.find(GenerationMetrics.GENERATION_COST_AMOUNT).summary()).isNull();
+	}
+
+	@Test
+	void invalidCostAmountInputsThrowBeforeAnyMeterIsCreated() {
+		SimpleMeterRegistry registry = new SimpleMeterRegistry();
+		GenerationMetrics metrics = new GenerationMetrics(registry, CLOCK);
+		assertThatThrownBy(() -> metrics.recordGenerationCostAmount("provider-a", "USD", null))
+			.isInstanceOf(IllegalArgumentException.class);
+		assertThatThrownBy(() -> metrics.recordGenerationCostAmount("provider-a", "USD", new BigDecimal("-0.01")))
+			.isInstanceOf(IllegalArgumentException.class);
+		assertThatThrownBy(() -> metrics.recordGenerationCostAmount("provider-a", "nope", BigDecimal.ONE))
+			.isInstanceOf(IllegalArgumentException.class);
+		assertThat(registry.find(GenerationMetrics.GENERATION_COST_AMOUNT).summary()).isNull();
 	}
 
 	private static GenerationMetrics metrics() { return new GenerationMetrics(new SimpleMeterRegistry(), CLOCK); }

@@ -5,6 +5,7 @@ import java.time.Clock;
 
 import javax.sql.DataSource;
 
+import org.springframework.beans.factory.FactoryBean;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -13,6 +14,9 @@ import org.springframework.context.annotation.Configuration;
 
 import com.aifashionvault.platform.environment.AppEnv;
 import com.aifashionvault.platform.environment.VaultEnvironmentProperties;
+
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
 import software.amazon.awssdk.auth.credentials.AwsCredentialsProvider;
@@ -35,10 +39,59 @@ public class GenerationQueueConfiguration {
 		return new SqsGenerationWorkQueue(sqsClient, properties);
 	}
 
+	// FactoryBeans (vton-test-datasource-beans convention): the DataSource is
+	// created late when tests clear the slim-context autoconfigure excludes, so
+	// scanned @ConditionalOnBean(DataSource.class) beans would never register.
 	@Bean
-	@ConditionalOnBean(DataSource.class)
-	JdbcWorkOutboxStore jdbcWorkOutboxStore(DataSource dataSource, ObjectProvider<Clock> clocks) {
-		return new JdbcWorkOutboxStore(dataSource, clocks.getIfAvailable(Clock::systemUTC));
+	FactoryBean<JdbcWorkOutboxStore> jdbcWorkOutboxStore(
+		ObjectProvider<DataSource> dataSources,
+		ObjectProvider<Clock> clocks
+	) {
+		return new FactoryBean<>() {
+			@Override
+			public JdbcWorkOutboxStore getObject() {
+				DataSource dataSource = dataSources.getIfAvailable();
+				return dataSource == null
+					? null
+					: new JdbcWorkOutboxStore(dataSource, clocks.getIfAvailable(Clock::systemUTC));
+			}
+			@Override
+			public Class<?> getObjectType() {
+				return JdbcWorkOutboxStore.class;
+			}
+			@Override
+			public boolean isSingleton() {
+				return true;
+			}
+		};
+	}
+
+	@Bean
+	FactoryBean<QueueObservability> queueObservability(
+		ObjectProvider<JdbcWorkOutboxStore> stores,
+		ObjectProvider<MeterRegistry> registries,
+		ObjectProvider<Clock> clocks
+	) {
+		return new FactoryBean<>() {
+			@Override
+			public QueueObservability getObject() {
+				JdbcWorkOutboxStore store = stores.getIfAvailable();
+				return store == null
+					? null
+					: new QueueObservability(
+						store,
+						registries.getIfAvailable(SimpleMeterRegistry::new),
+						clocks.getIfAvailable(Clock::systemUTC));
+			}
+			@Override
+			public Class<?> getObjectType() {
+				return QueueObservability.class;
+			}
+			@Override
+			public boolean isSingleton() {
+				return true;
+			}
+		};
 	}
 
 	@Bean

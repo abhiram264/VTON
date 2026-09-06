@@ -32,6 +32,8 @@ import com.aifashionvault.platform.objectstore.ImageInspector;
 import com.aifashionvault.platform.objectstore.ObjectStore;
 import com.aifashionvault.platform.objectstore.S3ObjectStore;
 import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.observation.ObservationRegistry;
+import com.aifashionvault.shared.ObservationFacade;
 import com.aifashionvault.shared.ShareImportId;
 import com.aifashionvault.shared.StorageKey;
 import com.aifashionvault.shared.UploadId;
@@ -57,8 +59,10 @@ public class ShareImportConfiguration {
 			ObjectProvider<ObjectStore> objectStores,
 			ObjectProvider<ImageInspector> imageInspectors,
 			ObjectProvider<software.amazon.awssdk.services.s3.S3Client> s3Clients,
-			ObjectProvider<MeterRegistry> meterRegistries) {
-		return new ShareImportResolverChainFactoryBean(objectStores, imageInspectors, s3Clients, meterRegistries);
+			ObjectProvider<MeterRegistry> meterRegistries,
+			ObjectProvider<ObservationRegistry> observationRegistries) {
+		return new ShareImportResolverChainFactoryBean(objectStores, imageInspectors, s3Clients, meterRegistries,
+			observationRegistries);
 	}
 
 	@Bean
@@ -118,15 +122,18 @@ public class ShareImportConfiguration {
 		private final ObjectProvider<ImageInspector> inspectors;
 		private final ObjectProvider<software.amazon.awssdk.services.s3.S3Client> s3Clients;
 		private final ObjectProvider<MeterRegistry> meterRegistries;
+		private final ObjectProvider<ObservationRegistry> observationRegistries;
 
 		ShareImportResolverChainFactoryBean(ObjectProvider<ObjectStore> stores,
 				ObjectProvider<ImageInspector> inspectors,
 				ObjectProvider<software.amazon.awssdk.services.s3.S3Client> s3Clients,
-				ObjectProvider<MeterRegistry> meterRegistries) {
+				ObjectProvider<MeterRegistry> meterRegistries,
+				ObjectProvider<ObservationRegistry> observationRegistries) {
 			this.stores = stores;
 			this.inspectors = inspectors;
 			this.s3Clients = s3Clients;
 			this.meterRegistries = meterRegistries;
+			this.observationRegistries = observationRegistries;
 		}
 
 		@Override
@@ -137,7 +144,7 @@ public class ShareImportConfiguration {
 				return null;
 			}
 			return PlatformResolverChain.over(adapters.store(), adapters.inspector(), s3,
-				meterRegistries.getIfAvailable());
+				meterRegistries.getIfAvailable(), observationRegistries.getIfAvailable());
 		}
 
 		@Override
@@ -242,11 +249,12 @@ public class ShareImportConfiguration {
 		private final SourceResolverRegistry registry;
 
 		PlatformResolverChain(ObjectStore store, ImageInspector inspector, ImportObjectWriter writer,
-				MeterRegistry meterRegistry) {
+				MeterRegistry meterRegistry, ObservationRegistry observationRegistry) {
 			this.store = Objects.requireNonNull(store, "store");
 			this.inspector = Objects.requireNonNull(inspector, "inspector");
 			this.writer = Objects.requireNonNull(writer, "writer");
-			SourceResolverMetrics metrics = new SourceResolverMetrics(meterRegistry);
+			SourceResolverMetrics metrics = new SourceResolverMetrics(meterRegistry,
+				observationRegistry == null ? null : new ObservationFacade(observationRegistry));
 			ImportHttpFetcher fetcher = new SafeImportHttpClient();
 			ImportDns dns = new ImportDns();
 			this.registry = new SourceResolverRegistry(List.of(
@@ -263,11 +271,17 @@ public class ShareImportConfiguration {
 
 		static PlatformResolverChain over(ObjectStore store, ImageInspector inspector,
 				software.amazon.awssdk.services.s3.S3Client s3, MeterRegistry meterRegistry) {
+			return over(store, inspector, s3, meterRegistry, null);
+		}
+
+		static PlatformResolverChain over(ObjectStore store, ImageInspector inspector,
+				software.amazon.awssdk.services.s3.S3Client s3, MeterRegistry meterRegistry,
+				ObservationRegistry observationRegistry) {
 			if (!(store instanceof S3ObjectStore) || s3 == null) {
 				return null;
 			}
 			return new PlatformResolverChain(store, inspector, new ImportObjectWriter((S3ObjectStore) store, s3),
-				meterRegistry);
+				meterRegistry, observationRegistry);
 		}
 
 		@Override

@@ -25,10 +25,16 @@ import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 
+import com.aifashionvault.generation.vton.DefaultProviderRegistry;
+import com.aifashionvault.generation.vton.ProviderRegistry;
 import com.aifashionvault.platform.objectstore.ClaimResult;
 import com.aifashionvault.platform.objectstore.GenerationMediaStore;
 import com.aifashionvault.platform.objectstore.ProductInputClaimCommand;
 import com.aifashionvault.platform.generation.RecordingVtonProvider;
+import com.aifashionvault.platform.generation.GenerationMetrics;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import com.aifashionvault.platform.security.ExternalTokenVerifier;
 import com.aifashionvault.platform.security.InProcessJwtFixture;
 import com.aifashionvault.shared.StorageKey;
@@ -56,6 +62,7 @@ class GenerationHttpContractTest {
 
 	@Autowired MockMvc mockMvc;
 	@Autowired JdbcTemplate jdbc;
+	@Autowired MeterRegistry meters;
 	@Autowired RecordingVtonProvider provider;
 
 	@DynamicPropertySource
@@ -227,6 +234,38 @@ class GenerationHttpContractTest {
 		}
 	}
 
+	@Test
+	void generationCountIsUntaggedAndReplayAddsNothing() throws Exception {
+		Owner owner = seedOwner(true);
+		double before = generationCount();
+		create(owner, "count-key", owner.uploadId());
+
+		Counter count = meters.find(GenerationMetrics.GENERATION_COUNT).counter();
+		assertThat(count).isNotNull();
+		assertThat(count.getId().getTags()).isEmpty();
+		assertThat(count.count() - before).isEqualTo(1);
+
+		create(owner, "count-key", owner.uploadId());
+
+		assertThat(generationCount() - count.count()).isZero();
+	}
+
+	@Test
+	void rejectedCreateBeforeJobInsertIncrementsNoGenerationCount() throws Exception {
+		Owner owner = seedOwner(true);
+		double before = generationCount();
+		mockMvc.perform(post("/generations").header(HttpHeaders.AUTHORIZATION, bearer(owner.token()))
+				.contentType(MediaType.APPLICATION_JSON).content(body(owner.uploadId())))
+			.andExpect(status().isBadRequest());
+
+		assertThat(generationCount()).isEqualTo(before);
+	}
+
+	private double generationCount() {
+		Counter counter = meters.find(GenerationMetrics.GENERATION_COUNT).counter();
+		return counter == null ? 0d : counter.count();
+	}
+
 	private MvcResult create(Owner owner, String key, UUID uploadId) throws Exception {
 		return mockMvc.perform(post("/generations").header(HttpHeaders.AUTHORIZATION, bearer(owner.token()))
 				.header("Idempotency-Key", key).contentType(MediaType.APPLICATION_JSON).content(body(uploadId)))
@@ -286,6 +325,16 @@ class GenerationHttpContractTest {
     static class Configuration {
         @Bean @Primary ExternalTokenVerifier verifier() { return InProcessJwtFixture.verifier(); }
         @Bean @Primary RecordingVtonProvider provider() { return new RecordingVtonProvider(); }
+        @Bean @Primary ProviderRegistry testProviderRegistry(RecordingVtonProvider recordingProvider) {
+            return new DefaultProviderRegistry(
+                java.util.List.of(recordingProvider), recordingProvider.providerKey(), java.util.Map.of());
+        }
+        @Bean @Primary SimpleMeterRegistry testGenerationMeterRegistry() {
+            return new SimpleMeterRegistry();
+        }
+        @Bean @Primary GenerationMetrics testGenerationMetrics(SimpleMeterRegistry testGenerationMeterRegistry) {
+            return new GenerationMetrics(testGenerationMeterRegistry);
+        }
         @Bean @Primary GenerationMediaStore generationMediaStore() {
             return new GenerationMediaStore() {
                 @Override public void putBounded(StorageKey dest, InputStream source, long maxBytes, String mediaType) { }
