@@ -110,4 +110,31 @@ public final class BenchmarkReportJson {
 		root.put("notes", regression.notes());
 		return MAPPER.writeValueAsString(root);
 	}
+
+	/** Serializes a release-gate decision; scalar findings only, no deployment automation. */
+	public static String serialize(ReleaseGateDecision decision) {
+		if (decision == null) {
+			throw new IllegalArgumentException("decision must not be null");
+		}
+		List<Map<String, Object>> findings = new ArrayList<>();
+		if (decision.findings() != null) {
+			for (var finding : decision.findings()) {
+				Map<String, Object> record = new LinkedHashMap<>();
+				record.put("rule", finding.rule());
+				record.put("dimension", finding.dimension());
+				record.put("category", finding.category());
+				record.put("severity", finding.severity());
+				record.put("baselineValue", finding.baselineValue());
+				record.put("candidateValue", finding.candidateValue());
+				record.put("detail", finding.detail());
+				findings.add(record);
+			}
+		}
+		Map<String, Object> root = new LinkedHashMap<>();
+		root.put("verdict", decision.verdict() == null ? null : decision.verdict().name());
+		root.put("benchmarkVersion", decision.benchmarkVersion());
+		root.put("matchedPairs", decision.matchedPairs());
+		root.put("findings", findings);
+		return MAPPER.writeValueAsString(root);
+	}
 }
