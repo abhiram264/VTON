@@ -38,4 +38,6 @@ public final class DefaultProviderRegistry implements ProviderRegistry {
     }
 
     @Override public ProviderKey selectedProviderKey() { return selectedProviderKey; }
+
+    @Override public Collection<ProviderKey> providerKeys() { return providers.keySet(); }
 }
