@@ -11,7 +11,13 @@ public record AbuseDecision(
 	BigDecimal ceiling,
 	String currency,
 	Instant windowStart,
-	Instant windowEnd) {
+	Instant windowEnd,
+	CostBreachIndicators indicators) {
+
+	public AbuseDecision(boolean allowed, AbuseDecisionReason reason, BigDecimal observedSpend, BigDecimal ceiling,
+		String currency, Instant windowStart, Instant windowEnd) {
+		this(allowed, reason, observedSpend, ceiling, currency, windowStart, windowEnd, null);
+	}
 
 	public AbuseDecision {
 		Objects.requireNonNull(reason, "reason");
