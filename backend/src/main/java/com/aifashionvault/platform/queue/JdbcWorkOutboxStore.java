@@ -161,6 +161,20 @@ public final class JdbcWorkOutboxStore implements WorkOutboxStore {
 		return Boolean.TRUE.equals(inserted);
 	}
 
+	public int countUnsent() {
+		Integer count = jdbc.queryForObject(
+			"SELECT COUNT(*) FROM generation_work_outbox WHERE publish_state <> 'SENT'",
+			Integer.class);
+		return count == null ? 0 : count;
+	}
+
+	public Optional<Instant> oldestUnsentCreatedAt() {
+		Timestamp oldest = jdbc.queryForObject(
+			"SELECT MIN(created_at) FROM generation_work_outbox WHERE publish_state <> 'SENT'",
+			Timestamp.class);
+		return Optional.ofNullable(oldest).map(Timestamp::toInstant);
+	}
+
 
 	Duration retryDelay(int attemptCount) {
 		long baseSeconds = attemptCount <= 0 || attemptCount > RETRY_SECONDS.length

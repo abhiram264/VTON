@@ -1,6 +1,7 @@
 package com.aifashionvault.platform.fashn;
 
 import java.io.IOException;
+import java.math.BigDecimal;
 import java.net.ConnectException;
 import java.net.URI;
 import java.time.Instant;
@@ -34,6 +35,7 @@ import com.aifashionvault.generation.vton.ProviderJobId;
 import com.aifashionvault.generation.vton.ProviderKey;
 import com.aifashionvault.generation.vton.ProviderMediaSource;
 import com.aifashionvault.generation.vton.ProviderOutputRef;
+import com.aifashionvault.generation.vton.ProviderUsage;
 import com.aifashionvault.generation.vton.StatusQueryResult;
 import com.aifashionvault.generation.vton.SubmissionReplaySafety;
 
@@ -447,13 +449,14 @@ class FashnVtonProviderTest {
     }
 
     @Test
-    void validCreditsLeaveUsageEmptyAndDoNotFailSuccess() {
+    void consumedCreditsFlowIntoUsageAndInvalidHeadersStayAbsent() {
         FashnTestSupport.Harness harness = FashnTestSupport.harness();
         expectRun(harness).andRespond(withSuccess(FashnTestSupport.runSuccess(), MediaType.APPLICATION_JSON)
-            .header(FashnMapper.CREDITS_HEADER, "3"));
+            .header(FashnMapper.CREDITS_HEADER, "1.5"));
 
         assertThat(harness.provider().submit(FashnTestSupport.request(FashnTestSupport.STANDARD), FashnTestSupport.key()))
-            .isInstanceOfSatisfying(GenerationSubmission.Accepted.class, accepted -> assertThat(accepted.usage()).isEmpty());
+            .isInstanceOfSatisfying(GenerationSubmission.Accepted.class, accepted ->
+                assertThat(accepted.usage()).contains(new ProviderUsage(new BigDecimal("1.5"), new BigDecimal("1.5"), "CRD")));
         harness.server().verify();
 
         FashnTestSupport.Harness status = FashnTestSupport.harness();

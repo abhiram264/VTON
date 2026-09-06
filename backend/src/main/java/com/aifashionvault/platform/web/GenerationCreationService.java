@@ -45,20 +45,28 @@ public class GenerationCreationService {
     private final Clock clock;
     private final GenerationMediaStore mediaStore;
     private final com.aifashionvault.admission.GenerationRateLimiter rateLimiter;
+    private final com.aifashionvault.platform.generation.GenerationMetrics metrics;
 
     public GenerationCreationService(GenerationStore store, JdbcTemplate jdbc, GenerationApiProperties properties, Clock clock,
         GenerationMediaStore mediaStore) {
-        this(store, jdbc, properties, clock, mediaStore, null);
+        this(store, jdbc, properties, clock, mediaStore, null, null);
     }
 
     public GenerationCreationService(GenerationStore store, JdbcTemplate jdbc, GenerationApiProperties properties, Clock clock,
         GenerationMediaStore mediaStore, com.aifashionvault.admission.GenerationRateLimiter rateLimiter) {
+        this(store, jdbc, properties, clock, mediaStore, rateLimiter, null);
+    }
+
+    public GenerationCreationService(GenerationStore store, JdbcTemplate jdbc, GenerationApiProperties properties, Clock clock,
+        GenerationMediaStore mediaStore, com.aifashionvault.admission.GenerationRateLimiter rateLimiter,
+        com.aifashionvault.platform.generation.GenerationMetrics metrics) {
         this.store = store;
         this.jdbc = jdbc;
         this.properties = properties;
         this.clock = clock;
         this.mediaStore = mediaStore;
         this.rateLimiter = rateLimiter;
+        this.metrics = metrics;
     }
 
     public GenerationResponse create(UserId userId, String idempotencyKey, GenerationRequest request) {
@@ -107,7 +115,12 @@ public class GenerationCreationService {
 			CreateSingleItemGenerationCommand command = new CreateSingleItemGenerationCommand(userId, new UploadId(request.productUploadId()), key);
 			FrozenSingleItemIntent intent = new FrozenSingleItemIntent(job.id(), userId, avatar.imageId(), productMediaId, 1, 1);
 			GenerationResponse response = switch (store.createSingleItem(command, intent, job)) {
-				case GenerationStore.CreateSingleItemResult.Created created -> toResponse(created.job());
+				case GenerationStore.CreateSingleItemResult.Created created -> {
+					if (metrics != null) {
+						metrics.recordGenerationCount();
+					}
+					yield toResponse(created.job());
+				}
 				case GenerationStore.CreateSingleItemResult.Replayed replayed -> toResponse(replayed.job());
 				case GenerationStore.CreateSingleItemResult.FingerprintConflict ignored -> throw problem(HttpStatus.CONFLICT, IDEMPOTENCY_KEY_CONFLICT);
 				case GenerationStore.CreateSingleItemResult.ProductUploadAlreadyClaimed ignored -> throw problem(HttpStatus.CONFLICT, PRODUCT_UPLOAD_ALREADY_CLAIMED);
@@ -177,6 +190,7 @@ public class GenerationCreationService {
 		return new GenerationResponse(job.id().value(), com.aifashionvault.generation.GenerationStatus.valueOf(job.status()),
 			CoarseGenerationPhase.fromDurable(job.status(), job.terminalReason()), job.statusVersion(), job.createdAt(), job.updatedAt(), lookId, failure);
 	}
+
 
 	private static String fingerprint(UserId userId, AvatarImageId avatar, UUID product) { return userId.value()+"\\n"+avatar.value()+"\\n"+product; }
 	private static Problem problem(HttpStatus status, String code) { return new Problem(status, code); }

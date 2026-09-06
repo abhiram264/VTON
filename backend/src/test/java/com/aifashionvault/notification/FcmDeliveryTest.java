@@ -33,14 +33,23 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
 
 import com.aifashionvault.shared.GenerationJobId;
 import com.aifashionvault.shared.LookId;
+import com.aifashionvault.shared.ObservationFacade;
 import com.aifashionvault.shared.UserId;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
+
+import io.micrometer.common.KeyValue;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import io.micrometer.observation.Observation;
+import io.micrometer.observation.ObservationHandler;
+import io.micrometer.observation.ObservationRegistry;
+import io.micrometer.observation.tck.TestObservationRegistry;
 
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @SpringBootTest(properties = "spring.autoconfigure.exclude=")
 class FcmDeliveryTest {
@@ -74,6 +83,8 @@ class FcmDeliveryTest {
 	private NotificationDeliveryConfiguration config;
 	private FakeFcmServer fcm;
 	private FcmDeliveryWorker worker;
+	private TestObservationRegistry observations;
+	private SimpleMeterRegistry meters;
 
 	@DynamicPropertySource
 	static void registerDatasource(DynamicPropertyRegistry registry) {
@@ -92,6 +103,8 @@ class FcmDeliveryTest {
 			"TRUNCATE TABLE generation_notification_delivery, generation_notification_event, look, generation_job, users CASCADE");
 		store = new JdbcNotificationEventStore(dataSource);
 		clock = new MutableClock(NOW);
+		observations = TestObservationRegistry.create();
+		meters = new SimpleMeterRegistry();
 		config = new NotificationDeliveryConfiguration();
 		config.setProjectId(PROJECT_ID);
 		config.setAccessToken(ACCESS_TOKEN);
@@ -105,6 +118,7 @@ class FcmDeliveryTest {
 			fcm.stop();
 		}
 	}
+
 	@Test
 	void lookReadyPayloadIsExactAndContainsNoMediaUrls() {
 		Seed seed = seedLookReady();
@@ -252,12 +266,292 @@ class FcmDeliveryTest {
 			.isEqualTo(DeviceDelivery.DEADLINE_EXCEEDED);
 	}
 
-	private FcmDeliveryWorker newWorker() {
+	@Test
+	void acceptedSendEmitsExactlyOneStoppedSpanAndFrozenOutcomeAndDurationSamples() {
+		Seed seed = seedLookReady();
+		fcm.enqueue(200, null, LOOK_READY_MESSAGE);
+
+		assertThat(worker.processNext(clock.instant())).isTrue();
+		observations.assertThat().hasSingleObservationThat()
+			.hasNameEqualTo(ObservationFacade.NOTIFICATION_SEND)
+			.hasLowCardinalityKeyValue("outcome", "ACCEPTED")
+			.hasBeenStopped();
+
+		observations.assertThat().hasHandledContextsThatSatisfy(contexts -> {
+			assertThat(contexts).hasSize(1);
+			assertStoppedSendSpan(contexts.get(0), "ACCEPTED");
+			String exported = contexts.get(0).getName() + contexts.get(0).getAllKeyValues().toString();
+			assertThat(exported).doesNotContain(
+				DEVICE,
+				ACCESS_TOKEN,
+				seed.eventId().toString(),
+				seed.lookId().value().toString(),
+				"projects/test-project/messages/msg-look");
+		});
+		assertSendSamples("ACCEPTED", 1);
+		assertThat(meters.getMeters()).hasSize(2);
+	}
+
+	@Test
+	void retryScheduledSendEmitsSpanAndFrozenOutcomeAndDurationSamples() {
+		seedLookReady();
+		fcm.enqueue(429, "45", "");
+
+		assertThat(worker.processNext(clock.instant())).isTrue();
+		observations.assertThat().hasSingleObservationThat()
+			.hasNameEqualTo(ObservationFacade.NOTIFICATION_SEND)
+			.hasLowCardinalityKeyValue("outcome", "RETRY_SCHEDULED")
+			.hasBeenStopped();
+
+		observations.assertThat().hasHandledContextsThatSatisfy(contexts -> {
+			assertThat(contexts).hasSize(1);
+			assertStoppedSendSpan(contexts.get(0), "RETRY_SCHEDULED");
+		});
+		assertSendSamples("RETRY_SCHEDULED", 1);
+	}
+
+	@Test
+	void permanentFailureSendEmitsSpanAndFrozenOutcomeAndDurationSamples() {
+		seedLookReady();
+		fcm.enqueue(400, null, "");
+
+		assertThat(worker.processNext(clock.instant())).isTrue();
+		observations.assertThat().hasSingleObservationThat()
+			.hasNameEqualTo(ObservationFacade.NOTIFICATION_SEND)
+			.hasLowCardinalityKeyValue("outcome", "PERMANENT_FAILURE")
+			.hasBeenStopped();
+
+		observations.assertThat().hasHandledContextsThatSatisfy(contexts -> {
+			assertThat(contexts).hasSize(1);
+			assertStoppedSendSpan(contexts.get(0), "PERMANENT_FAILURE");
+		});
+		assertSendSamples("PERMANENT_FAILURE", 1);
+	}
+
+	@Test
+	void attemptsExhaustedOnFinalSendEmitsSpanAndFrozenOutcomeAndDurationSamples() {
+		Seed seed = seedLookReady();
+		for (int i = 0; i < 10; i++) {
+			fcm.enqueue(503, null, "");
+		}
+
+		for (int i = 0; i < 10; i++) {
+			assertThat(worker.processNext(clock.instant())).isTrue();
+			if (i < 9) {
+				clock.set(store.findDelivery(seed.eventId(), DEVICE).orElseThrow().nextAttemptAt());
+			}
+		}
+
+		observations.assertThat().hasHandledContextsThatSatisfy(contexts -> {
+			assertThat(contexts).hasSize(10);
+			long scheduled = 0;
+			long exhausted = 0;
+			for (Observation.Context context : contexts) {
+				if (KeyValue.of("outcome", "RETRY_SCHEDULED").equals(context.getLowCardinalityKeyValue("outcome"))) {
+					assertStoppedSendSpan(context, "RETRY_SCHEDULED");
+					scheduled++;
+				}
+				else {
+					assertStoppedSendSpan(context, "ATTEMPTS_EXHAUSTED");
+					exhausted++;
+				}
+			}
+			assertThat(scheduled).isEqualTo(9);
+			assertThat(exhausted).isEqualTo(1);
+		});
+		assertSendSamples("RETRY_SCHEDULED", 9);
+		assertSendSamples("ATTEMPTS_EXHAUSTED", 1);
+	}
+
+	@Test
+	void preSendDeadlineTerminationEmitsNoSpanAndNoMetricSamples() {
+		UserId userId = insertUser();
+		GenerationJobId generationId = insertJob(userId);
+		LookId lookId = insertLook(userId, generationId);
+		UUID eventId = UUID.randomUUID();
+		worker.enqueue(
+			NotificationEvent.lookReady(eventId, userId, generationId, lookId, NOW, NOW),
+			List.of(DEVICE));
+		fcm.enqueue(200, null, LOOK_READY_MESSAGE);
+
+		assertThat(worker.processNext(clock.instant())).isTrue();
+
+		assertThat(fcm.requests).isEmpty();
+		observations.assertThat().doesNotHaveAnyObservation();
+		assertThat(meters.getMeters()).isEmpty();
+		assertThat(store.findDelivery(eventId, DEVICE).orElseThrow().terminalResult())
+			.isEqualTo(DeviceDelivery.DEADLINE_EXCEEDED);
+	}
+
+	@Test
+	void preSendAttemptsExhaustedTerminationEmitsNoSpanAndNoMetricSamples() {
+		Seed seed = seedLookReady();
+		jdbc.update(
+			"UPDATE generation_notification_delivery SET attempt_count = 10 WHERE event_id = ?",
+			seed.eventId());
+		fcm.enqueue(200, null, LOOK_READY_MESSAGE);
+
+		assertThat(worker.processNext(clock.instant())).isTrue();
+
+		assertThat(fcm.requests).isEmpty();
+		observations.assertThat().doesNotHaveAnyObservation();
+		assertThat(meters.getMeters()).isEmpty();
+		assertThat(store.findDelivery(seed.eventId(), DEVICE).orElseThrow().terminalResult())
+			.isEqualTo(DeviceDelivery.ATTEMPTS_EXHAUSTED);
+	}
+
+	@Test
+	void sendExceptionMarksSpanErrorRecordsNoSamplesAndPropagatesUnchanged() {
+		Seed seed = seedLookReady();
+		FcmDeliveryWorker brokenToken = workerWithBlankAccessToken();
+
+		assertThatThrownBy(() -> brokenToken.processNext(clock.instant()))
+			.isInstanceOf(IllegalStateException.class)
+			.hasMessage("access token is required");
+
+		assertStoppedErrorSpan();
+		assertThat(meters.getMeters()).isEmpty();
+		DeviceDelivery unchanged = store.findDelivery(seed.eventId(), DEVICE).orElseThrow();
+		assertThat(unchanged.status()).isEqualTo(DeviceDelivery.PENDING);
+		assertThat(unchanged.attemptCount()).isZero();
+	}
+
+	@Test
+	void onStartHandlerFailureDoesNotEscapeAndAcceptedSendStillPersistsOnce() {
+		Seed seed = seedLookReady();
+		fcm.enqueue(200, null, LOOK_READY_MESSAGE);
+		FcmDeliveryWorker instrumented = workerWith(FailingHandlers.onStart());
+
+		assertThat(instrumented.processNext(clock.instant())).isTrue();
+
+		assertThat(fcm.requests).hasSize(1);
+		assertAcceptedExactlyOnce(seed);
+	}
+
+	@Test
+	void onErrorHandlerFailureDoesNotEscapeAndOriginalErrorStillPropagatesUnchanged() {
+		Seed seed = seedLookReady();
+		FcmDeliveryWorker instrumented = workerWith(FailingHandlers.onError(), blankTokenClient());
+
+		assertThatThrownBy(() -> instrumented.processNext(clock.instant()))
+			.isInstanceOf(IllegalStateException.class)
+			.hasMessage("access token is required");
+
+		assertThat(fcm.requests).isEmpty();
+		DeviceDelivery unchanged = store.findDelivery(seed.eventId(), DEVICE).orElseThrow();
+		assertThat(unchanged.status()).isEqualTo(DeviceDelivery.PENDING);
+		assertThat(unchanged.attemptCount()).isZero();
+	}
+
+	@Test
+	void onStopHandlerFailureDoesNotEscapeAndAcceptedSendStillPersistsOnce() {
+		Seed seed = seedLookReady();
+		fcm.enqueue(200, null, LOOK_READY_MESSAGE);
+		FcmDeliveryWorker instrumented = workerWith(FailingHandlers.onStop());
+
+		assertThat(instrumented.processNext(clock.instant())).isTrue();
+
+		assertThat(fcm.requests).hasSize(1);
+		assertAcceptedExactlyOnce(seed);
+	}
+
+	@Test
+	void retryScheduledSendStillPersistsWhenOnStopThrows() {
+		Seed seed = seedLookReady();
+		fcm.enqueue(429, "45", "");
+		FcmDeliveryWorker instrumented = workerWith(FailingHandlers.onStop());
+
+		assertThat(instrumented.processNext(clock.instant())).isTrue();
+
+		assertThat(fcm.requests).hasSize(1);
+		DeviceDelivery waiting = store.findDelivery(seed.eventId(), DEVICE).orElseThrow();
+		assertThat(waiting.status()).isEqualTo(DeviceDelivery.PENDING);
+		assertThat(waiting.attemptCount()).isEqualTo(1);
+		assertThat(waiting.nextAttemptAt()).isEqualTo(NOW.plusSeconds(45));
+	}
+
+	@Test
+	void failedSendStillPersistsTerminalWhenOnStopThrows() {
+		Seed seed = seedLookReady();
+		fcm.enqueue(400, null, "");
+		FcmDeliveryWorker instrumented = workerWith(FailingHandlers.onStop());
+
+		assertThat(instrumented.processNext(clock.instant())).isTrue();
+
+		assertThat(fcm.requests).hasSize(1);
+		DeviceDelivery terminal = store.findDelivery(seed.eventId(), DEVICE).orElseThrow();
+		assertThat(terminal.status()).isEqualTo(DeviceDelivery.FAILED);
+		assertThat(terminal.terminalResult()).isEqualTo(DeviceDelivery.PERMANENT_FAILURE);
+	}
+
+	private void assertAcceptedExactlyOnce(Seed seed) {
+		DeviceDelivery delivery = store.findDelivery(seed.eventId(), DEVICE).orElseThrow();
+		assertThat(delivery.acceptedForDelivery()).isTrue();
+		assertThat(delivery.attemptCount()).isEqualTo(1);
+		assertThat(delivery.terminalResult()).isEqualTo(DeviceDelivery.ACCEPTED_FOR_DELIVERY);
+		assertThat(delivery.providerMessageId()).isEqualTo("projects/test-project/messages/msg-look");
+		Integer rows = jdbc.queryForObject(
+			"SELECT COUNT(*) FROM generation_notification_delivery WHERE event_id = ?",
+			Integer.class,
+			seed.eventId());
+		assertThat(rows).isEqualTo(1);
+	}
+
+	private FcmDeliveryWorker workerWith(ObservationHandler<Observation.Context> handler) {
+		return workerWith(handler, newClient(() -> ACCESS_TOKEN));
+	}
+
+	private FcmDeliveryWorker workerWith(ObservationHandler<Observation.Context> handler, FcmClient client) {
+		ObservationRegistry registry = ObservationRegistry.create();
+		registry.observationConfig().observationHandler(handler);
+		return new FcmDeliveryWorker(store, client, config, zeroJitter(), meters, registry);
+	}
+
+	private FcmClient blankTokenClient() {
+		return newClient(() -> "");
+	}
+
+	private FcmClient newClient(java.util.function.Supplier<String> accessToken) {
 		HttpClient httpClient = HttpClient.newBuilder()
 			.connectTimeout(Duration.ofSeconds(2))
 			.build();
-		FcmClient client = new FcmClient(fcm.baseUrl(), PROJECT_ID, () -> ACCESS_TOKEN, config.ttl(), httpClient);
-		return new FcmDeliveryWorker(store, client, config, zeroJitter());
+		return new FcmClient(fcm.baseUrl(), PROJECT_ID, accessToken, config.ttl(), httpClient);
+	}
+
+	private FcmDeliveryWorker workerWithBlankAccessToken() {
+		return new FcmDeliveryWorker(store, blankTokenClient(), config, zeroJitter(), meters, observations);
+	}
+
+	private void assertSendSamples(String outcome, long count) {
+		assertThat(meters.get(NotificationMetrics.SEND_OUTCOME)
+			.tag("channel", "FCM")
+			.tag("outcome", outcome)
+			.counter()
+			.count()).isEqualTo((double) count);
+		assertThat(meters.get(NotificationMetrics.SEND_DURATION)
+			.tag("channel", "FCM")
+			.tag("outcome", outcome)
+			.timer()
+			.count()).isEqualTo(count);
+	}
+
+	private static void assertStoppedSendSpan(Observation.Context context, String outcome) {
+		assertThat(context.getName()).isEqualTo(ObservationFacade.NOTIFICATION_SEND);
+		assertThat(context.getError()).isNull();
+		assertThat(context.getLowCardinalityKeyValues()).containsExactly(KeyValue.of("outcome", outcome));
+		assertThat(context.getHighCardinalityKeyValues()).isEmpty();
+	}
+
+	private void assertStoppedErrorSpan() {
+		observations.assertThat().hasSingleObservationThat()
+			.hasNameEqualTo(ObservationFacade.NOTIFICATION_SEND)
+			.hasBeenStopped()
+			.assertThatError()
+			.isInstanceOf(IllegalStateException.class);
+	}
+
+	private FcmDeliveryWorker newWorker() {
+		return new FcmDeliveryWorker(store, newClient(() -> ACCESS_TOKEN), config, zeroJitter(), meters, observations);
 	}
 
 	private Seed seedLookReady() {
@@ -356,6 +650,61 @@ class FcmDeliveryTest {
 	}
 
 	private record Seed(UUID eventId, UserId userId, GenerationJobId generationId, LookId lookId) {
+	}
+
+	private static final class FailingHandlers {
+
+		private FailingHandlers() {
+		}
+
+		private static ObservationHandler<Observation.Context> onStart() {
+			return throwing(FailingStage.ON_START);
+		}
+
+		private static ObservationHandler<Observation.Context> onError() {
+			return throwing(FailingStage.ON_ERROR);
+		}
+
+		private static ObservationHandler<Observation.Context> onStop() {
+			return throwing(FailingStage.ON_STOP);
+		}
+
+		private static ObservationHandler<Observation.Context> throwing(FailingStage stage) {
+			return new ObservationHandler<Observation.Context>() {
+
+				@Override
+				public boolean supportsContext(Observation.Context context) {
+					return true;
+				}
+
+				@Override
+				public void onStart(Observation.Context context) {
+					if (stage == FailingStage.ON_START) {
+						throw new IllegalStateException("canary onStart handler failure");
+					}
+				}
+
+				@Override
+				public void onEvent(Observation.Event event, Observation.Context context) {
+					if (stage == FailingStage.ON_ERROR) {
+						throw new IllegalStateException("canary onError handler failure");
+					}
+				}
+
+				@Override
+				public void onStop(Observation.Context context) {
+					if (stage == FailingStage.ON_STOP) {
+						throw new IllegalStateException("canary onStop handler failure");
+					}
+				}
+			};
+		}
+	}
+
+	private enum FailingStage {
+		ON_START,
+		ON_ERROR,
+		ON_STOP
 	}
 
 	private static final class MutableClock extends Clock {

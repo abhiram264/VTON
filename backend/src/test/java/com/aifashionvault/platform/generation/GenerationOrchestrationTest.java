@@ -113,6 +113,7 @@ import com.aifashionvault.shared.UploadId;
 import com.aifashionvault.shared.UserId;
 import com.aifashionvault.shared.VaultItemId;
 
+import io.micrometer.core.instrument.Timer;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -498,6 +499,153 @@ class GenerationOrchestrationTest {
 			new BigDecimal("0.05"),
 			"USD",
 			NOW.plusSeconds(1))).reason()).isEqualTo(AbuseDecisionReason.USER_COST_BUDGET_EXHAUSTED);
+	}
+
+	@Test
+	void acceptedSubmissionPersistsUsageAndReportsCrdCostAmountWhenLaterPollOmitsUsage() {
+		SimpleMeterRegistry registry = new SimpleMeterRegistry();
+		processor = processor(provider, null, null, null, new GenerationMetrics(registry));
+		generationStore.insertJob(queuedJob());
+		provider.submitResult(new GenerationSubmission.Accepted(
+			new ProviderJobId("provider-job-1"),
+			Optional.of(new ProviderUsage(new BigDecimal("1.5"), new BigDecimal("1.5"), "CRD"))));
+
+		processor.process(lease);
+
+		GenerationAttempt persisted = generationStore.listAttempts(JOB_ID).getFirst();
+		assertThat(persisted.creditsUsed()).isEqualByComparingTo("1.5");
+		assertThat(persisted.actualCost()).isEqualByComparingTo("1.5");
+		assertThat(persisted.currency()).isEqualTo("CRD");
+		var costAmount = registry.find(GenerationMetrics.GENERATION_COST_AMOUNT)
+			.tag("provider", "recording")
+			.tag("currency", "CRD")
+			.summary();
+		assertThat(costAmount).isNotNull();
+		assertThat(costAmount.count()).isEqualTo(1);
+		assertThat(costAmount.totalAmount()).isEqualTo(1.5);
+	}
+
+	@Test
+	void providerAttemptsDenominatorCountsEverySubmitAndPoll() {
+		SimpleMeterRegistry registry = new SimpleMeterRegistry();
+		processor = processor(provider, null, null, null, new GenerationMetrics(registry));
+		generationStore.insertJob(queuedJob());
+
+		processor.process(lease);
+
+		assertThat(generationStore.findJob(JOB_ID).orElseThrow().status()).isEqualTo(GenerationJob.COMPLETED);
+		var attempts = registry.find(GenerationMetrics.PROVIDER_ATTEMPTS)
+			.tag("provider", "recording")
+			.counter();
+		assertThat(attempts).isNotNull();
+		assertThat(attempts.count()).isEqualTo(2.0);
+
+		generationStore.clearJob(JOB_ID);
+		generationStore.insertJob(queuedJob());
+		provider.submitResult(new GenerationSubmission.Rejected(
+			new ProviderFailure(ProviderFailureCategory.RATE_CAPACITY, true, "PROVIDER_RATE_LIMIT")));
+
+		processor.process(new GenerationWorkLease(JOB_ID.value(), "rejected"));
+
+		assertThat(attempts.count()).isEqualTo(3.0);
+		var rateLimited = registry.find(GenerationMetrics.PROVIDER_OUTCOMES)
+			.tag("category", GenerationMetrics.PROVIDER_RATE_LIMIT)
+			.counter();
+		assertThat(rateLimited).isNotNull();
+		assertThat(rateLimited.count()).isEqualTo(1.0);
+	}
+
+	@Test
+	void queueWaitTimerRecordsHistoricalDurationOnceAtFencedClaim() {
+		SimpleMeterRegistry registry = new SimpleMeterRegistry();
+		processor = processor(provider, null, null, null, new GenerationMetrics(registry));
+		generationStore.insertJob(queuedJobCreatedAt(NOW.minusSeconds(40)));
+
+		processor.process(lease);
+
+		Timer queueWait = registry.find(GenerationMetrics.QUEUE_WAIT).timer();
+		assertThat(queueWait).isNotNull();
+		assertThat(queueWait.count()).isEqualTo(1);
+		assertThat(queueWait.totalTime(TimeUnit.SECONDS)).isEqualTo(40.0);
+
+		processor.process(new GenerationWorkLease(JOB_ID.value(), "redelivery"));
+
+		assertThat(queueWait.count()).isEqualTo(1);
+	}
+
+	@Test
+	void generationLatencyRecordedOncePerJobAtFencedTerminal() {
+		SimpleMeterRegistry registry = new SimpleMeterRegistry();
+		processor = processor(provider, null, null, null, new GenerationMetrics(registry));
+		generationStore.insertJob(queuedJobCreatedAt(NOW.minusSeconds(40)));
+
+		processor.process(lease);
+
+		Timer latency = registry.find(GenerationMetrics.GENERATION_LATENCY).timer();
+		assertThat(latency).isNotNull();
+		assertThat(latency.getId().getTags()).isEmpty();
+		assertThat(latency.count()).isEqualTo(1);
+		assertThat(latency.totalTime(TimeUnit.SECONDS)).isEqualTo(40.0);
+
+		processor.process(new GenerationWorkLease(JOB_ID.value(), "redelivery"));
+
+		assertThat(latency.count()).isEqualTo(1);
+	}
+
+	@Test
+	void providerLatencyFedFromPersistedAttemptLatency() {
+		SimpleMeterRegistry registry = new SimpleMeterRegistry();
+		processor = processor(provider, null, null, null, new GenerationMetrics(registry));
+		generationStore.insertJob(queuedJob());
+
+		processor.process(lease);
+
+		GenerationAttempt persisted = generationStore.listAttempts(JOB_ID).getFirst();
+		assertThat(persisted.latencyMs()).isNotNull();
+		Timer providerLatency = registry.find(GenerationMetrics.GENERATION_PROVIDER_LATENCY)
+			.tag("provider", "recording")
+			.timer();
+		assertThat(providerLatency).isNotNull();
+		assertThat(providerLatency.count()).isEqualTo(1);
+		assertThat(providerLatency.totalTime(TimeUnit.MILLISECONDS)).isEqualTo(persisted.latencyMs().doubleValue());
+	}
+
+	@Test
+	void providerErrorCodeRecordedOnProviderFailure() {
+		SimpleMeterRegistry registry = new SimpleMeterRegistry();
+		processor = processor(provider, null, null, null, new GenerationMetrics(registry));
+		generationStore.insertJob(queuedJob());
+		provider.submitResult(new GenerationSubmission.Rejected(
+			new ProviderFailure(ProviderFailureCategory.RATE_CAPACITY, true, "RATE_LIMIT_EXCEEDED")));
+
+		processor.process(lease);
+
+		var error = registry.find(GenerationMetrics.PROVIDER_ERROR)
+			.tag("provider", "recording")
+			.tag("error_code", "RATE_LIMIT_EXCEEDED")
+			.counter();
+		assertThat(error).isNotNull();
+		assertThat(error.count()).isEqualTo(1.0);
+	}
+
+	@Test
+	void qualityUnavailableMapsDecisionToFailAndNeverUnavailableTag() {
+		SimpleMeterRegistry registry = new SimpleMeterRegistry();
+		processor = processor(provider, null, null, null, new GenerationMetrics(registry));
+		generationStore.insertJob(queuedJobV2());
+		qualityGate.infrastructureFailures = 2;
+
+		processor.process(lease);
+
+		assertThat(generationStore.findJob(JOB_ID).orElseThrow().status()).isEqualTo(GenerationJob.FAILED);
+		var failedTerminal = registry.find(GenerationMetrics.TERMINAL)
+			.tag("category", GenerationMetrics.TERMINAL_FAILED)
+			.counter();
+		assertThat(failedTerminal).isNotNull();
+		assertThat(failedTerminal.count()).isEqualTo(1.0);
+		assertThat(registry.getMeters())
+			.noneMatch(meter -> meter.getId().getTags().stream()
+				.anyMatch(tag -> "decision".equals(tag.getKey()) && "UNAVAILABLE".equals(tag.getValue())));
 	}
 
 
@@ -1807,6 +1955,29 @@ class GenerationOrchestrationTest {
 		assertThat(generationStore.findJob(JOB_ID).orElseThrow().completedAt()).isNull();
 	}
 
+	@Test
+	void callbackInboxCandidateProbeIncrementsProviderAttemptsDenominator() {
+		SimpleMeterRegistry registry = new SimpleMeterRegistry();
+		InMemoryCallbackInbox inbox = new InMemoryCallbackInbox();
+		processor = processor(provider, null, null, inbox, new GenerationMetrics(registry));
+		generationStore.insertJob(queuedJob());
+		GenerationAttempt attempt = openAttempt(1, false, null, NOW, "recording");
+		generationStore.insertAttempt(attempt);
+		inbox.accept("token-hash-probe", "candidate-job-probe", null, NOW);
+		inbox.bindAttempt("token-hash-probe", attempt.id());
+		provider.statusResult(new StatusQueryResult.Unavailable(RecordingVtonProvider.indeterminateFailure()));
+
+		processor.process(lease);
+
+		var attempts = registry.find(GenerationMetrics.PROVIDER_ATTEMPTS)
+			.tag("provider", "recording")
+			.counter();
+		assertThat(attempts).isNotNull();
+		assertThat(attempts.count()).isEqualTo(1.0);
+		assertThat(provider.submitCount()).isZero();
+		assertThat(provider.getStatusCount()).isEqualTo(1);
+	}
+
 
 	@Test
 	void costCircuitTripTerminalizesWithCostBudgetBlocked() {
@@ -2288,6 +2459,33 @@ class GenerationOrchestrationTest {
 			1,
 			1,
 			deadline,
+			null,
+			RetryPolicySnapshot.forStepCount(1));
+	}
+
+	private static GenerationJob queuedJobCreatedAt(Instant createdAt) {
+		return new GenerationJob(
+			JOB_ID,
+			USER_ID,
+			null,
+			GenerationJob.QUEUED,
+			"try-on",
+			null,
+			createdAt,
+			null,
+			AVATAR_IMAGE_ID,
+			List.of(PRODUCT_ID),
+			null,
+			null,
+			null,
+			null,
+			0,
+			createdAt,
+			null,
+			1,
+			1,
+			1,
+			createdAt.plus(GenerationJob.ORCHESTRATION_DEADLINE),
 			null,
 			RetryPolicySnapshot.forStepCount(1));
 	}

@@ -28,6 +28,7 @@ import com.aifashionvault.generation.JdbcGenerationStore;
 import com.aifashionvault.platform.objectstore.GenerationMediaStore;
 import com.aifashionvault.platform.objectstore.ObjectStore;
 import com.aifashionvault.admission.JdbcGenerationRateLimiter;
+import com.aifashionvault.platform.generation.GenerationMetrics;
 import com.aifashionvault.shared.UserId;
 
 @RestController
@@ -42,6 +43,7 @@ public class GenerationsController {
 		ObjectProvider<DataSource> dataSources,
 		ObjectProvider<GenerationMediaStore> mediaStores,
 		ObjectProvider<ObjectStore> objectStores,
+		ObjectProvider<GenerationMetrics> generationMetrics,
 		GenerationApiProperties properties,
 		AppIntegrityVerifier verifier
 	) {
@@ -57,7 +59,8 @@ public class GenerationsController {
 		}
         this.service = new GenerationCreationService(
             store, new JdbcTemplate(dataSource), properties, Clock.systemUTC(),
-            resolveMediaStore(mediaStores, objectStores), new JdbcGenerationRateLimiter(dataSource, Clock.systemUTC()));
+            resolveMediaStore(mediaStores, objectStores), new JdbcGenerationRateLimiter(dataSource, Clock.systemUTC()),
+            generationMetrics.getIfAvailable());
 	}
 
 	@PostMapping

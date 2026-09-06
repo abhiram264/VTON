@@ -207,6 +207,34 @@ class JdbcWorkOutboxStoreTest {
 		assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM generation_job", Integer.class)).isEqualTo(1);
 	}
 
+	@Test
+	void unsentReadsAreEmptyWhenOutboxIsEmpty() {
+		assertThat(store.countUnsent()).isZero();
+		assertThat(store.oldestUnsentCreatedAt()).isEmpty();
+	}
+
+	@Test
+	void unsentReadsCountBacklogAndIgnoreSentRows() {
+		UUID sentJob = insertJob();
+		UUID backoffJob = insertJob();
+		UUID oldestJob = insertJob();
+		store.insertSuccessor(sentJob, NOW);
+		WorkOutboxStore.Claim sentClaim = store.claimNext().orElseThrow();
+		store.markSent(sentClaim.outboxId());
+		store.insertSuccessor(backoffJob, NOW);
+		WorkOutboxStore.Claim backoffClaim = store.claimNext().orElseThrow();
+		store.markPublishFailed(backoffClaim.outboxId(), "SQS_PUBLISH");
+		store.insertSuccessor(oldestJob, NOW);
+		Instant oldestCreatedAt = NOW.minus(Duration.ofMillis(40_123));
+		jdbc.update(
+			"UPDATE generation_work_outbox SET created_at = ? WHERE generation_job_id = ?",
+			Timestamp.from(oldestCreatedAt),
+			oldestJob);
+
+		assertThat(store.countUnsent()).isEqualTo(2);
+		assertThat(store.oldestUnsentCreatedAt()).contains(oldestCreatedAt);
+	}
+
 	private static Optional<WorkOutboxStore.Claim> claimAtBarrier(
 		WorkOutboxStore workOutboxStore,
 		CountDownLatch ready,
