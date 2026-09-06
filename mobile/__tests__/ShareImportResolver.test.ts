@@ -1,4 +1,3 @@
-import {ApiProblemError} from '../src/features/my-model/http';
 import {createShareImportResolver} from '../src/features/share/importClient';
 import type {AvatarApiConfig} from '../src/features/my-model/types';
 
@@ -354,7 +353,6 @@ describe('ShareImportResolver', () => {
       new AbortController().signal,
     );
     expect(result).toEqual({importId: IMPORT_ID, status: 'READY'});
-    const pollUrl = requestUrl(fetchMock.mock.calls[1][0]);
     expect(fetchMock.mock.calls[1][1].method).toBe('GET');
   });
 

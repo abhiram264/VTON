@@ -1,0 +1,36 @@
+# Section 57 CI security-ci workflow:
+# 1. Single Trivy fs scan covers both the dependency scan (backend/pom.xml Maven transitives
+#    and mobile/package-lock.json npm transitives) and the security scan.
+# 2. Secretless and fork-safe (public vulnerability databases, no repository credentials required).
+# 3. scripts/secret_content_scan.py in environment-ci.yml remains the secret-scanning authority.
+# 4. CodeQL, code scanning, and actions/dependency-review-action require paid GitHub Code
+#    Security on private repositories and are therefore not added here.
+# 5. Fails on fixable CRITICAL/HIGH findings (exit-code: '1', ignore-unfixed: true) and fails
+#    closed if the Trivy vulnerability database cannot be fetched.
+
+name: security-ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  dependency-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run Trivy vulnerability scanner in fs mode
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: '.'
+          format: table
+          exit-code: '1'
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          cache: true
