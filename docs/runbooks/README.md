@@ -8,7 +8,7 @@ Canonical operational runbooks and checklists for AI Fashion Vault post-producti
 |---|---|---|---|
 | DAILY_OPERATIONS.md | daily | plan §70 | available |
 | WEEKLY_OPERATIONS.md | weekly | plan §71 | available |
-| MONTHLY_OPERATIONS.md | monthly | plan §72 | forthcoming (slice-72) |
+| MONTHLY_OPERATIONS.md | monthly | plan §72 | available |
 
 ## Prerequisites
 
