@@ -1,35 +1,5 @@
 # Terraform code only — apply prohibited for slice-69.
 
-variable "ai_quality_collapse_alarm_topic_arn" {
-  description = "Slice-68 alert SNS topic ARN; the ai-quality-collapse alarm's only notification action."
-  type        = string
-  default     = null
-}
-
-variable "ai_quality_collapse_metric_namespace" {
-  description = "CloudWatch custom metric namespace for the ai-quality-collapse alarm (placeholder; literal owned by slice-66/55 wiring)."
-  type        = string
-  default     = "ai-fashion-vault"
-}
-
-variable "ai_quality_collapse_metric_success" {
-  description = "CloudWatch metric name for generation success counter."
-  type        = string
-  default     = "generation.success.count"
-}
-
-variable "ai_quality_collapse_metric_failure" {
-  description = "CloudWatch metric name for generation failure counter."
-  type        = string
-  default     = "generation.failure.count"
-}
-
-variable "ai_quality_collapse_metric_quality_reject" {
-  description = "CloudWatch metric name for generation quality reject counter."
-  type        = string
-  default     = "generation.quality_reject.count"
-}
-
 variable "ai_quality_collapse_provider_success_min" {
   description = "Plan §65 technical generation success ratio floor (provider normal bar)."
   type        = number
