@@ -118,10 +118,10 @@ variable "p1_provider_error_count" {
   default     = 20
 }
 
-variable "p1_queue_oldest_age_ms" {
-  description = "Threshold for oldest message age in generation queue in milliseconds."
+variable "p1_queue_oldest_age_seconds" {
+  description = "Threshold for oldest message age in generation queue in seconds (300 = 5 minutes)."
   type        = number
-  default     = 300000
+  default     = 300
 }
 
 variable "p1_sqs_backlog_depth" {

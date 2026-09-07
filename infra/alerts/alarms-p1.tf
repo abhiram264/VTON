@@ -27,8 +27,8 @@ resource "aws_cloudwatch_metric_alarm" "queue_oldest_age" {
   namespace           = var.metric_namespace
   period              = 300
   statistic           = "Maximum"
-  threshold           = var.p1_queue_oldest_age_ms
-  alarm_description   = "Plan §68 P1: queue delay too high — oldest queued generation item age exceeds threshold over 2 of 3 periods."
+  threshold           = var.p1_queue_oldest_age_seconds
+  alarm_description   = "Plan §68 P1: queue delay too high — oldest queued generation item age in seconds exceeds threshold over 2 of 3 periods."
   alarm_actions       = [aws_sns_topic.p1.arn]
   treat_missing_data  = "notBreaching"
   tags                = local.tags
@@ -69,32 +69,56 @@ resource "aws_cloudwatch_metric_alarm" "quality_reject_ratio" {
 
   metric_query {
     id          = "e1"
-    expression  = "m1/m2"
+    expression  = "IF(q1+q2+q3>0, (q1+q2)/(q1+q2+q3), 0)"
     label       = "Quality Reject Ratio"
     return_data = true
   }
 
   metric_query {
-    id          = "m1"
+    id          = "q1"
     return_data = false
 
     metric {
-      metric_name = "generation.quality_reject.count"
+      metric_name = "generation.quality.count"
       namespace   = var.metric_namespace
       period      = 300
       stat        = "Sum"
+
+      dimensions = {
+        decision = "RETRY"
+      }
     }
   }
 
   metric_query {
-    id          = "m2"
+    id          = "q2"
     return_data = false
 
     metric {
-      metric_name = "generation.count.count"
+      metric_name = "generation.quality.count"
       namespace   = var.metric_namespace
       period      = 300
       stat        = "Sum"
+
+      dimensions = {
+        decision = "FAIL"
+      }
+    }
+  }
+
+  metric_query {
+    id          = "q3"
+    return_data = false
+
+    metric {
+      metric_name = "generation.quality.count"
+      namespace   = var.metric_namespace
+      period      = 300
+      stat        = "Sum"
+
+      dimensions = {
+        decision = "PASS"
+      }
     }
   }
 }

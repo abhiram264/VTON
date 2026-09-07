@@ -71,36 +71,59 @@ resource "aws_cloudwatch_metric_alarm" "category_quality_degraded" {
 
   metric_query {
     id          = "e1"
-    expression  = "m1/m2"
+    expression  = "IF(q1+q2+q3>0, (q1+q2)/(q1+q2+q3), 0)"
     label       = "Category ${each.key} Quality Reject Ratio"
     return_data = true
   }
 
   metric_query {
-    id          = "m1"
+    id          = "q1"
     return_data = false
 
     metric {
-      metric_name = "generation.quality_reject.count"
+      metric_name = "generation.quality.count"
       namespace   = var.metric_namespace
       period      = 3600
       stat        = "Sum"
 
       dimensions = {
+        decision = "RETRY"
         category = each.key
       }
     }
   }
 
   metric_query {
-    id          = "m2"
+    id          = "q2"
     return_data = false
 
     metric {
-      metric_name = "generation.count.count"
+      metric_name = "generation.quality.count"
       namespace   = var.metric_namespace
       period      = 3600
       stat        = "Sum"
+
+      dimensions = {
+        decision = "FAIL"
+        category = each.key
+      }
+    }
+  }
+
+  metric_query {
+    id          = "q3"
+    return_data = false
+
+    metric {
+      metric_name = "generation.quality.count"
+      namespace   = var.metric_namespace
+      period      = 3600
+      stat        = "Sum"
+
+      dimensions = {
+        decision = "PASS"
+        category = each.key
+      }
     }
   }
 }

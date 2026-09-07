@@ -105,7 +105,7 @@ resource "aws_cloudwatch_metric_alarm" "rds_connections_zero" {
 }
 
 # 5. Authentication broken — auth failure ratio ≥ threshold for 2 out of 3 periods
-# Note: When there is zero auth traffic (m1 + m2 = 0), divide-by-zero yields no data, which treat_missing_data = "notBreaching" covers.
+# Note: When there is zero auth traffic (m1 + m2 = 0), expression evaluates to 0 (notBreaching) instead of divide-by-zero no-data.
 resource "aws_cloudwatch_metric_alarm" "auth_failure_ratio" {
   alarm_name          = "${local.alarm_prefix}-p0-auth-failure-ratio"
   comparison_operator = "GreaterThanOrEqualToThreshold"
@@ -119,7 +119,7 @@ resource "aws_cloudwatch_metric_alarm" "auth_failure_ratio" {
 
   metric_query {
     id          = "e1"
-    expression  = "m1/(m1+m2)"
+    expression  = "IF(m1+m2>0, m1/(m1+m2), 0)"
     label       = "Auth Failure Ratio"
     return_data = true
   }
@@ -152,7 +152,7 @@ resource "aws_cloudwatch_metric_alarm" "auth_failure_ratio" {
 }
 
 # 6. All generations failing — generation failure ratio ≥ threshold for 2 out of 3 periods
-# Note: When there is zero generation traffic, divide-by-zero yields no data, which treat_missing_data = "notBreaching" covers.
+# Note: When there is zero generation traffic, expression evaluates to 0 (notBreaching) instead of divide-by-zero no-data.
 resource "aws_cloudwatch_metric_alarm" "generation_failure_ratio" {
   alarm_name          = "${local.alarm_prefix}-p0-generation-failure-ratio"
   comparison_operator = "GreaterThanOrEqualToThreshold"
@@ -166,32 +166,88 @@ resource "aws_cloudwatch_metric_alarm" "generation_failure_ratio" {
 
   metric_query {
     id          = "e1"
-    expression  = "m1/m2"
+    expression  = "IF(f1+f2+f3+f4+s1>0, (f1+f2+f3+f4)/(f1+f2+f3+f4+s1), 0)"
     label       = "Generation Failure Ratio"
     return_data = true
   }
 
   metric_query {
-    id          = "m1"
+    id          = "f1"
     return_data = false
 
     metric {
-      metric_name = "generation.failure.count"
+      metric_name = "generation.terminal.count"
       namespace   = var.metric_namespace
       period      = 300
       stat        = "Sum"
+
+      dimensions = {
+        category = "FAILED"
+      }
     }
   }
 
   metric_query {
-    id          = "m2"
+    id          = "f2"
     return_data = false
 
     metric {
-      metric_name = "generation.count.count"
+      metric_name = "generation.terminal.count"
       namespace   = var.metric_namespace
       period      = 300
       stat        = "Sum"
+
+      dimensions = {
+        category = "BUDGET_EXHAUSTED"
+      }
+    }
+  }
+
+  metric_query {
+    id          = "f3"
+    return_data = false
+
+    metric {
+      metric_name = "generation.terminal.count"
+      namespace   = var.metric_namespace
+      period      = 300
+      stat        = "Sum"
+
+      dimensions = {
+        category = "DEADLINE_EXPIRED"
+      }
+    }
+  }
+
+  metric_query {
+    id          = "f4"
+    return_data = false
+
+    metric {
+      metric_name = "generation.terminal.count"
+      namespace   = var.metric_namespace
+      period      = 300
+      stat        = "Sum"
+
+      dimensions = {
+        category = "UNKNOWN"
+      }
+    }
+  }
+
+  metric_query {
+    id          = "s1"
+    return_data = false
+
+    metric {
+      metric_name = "generation.terminal.count"
+      namespace   = var.metric_namespace
+      period      = 300
+      stat        = "Sum"
+
+      dimensions = {
+        category = "COMPLETED"
+      }
     }
   }
 
