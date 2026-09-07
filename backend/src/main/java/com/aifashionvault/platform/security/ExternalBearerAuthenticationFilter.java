@@ -29,16 +29,26 @@ public final class ExternalBearerAuthenticationFilter extends OncePerRequestFilt
 
 	private final ExternalTokenVerifier verifier;
 	private final ObjectProvider<IdentityProvisioning> identityProvisioning;
+	private final AuthMetrics authMetrics;
 
 	public ExternalBearerAuthenticationFilter(
 		ExternalTokenVerifier verifier,
 		ObjectProvider<IdentityProvisioning> identityProvisioning
+	) {
+		this(verifier, identityProvisioning, null);
+	}
+
+	public ExternalBearerAuthenticationFilter(
+		ExternalTokenVerifier verifier,
+		ObjectProvider<IdentityProvisioning> identityProvisioning,
+		AuthMetrics authMetrics
 	) {
 		if (verifier == null || identityProvisioning == null) {
 			throw new IllegalArgumentException("verifier and identityProvisioning are required");
 		}
 		this.verifier = verifier;
 		this.identityProvisioning = identityProvisioning;
+		this.authMetrics = authMetrics;
 	}
 
 	@Override
@@ -57,8 +67,15 @@ public final class ExternalBearerAuthenticationFilter extends OncePerRequestFilt
 	) throws ServletException, IOException {
 		MDC.remove(LoggingPolicy.KEY_USER_ID);
 		try {
-			String token = bearerToken(request.getHeader(HttpHeaders.AUTHORIZATION));
+			String authorization = request.getHeader(HttpHeaders.AUTHORIZATION);
+			if (authorization == null) {
+				recordFailure(AuthMetrics.REASON_MISSING);
+				unauthorized(response);
+				return;
+			}
+			String token = bearerToken(authorization);
 			if (token == null) {
+				recordFailure(AuthMetrics.REASON_MALFORMED);
 				unauthorized(response);
 				return;
 			}
@@ -66,18 +83,22 @@ public final class ExternalBearerAuthenticationFilter extends OncePerRequestFilt
 				VerifiedExternalIdentity identity = verifier.verify(token);
 				IdentityProvisioning provisioning = identityProvisioning.getIfAvailable();
 				if (provisioning == null) {
+					recordFailure(AuthMetrics.REASON_REJECTED);
 					unauthorized(response);
 					return;
 				}
 				if (provisioning.resolve(identity.issuer(), identity.subject()) instanceof IdentityResolution.Active active) {
+					recordSuccess();
 					authenticate(active.userId());
 					MDC.put(LoggingPolicy.KEY_USER_ID, active.userId().value().toString());
 					filterChain.doFilter(request, response);
 					return;
 				}
+				recordFailure(AuthMetrics.REASON_REJECTED);
 				unauthorized(response);
 			}
 			catch (TokenVerificationException exception) {
+				recordFailure(AuthMetrics.REASON_REJECTED);
 				unauthorized(response);
 			}
 		}
@@ -105,5 +126,17 @@ public final class ExternalBearerAuthenticationFilter extends OncePerRequestFilt
 	private static void unauthorized(HttpServletResponse response) {
 		SecurityContextHolder.clearContext();
 		response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+	}
+
+	private void recordSuccess() {
+		if (authMetrics != null) {
+			authMetrics.recordAuthSuccess();
+		}
+	}
+
+	private void recordFailure(String reason) {
+		if (authMetrics != null) {
+			authMetrics.recordAuthFailure(reason);
+		}
 	}
 }

@@ -2301,6 +2301,48 @@ class GenerationOrchestrationTest {
 		assertThat(job.terminalReason()).isEqualTo(GenerationJob.CANCELLED_BY_USER);
 	}
 
+	@Test
+	void qualityMeterCarriesResolvedCategoryFromStore() {
+		SimpleMeterRegistry registry = new SimpleMeterRegistry();
+		GenerationMetrics metrics = new GenerationMetrics(registry, CLOCK);
+		processor = processor(provider, null, null, null, metrics);
+		generationStore.insertJob(queuedJob());
+		generationStore.setAttemptCategory(JOB_ID, "TOP");
+
+		processor.process(lease);
+
+		assertThat(lookStore.inserted()).hasSize(1);
+		var counter = registry.find(GenerationMetrics.QUALITY)
+			.tag("policy_version", "baseline-v1")
+			.tag("decision", QualityDecision.PASS.name())
+			.tag("reason_code", "none")
+			.tag("category", "TOP")
+			.counter();
+		assertThat(counter).isNotNull();
+		assertThat(counter.count()).isEqualTo(1.0);
+	}
+
+	@Test
+	void qualityMeterFallsBackToUnknownWhenStoreFailsOrCategoryAbsent() {
+		SimpleMeterRegistry registry = new SimpleMeterRegistry();
+		GenerationMetrics metrics = new GenerationMetrics(registry, CLOCK);
+		processor = processor(provider, null, null, null, metrics);
+		generationStore.insertJob(queuedJob());
+		generationStore.throwOnFindAttemptCategory(true);
+
+		processor.process(lease);
+
+		assertThat(lookStore.inserted()).hasSize(1);
+		var counter = registry.find(GenerationMetrics.QUALITY)
+			.tag("policy_version", "baseline-v1")
+			.tag("decision", QualityDecision.PASS.name())
+			.tag("reason_code", "none")
+			.tag("category", "UNKNOWN")
+			.counter();
+		assertThat(counter).isNotNull();
+		assertThat(counter.count()).isEqualTo(1.0);
+	}
+
 	private void runProcess(CountDownLatch start, CountDownLatch done, GenerationWorkLease work) {
 		try {
 			start.await(5, TimeUnit.SECONDS);
@@ -3058,6 +3100,29 @@ class GenerationOrchestrationTest {
 		private final Map<GenerationAttemptId, GenerationAttempt> attempts = new ConcurrentHashMap<>();
 		private final Map<GenerationJobId, RenderPlan> renderPlans = new ConcurrentHashMap<>();
 		private final Map<GenerationAttemptId, QualityResult> qualityResults = new ConcurrentHashMap<>();
+		private final Map<GenerationJobId, String> categories = new ConcurrentHashMap<>();
+		private volatile boolean throwOnFindAttemptCategory;
+
+		private void setAttemptCategory(GenerationJobId jobId, String category) {
+			if (category != null) {
+				categories.put(jobId, category);
+			}
+			else {
+				categories.remove(jobId);
+			}
+		}
+
+		private void throwOnFindAttemptCategory(boolean throwOnFindAttemptCategory) {
+			this.throwOnFindAttemptCategory = throwOnFindAttemptCategory;
+		}
+
+		@Override
+		public Optional<String> findAttemptCategory(GenerationJobId jobId, UUID renderStepId) {
+			if (throwOnFindAttemptCategory) {
+				throw new UnsupportedOperationException("findAttemptCategory");
+			}
+			return Optional.ofNullable(categories.get(jobId));
+		}
 		private final AtomicInteger markJobCompletedFailures = new AtomicInteger();
 		private final AtomicInteger failAfterAttemptComplete = new AtomicInteger();
 		private final AtomicInteger failAfterRetryComplete = new AtomicInteger();

@@ -15,6 +15,8 @@ import org.springframework.security.web.authentication.HttpStatusEntryPoint;
 import com.aifashionvault.platform.web.RequestIdFilter;
 import com.aifashionvault.user.IdentityProvisioning;
 
+import io.micrometer.core.instrument.MeterRegistry;
+
 @Configuration(proxyBeanMethods = false)
 @EnableWebSecurity
 public class SecurityConfiguration {
@@ -23,13 +25,16 @@ public class SecurityConfiguration {
 	SecurityFilterChain securityFilterChain(
 		HttpSecurity http,
 		ObjectProvider<ExternalTokenVerifier> tokenVerifiers,
-		ObjectProvider<IdentityProvisioning> identityProvisioning
+		ObjectProvider<IdentityProvisioning> identityProvisioning,
+		ObjectProvider<MeterRegistry> meterRegistries
 	) throws Exception {
 		ExternalTokenVerifier verifier = tokenVerifiers.getIfAvailable(() -> token -> {
 			throw new TokenVerificationException(TokenVerificationFailure.UNVERIFIABLE);
 		});
+		MeterRegistry meterRegistry = meterRegistries.getIfAvailable();
+		AuthMetrics authMetrics = meterRegistry != null ? new AuthMetrics(meterRegistry) : null;
 		ExternalBearerAuthenticationFilter filter =
-			new ExternalBearerAuthenticationFilter(verifier, identityProvisioning);
+			new ExternalBearerAuthenticationFilter(verifier, identityProvisioning, authMetrics);
 		http
 			.csrf(csrf -> csrf.disable())
 			.sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))

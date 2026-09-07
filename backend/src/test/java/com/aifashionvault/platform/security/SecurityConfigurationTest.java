@@ -16,6 +16,9 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
 import com.aifashionvault.platform.web.RequestIdFilter;
+
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -32,6 +35,9 @@ class SecurityConfigurationTest {
 
 	@Autowired
 	private SecurityFilterChain securityFilterChain;
+
+	@Autowired
+	private MeterRegistry meterRegistry;
 
 	@Test
 	void getActuatorHealthIsAnonymousOk() throws Exception {
@@ -92,6 +98,42 @@ class SecurityConfigurationTest {
 			.andExpect(status().isUnauthorized())
 			.andExpect(header().doesNotExist("Set-Cookie"))
 			.andExpect(result -> assertThat(result.getRequest().getSession(false)).isNull());
+	}
+
+	@Test
+	void unauthenticatedRequestRecordsAuthFailureMissingCounter() throws Exception {
+		double initial = meterRegistry.find(AuthMetrics.AUTH_FAILURE)
+			.tag("reason", AuthMetrics.REASON_MISSING)
+			.counter() != null
+				? meterRegistry.find(AuthMetrics.AUTH_FAILURE).tag("reason", AuthMetrics.REASON_MISSING).counter().count()
+				: 0.0;
+
+		mockMvc.perform(get("/me"))
+			.andExpect(status().isUnauthorized());
+
+		Counter missingCounter = meterRegistry.find(AuthMetrics.AUTH_FAILURE)
+			.tag("reason", AuthMetrics.REASON_MISSING)
+			.counter();
+		assertThat(missingCounter).isNotNull();
+		assertThat(missingCounter.count()).isGreaterThan(initial);
+	}
+
+	@Test
+	void malformedAuthorizationRecordsAuthFailureMalformedCounter() throws Exception {
+		double initial = meterRegistry.find(AuthMetrics.AUTH_FAILURE)
+			.tag("reason", AuthMetrics.REASON_MALFORMED)
+			.counter() != null
+				? meterRegistry.find(AuthMetrics.AUTH_FAILURE).tag("reason", AuthMetrics.REASON_MALFORMED).counter().count()
+				: 0.0;
+
+		mockMvc.perform(get("/me").header("Authorization", "Basic dXNlcjpwYXNz"))
+			.andExpect(status().isUnauthorized());
+
+		Counter malformedCounter = meterRegistry.find(AuthMetrics.AUTH_FAILURE)
+			.tag("reason", AuthMetrics.REASON_MALFORMED)
+			.counter();
+		assertThat(malformedCounter).isNotNull();
+		assertThat(malformedCounter.count()).isGreaterThan(initial);
 	}
 
 	@Test

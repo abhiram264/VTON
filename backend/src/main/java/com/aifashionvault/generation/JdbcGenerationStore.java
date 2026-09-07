@@ -659,6 +659,30 @@ public class JdbcGenerationStore implements GenerationStore {
 	}
 
 	@Override
+	public Optional<String> findAttemptCategory(GenerationJobId jobId, UUID renderStepId) {
+		if (jobId == null) {
+			throw new IllegalArgumentException("jobId is required");
+		}
+		if (renderStepId != null) {
+			List<String> stepCategories = jdbc.query(
+				"SELECT i.category FROM generation_render_step_item i WHERE i.render_step_id = ? ORDER BY i.item_ordinal LIMIT 1",
+				(rs, rowNum) -> rs.getString("category"),
+				renderStepId);
+			if (!stepCategories.isEmpty() && stepCategories.getFirst() != null) {
+				return Optional.of(stepCategories.getFirst());
+			}
+		}
+		List<String> jobCategories = jdbc.query(
+			"SELECT v.category FROM generation_job_product p JOIN vault_item v ON v.id = p.vault_item_id WHERE p.generation_job_id = ? ORDER BY p.vault_item_id LIMIT 1",
+			(rs, rowNum) -> rs.getString("category"),
+			jobId.value());
+		if (!jobCategories.isEmpty() && jobCategories.getFirst() != null) {
+			return Optional.of(jobCategories.getFirst());
+		}
+		return Optional.empty();
+	}
+
+	@Override
 	public void markCancelled(GenerationJobId jobId, Instant cancelledAt) {
 		cancelIfActive(jobId, cancelledAt);
 	}

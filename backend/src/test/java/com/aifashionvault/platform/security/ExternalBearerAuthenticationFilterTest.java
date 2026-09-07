@@ -25,6 +25,11 @@ import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.Meter;
+import io.micrometer.core.instrument.Tag;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
@@ -346,5 +351,208 @@ class ExternalBearerAuthenticationFilterTest {
 		MockHttpServletRequest request = new MockHttpServletRequest("GET", "/me");
 		request.addHeader("Authorization", "Bearer " + TOKEN);
 		return request;
+	}
+
+	@Test
+	void missingAuthorizationRecordsAuthFailureMissing() throws Exception {
+		SimpleMeterRegistry registry = new SimpleMeterRegistry();
+		ExternalBearerAuthenticationFilter instrumentedFilter =
+			new ExternalBearerAuthenticationFilter(verifier, provisioningProvider, new AuthMetrics(registry));
+		MockHttpServletResponse response = new MockHttpServletResponse();
+
+		instrumentedFilter.doFilter(new MockHttpServletRequest("GET", "/me"), response, chain);
+
+		assertThat(response.getStatus()).isEqualTo(401);
+		Counter failure = registry.find(AuthMetrics.AUTH_FAILURE)
+			.tag("reason", AuthMetrics.REASON_MISSING)
+			.counter();
+		assertThat(failure).isNotNull();
+		assertThat(failure.count()).isEqualTo(1.0);
+		assertThat(registry.find(AuthMetrics.AUTH_SUCCESS).counter()).isNull();
+	}
+
+	@Test
+	void nonBearerAuthorizationRecordsAuthFailureMalformed() throws Exception {
+		SimpleMeterRegistry registry = new SimpleMeterRegistry();
+		ExternalBearerAuthenticationFilter instrumentedFilter =
+			new ExternalBearerAuthenticationFilter(verifier, provisioningProvider, new AuthMetrics(registry));
+		MockHttpServletRequest request = new MockHttpServletRequest("GET", "/me");
+		request.addHeader("Authorization", "Basic dXNlcjpwYXNz");
+		MockHttpServletResponse response = new MockHttpServletResponse();
+
+		instrumentedFilter.doFilter(request, response, chain);
+
+		assertThat(response.getStatus()).isEqualTo(401);
+		Counter failure = registry.find(AuthMetrics.AUTH_FAILURE)
+			.tag("reason", AuthMetrics.REASON_MALFORMED)
+			.counter();
+		assertThat(failure).isNotNull();
+		assertThat(failure.count()).isEqualTo(1.0);
+		assertThat(registry.find(AuthMetrics.AUTH_SUCCESS).counter()).isNull();
+	}
+
+	@Test
+	void blankBearerTokenRecordsAuthFailureMalformed() throws Exception {
+		SimpleMeterRegistry registry = new SimpleMeterRegistry();
+		ExternalBearerAuthenticationFilter instrumentedFilter =
+			new ExternalBearerAuthenticationFilter(verifier, provisioningProvider, new AuthMetrics(registry));
+		MockHttpServletRequest request = new MockHttpServletRequest("GET", "/me");
+		request.addHeader("Authorization", "Bearer    ");
+		MockHttpServletResponse response = new MockHttpServletResponse();
+
+		instrumentedFilter.doFilter(request, response, chain);
+
+		assertThat(response.getStatus()).isEqualTo(401);
+		Counter failure = registry.find(AuthMetrics.AUTH_FAILURE)
+			.tag("reason", AuthMetrics.REASON_MALFORMED)
+			.counter();
+		assertThat(failure).isNotNull();
+		assertThat(failure.count()).isEqualTo(1.0);
+	}
+
+	@Test
+	void emptyBearerTokenRecordsAuthFailureMalformed() throws Exception {
+		SimpleMeterRegistry registry = new SimpleMeterRegistry();
+		ExternalBearerAuthenticationFilter instrumentedFilter =
+			new ExternalBearerAuthenticationFilter(verifier, provisioningProvider, new AuthMetrics(registry));
+		MockHttpServletRequest request = new MockHttpServletRequest("GET", "/me");
+		request.addHeader("Authorization", "Bearer");
+		MockHttpServletResponse response = new MockHttpServletResponse();
+
+		instrumentedFilter.doFilter(request, response, chain);
+
+		assertThat(response.getStatus()).isEqualTo(401);
+		Counter failure = registry.find(AuthMetrics.AUTH_FAILURE)
+			.tag("reason", AuthMetrics.REASON_MALFORMED)
+			.counter();
+		assertThat(failure).isNotNull();
+		assertThat(failure.count()).isEqualTo(1.0);
+	}
+
+	@Test
+	void tokenVerificationExceptionRecordsAuthFailureRejected() throws Exception {
+		for (TokenVerificationFailure failureReason : TokenVerificationFailure.values()) {
+			ExternalTokenVerifier localVerifier = mock(ExternalTokenVerifier.class);
+			when(localVerifier.verify(TOKEN)).thenThrow(new TokenVerificationException(failureReason));
+			SimpleMeterRegistry registry = new SimpleMeterRegistry();
+			ExternalBearerAuthenticationFilter instrumentedFilter =
+				new ExternalBearerAuthenticationFilter(localVerifier, provisioningProvider, new AuthMetrics(registry));
+			MockHttpServletResponse response = new MockHttpServletResponse();
+
+			instrumentedFilter.doFilter(bearerRequest(), response, chain);
+
+			assertThat(response.getStatus()).isEqualTo(401);
+			Counter failure = registry.find(AuthMetrics.AUTH_FAILURE)
+				.tag("reason", AuthMetrics.REASON_REJECTED)
+				.counter();
+			assertThat(failure).isNotNull();
+			assertThat(failure.count()).isEqualTo(1.0);
+		}
+	}
+
+	@Test
+	void missingIdentityProvisioningRecordsAuthFailureRejected() throws Exception {
+		when(verifier.verify(TOKEN)).thenReturn(new VerifiedExternalIdentity(ISSUER, SUBJECT));
+		when(provisioningProvider.getIfAvailable()).thenReturn(null);
+		SimpleMeterRegistry registry = new SimpleMeterRegistry();
+		ExternalBearerAuthenticationFilter instrumentedFilter =
+			new ExternalBearerAuthenticationFilter(verifier, provisioningProvider, new AuthMetrics(registry));
+		MockHttpServletResponse response = new MockHttpServletResponse();
+
+		instrumentedFilter.doFilter(bearerRequest(), response, chain);
+
+		assertThat(response.getStatus()).isEqualTo(401);
+		Counter failure = registry.find(AuthMetrics.AUTH_FAILURE)
+			.tag("reason", AuthMetrics.REASON_REJECTED)
+			.counter();
+		assertThat(failure).isNotNull();
+		assertThat(failure.count()).isEqualTo(1.0);
+	}
+
+	@Test
+	void deletedResolutionRecordsAuthFailureRejected() throws Exception {
+		when(verifier.verify(TOKEN)).thenReturn(new VerifiedExternalIdentity(ISSUER, SUBJECT));
+		when(provisioning.resolve(ISSUER, SUBJECT)).thenReturn(new IdentityResolution.Deleted(USER_ID));
+		SimpleMeterRegistry registry = new SimpleMeterRegistry();
+		ExternalBearerAuthenticationFilter instrumentedFilter =
+			new ExternalBearerAuthenticationFilter(verifier, provisioningProvider, new AuthMetrics(registry));
+		MockHttpServletResponse response = new MockHttpServletResponse();
+
+		instrumentedFilter.doFilter(bearerRequest(), response, chain);
+
+		assertThat(response.getStatus()).isEqualTo(401);
+		Counter failure = registry.find(AuthMetrics.AUTH_FAILURE)
+			.tag("reason", AuthMetrics.REASON_REJECTED)
+			.counter();
+		assertThat(failure).isNotNull();
+		assertThat(failure.count()).isEqualTo(1.0);
+	}
+
+	@Test
+	void activeResolutionRecordsAuthSuccess() throws Exception {
+		when(verifier.verify(TOKEN)).thenReturn(new VerifiedExternalIdentity(ISSUER, SUBJECT));
+		when(provisioning.resolve(ISSUER, SUBJECT)).thenReturn(new IdentityResolution.Active(USER_ID));
+		SimpleMeterRegistry registry = new SimpleMeterRegistry();
+		ExternalBearerAuthenticationFilter instrumentedFilter =
+			new ExternalBearerAuthenticationFilter(verifier, provisioningProvider, new AuthMetrics(registry));
+		MockHttpServletRequest request = bearerRequest();
+		MockHttpServletResponse response = new MockHttpServletResponse();
+
+		instrumentedFilter.doFilter(request, response, chain);
+
+		assertThat(response.getStatus()).isEqualTo(200);
+		Counter success = registry.find(AuthMetrics.AUTH_SUCCESS).counter();
+		assertThat(success).isNotNull();
+		assertThat(success.count()).isEqualTo(1.0);
+		assertThat(success.getId().getTags()).isEmpty();
+		assertThat(registry.find(AuthMetrics.AUTH_FAILURE).counter()).isNull();
+	}
+
+	@Test
+	void failSafeRegistryExceptionDoesNotFailAuthentication() throws Exception {
+		when(verifier.verify(TOKEN)).thenReturn(new VerifiedExternalIdentity(ISSUER, SUBJECT));
+		when(provisioning.resolve(ISSUER, SUBJECT)).thenReturn(new IdentityResolution.Active(USER_ID));
+		SimpleMeterRegistry throwingRegistry = new SimpleMeterRegistry() {
+			@Override
+			protected Counter newCounter(Meter.Id id) {
+				throw new RuntimeException("Registry down");
+			}
+		};
+		ExternalBearerAuthenticationFilter instrumentedFilter =
+			new ExternalBearerAuthenticationFilter(verifier, provisioningProvider, new AuthMetrics(throwingRegistry));
+		MockHttpServletRequest request = bearerRequest();
+		MockHttpServletResponse response = new MockHttpServletResponse();
+
+		instrumentedFilter.doFilter(request, response, chain);
+
+		verify(chain).doFilter(request, response);
+		assertThat(SecurityContextHolder.getContext().getAuthentication()).isNotNull();
+	}
+
+	@Test
+	void redactionCanaryAssertsNoTokenOrSubjectInMeters() throws Exception {
+		when(verifier.verify(TOKEN)).thenReturn(new VerifiedExternalIdentity(ISSUER, SUBJECT));
+		when(provisioning.resolve(ISSUER, SUBJECT)).thenReturn(new IdentityResolution.Active(USER_ID));
+		SimpleMeterRegistry registry = new SimpleMeterRegistry();
+		ExternalBearerAuthenticationFilter instrumentedFilter =
+			new ExternalBearerAuthenticationFilter(verifier, provisioningProvider, new AuthMetrics(registry));
+
+		// Exercise success
+		instrumentedFilter.doFilter(bearerRequest(), new MockHttpServletResponse(), chain);
+
+		// Exercise failures
+		instrumentedFilter.doFilter(new MockHttpServletRequest("GET", "/me"), new MockHttpServletResponse(), chain);
+		MockHttpServletRequest malformedReq = new MockHttpServletRequest("GET", "/me");
+		malformedReq.addHeader("Authorization", "Bearer bad-token");
+		when(verifier.verify("bad-token")).thenThrow(new TokenVerificationException(TokenVerificationFailure.INVALID));
+		instrumentedFilter.doFilter(malformedReq, new MockHttpServletResponse(), chain);
+
+		for (Meter meter : registry.getMeters()) {
+			Meter.Id id = meter.getId();
+			assertThat(id.getName()).doesNotContain(TOKEN, "bad-token", SUBJECT, ISSUER, "Bearer");
+			for (Tag tag : id.getTags()) {
+				assertThat(tag.getValue()).doesNotContain(TOKEN, "bad-token", SUBJECT, ISSUER, "Bearer");
+			}
+		}
 	}
 }
