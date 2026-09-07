@@ -817,7 +817,7 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 		Optional<QualityResult> stored = generationStore.findQualityResult(attempt.id());
 		if (stored.isPresent()) {
 			QualityResult replayed = stored.get();
-			recordQuality(replayed);
+			recordQuality(job, attempt, replayed);
 			switch (replayed.decision()) {
 				case PASS -> completePass(job, attempt, lease, outputStore, metadata, temp, outputs.getFirst(), active);
 				case RETRY -> completeQualityRetry(job, attempt, lease, outputStore, temp, outputs.getFirst(), active);
@@ -881,7 +881,7 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
                     return;
                 }
 				QualityResult quality = completed.result();
-				recordQuality(quality);
+				recordQuality(job, attempt, quality);
 				generationStore.saveQualityResult(quality);
 				switch (quality.decision()) {
 					case PASS -> completePass(job, attempt, lease, outputStore, metadata, temp, outputs.getFirst(), active);
@@ -1182,7 +1182,7 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 		switch (retry) {
 			case QualityEvaluationOutcome.Completed completed -> {
 				QualityResult quality = completed.result();
-				recordQuality(quality);
+				recordQuality(job, bumped, quality);
 				generationStore.saveQualityResult(quality);
 				switch (quality.decision()) {
 					case PASS -> completePass(job, bumped, lease, outputStore, metadata, temp, outputRef, active);
@@ -2839,11 +2839,21 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 		}
 	}
 
-	private void recordQuality(QualityResult quality) {
+	private void recordQuality(GenerationJob job, GenerationAttempt attempt, QualityResult quality) {
 		if (metrics == null) {
 			return;
 		}
-		metrics.recordQuality(quality.qualityPolicyVersion(), quality.decision(), quality.reasonCode());
+		String category = "UNKNOWN";
+		if (generationStore != null && job != null && attempt != null) {
+			try {
+				category = generationStore.findAttemptCategory(job.id(), attempt.renderStepId())
+					.orElse("UNKNOWN");
+			}
+			catch (RuntimeException ex) {
+				category = "UNKNOWN";
+			}
+		}
+		metrics.recordQuality(quality.qualityPolicyVersion(), quality.decision(), quality.reasonCode(), category);
 	}
 
 	private void recordEvaluatorUnavailable(String reasonCode) {

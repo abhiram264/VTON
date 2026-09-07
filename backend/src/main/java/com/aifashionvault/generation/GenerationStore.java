@@ -3,6 +3,7 @@ package com.aifashionvault.generation;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
 import com.aifashionvault.generation.vton.ProviderJobId;
 import com.aifashionvault.shared.AvatarImageId;
@@ -251,6 +252,10 @@ public interface GenerationStore {
 	 */
 	default Optional<QualityResult> findQualityResult(GenerationAttemptId attemptId) {
 		throw new UnsupportedOperationException("findQualityResult");
+	}
+
+	default Optional<String> findAttemptCategory(GenerationJobId jobId, UUID renderStepId) {
+		throw new UnsupportedOperationException("findAttemptCategory");
 	}
 
 	/**

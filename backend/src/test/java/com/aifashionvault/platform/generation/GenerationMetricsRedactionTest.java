@@ -90,12 +90,13 @@ class GenerationMetricsRedactionTest {
 		assertThat(registry.find(GenerationMetrics.OUTBOX_LAG).gauge()).isNotNull();
 		assertThat(registry.find(GenerationMetrics.AMBIGUITY).counter()).isNotNull();
 		assertThat(registry.find(GenerationMetrics.QUALITY).tag("policy_version", "baseline-v1")
-			.tag("decision", QualityDecision.PASS.name()).counter()).isNotNull();
+			.tag("decision", QualityDecision.PASS.name()).tag("category", "UNKNOWN").counter()).isNotNull();
 		assertThat(registry.find(GenerationMetrics.QUALITY).tag("policy_version", "quality-v2")
-			.tag("decision", QualityDecision.FAIL.name()).tag("reason_code", "IMAGE_INVALID").counter())
-			.isNotNull();
+			.tag("decision", QualityDecision.FAIL.name()).tag("reason_code", "IMAGE_INVALID")
+			.tag("category", "UNKNOWN").counter()).isNotNull();
 		assertThat(registry.find(GenerationMetrics.QUALITY).tag("policy_version", "quality-v2")
-			.tag("decision", QualityDecision.PASS.name()).tag("reason_code", "none").counter()).isNotNull();
+			.tag("decision", QualityDecision.PASS.name()).tag("reason_code", "none")
+			.tag("category", "UNKNOWN").counter()).isNotNull();
 		assertThat(registry.find(GenerationMetrics.QUALITY_EVALUATOR_UNAVAILABLE)
 			.tag("reason_code", "EVALUATOR_UNAVAILABLE").counter()).isNotNull();
 		assertThat(registry.find(GenerationMetrics.COST).tag("status", PricingSnapshot.COST_UNKNOWN).counter())
@@ -152,6 +153,55 @@ class GenerationMetricsRedactionTest {
 		assertThatThrownBy(() -> metrics.recordEvaluatorUnavailable("UNKNOWN_REASON"))
 			.isInstanceOf(IllegalArgumentException.class);
 	}
+
+	@Test
+	void qualityMetricsExposeBoundedCategoriesAndRejectUnbounded() {
+		SimpleMeterRegistry registry = new SimpleMeterRegistry();
+		GenerationMetrics metrics = new GenerationMetrics(registry);
+
+		for (String category : List.of(
+			"TOP",
+			"BOTTOM",
+			"ONE_PIECE",
+			"ETHNIC_FULL_BODY",
+			"SAREE",
+			"LEHENGA",
+			"KURTA",
+			"SHERWANI",
+			"FOOTWEAR",
+			"HEADWEAR",
+			"BAG",
+			"JEWELLERY",
+			"ACCESSORY",
+			"UNKNOWN")) {
+			metrics.recordQuality("quality-v2", QualityDecision.PASS, "none", category);
+		}
+		metrics.recordQuality("quality-v2", QualityDecision.PASS, "none", " top ");
+		metrics.recordQuality("quality-v2", QualityDecision.PASS, "none", (String) null);
+		metrics.recordQuality("quality-v2", QualityDecision.PASS, "none", "   ");
+
+		assertThat(registry.find(GenerationMetrics.QUALITY)
+			.tag("policy_version", "quality-v2")
+			.tag("decision", QualityDecision.PASS.name())
+			.tag("category", "TOP").counter().count()).isEqualTo(2.0);
+		assertThat(registry.find(GenerationMetrics.QUALITY)
+			.tag("policy_version", "quality-v2")
+			.tag("decision", QualityDecision.PASS.name())
+			.tag("category", "UNKNOWN").counter().count()).isEqualTo(3.0);
+		assertThat(registry.getMeters().stream()
+			.filter(meter -> GenerationMetrics.QUALITY.equals(meter.getId().getName()))
+			.allMatch(meter -> meter.getId().getTag("category") != null)).isTrue();
+
+		assertThatThrownBy(() -> metrics.recordQuality("quality-v2", QualityDecision.FAIL, "IMAGE_INVALID", "unattributed"))
+			.isInstanceOf(IllegalArgumentException.class);
+		assertThatThrownBy(() -> metrics.recordQuality("quality-v2", QualityDecision.FAIL, "IMAGE_INVALID", "UNKNOWN_CATEGORY"))
+			.isInstanceOf(IllegalArgumentException.class);
+		assertThatThrownBy(() -> metrics.recordQuality("quality-v2", QualityDecision.FAIL, "IMAGE_INVALID", SIGNED_URL))
+			.isInstanceOf(IllegalArgumentException.class);
+		assertThatThrownBy(() -> metrics.recordQuality("quality-v2", QualityDecision.FAIL, "IMAGE_INVALID", USER_ID.toString()))
+			.isInstanceOf(IllegalArgumentException.class);
+	}
+
 
 	@Test
 	void retryMetricsExposeRequiredBoundedCategories() {
@@ -262,6 +312,10 @@ class GenerationMetricsRedactionTest {
 		assertThatThrownBy(() -> metrics.recordTerminal(USER_ID.toString()))
 			.isInstanceOf(IllegalArgumentException.class);
 		assertThatThrownBy(() -> metrics.recordRetryDelay(Duration.ofMillis(-1)))
+			.isInstanceOf(IllegalArgumentException.class);
+		assertThatThrownBy(() -> metrics.recordQuality("quality-v2", QualityDecision.PASS, "none", SIGNED_URL))
+			.isInstanceOf(IllegalArgumentException.class);
+		assertThatThrownBy(() -> metrics.recordQuality("quality-v2", QualityDecision.PASS, "none", USER_ID.toString()))
 			.isInstanceOf(IllegalArgumentException.class);
 	}
 

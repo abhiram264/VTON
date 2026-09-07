@@ -151,10 +151,14 @@ public final class GenerationMetrics implements GenerationCostMetrics {
 	}
 
 	public void recordQuality(String policyVersion, QualityDecision decision) {
-		recordQuality(policyVersion, decision, "none");
+		recordQuality(policyVersion, decision, "none", "UNKNOWN");
 	}
 
 	public void recordQuality(String policyVersion, QualityDecision decision, String reasonCode) {
+		recordQuality(policyVersion, decision, reasonCode, "UNKNOWN");
+	}
+
+	public void recordQuality(String policyVersion, QualityDecision decision, String reasonCode, String category) {
 		if (policyVersion == null || policyVersion.isBlank()) {
 			throw new IllegalArgumentException("policyVersion is required");
 		}
@@ -165,6 +169,7 @@ public final class GenerationMetrics implements GenerationCostMetrics {
 			.tag("policy_version", policyVersion)
 			.tag("decision", decision.name())
 			.tag("reason_code", requireQualityReasonCode(reasonCode))
+			.tag("category", requireQualityCategory(category))
 			.register(registry)
 			.increment();
 	}
@@ -604,6 +609,30 @@ public final class GenerationMetrics implements GenerationCostMetrics {
 				"ARTIFACT_DETECTED",
 				"INPUT_MEDIA_MISSING" -> normalized;
 			default -> throw new IllegalArgumentException("reasonCode must be a canonical quality reason");
+		};
+	}
+
+	private static String requireQualityCategory(String category) {
+		if (category == null || category.isBlank()) {
+			return "UNKNOWN";
+		}
+		String normalized = category.strip().toUpperCase(Locale.ROOT);
+		return switch (normalized) {
+			case "TOP",
+				"BOTTOM",
+				"ONE_PIECE",
+				"ETHNIC_FULL_BODY",
+				"SAREE",
+				"LEHENGA",
+				"KURTA",
+				"SHERWANI",
+				"FOOTWEAR",
+				"HEADWEAR",
+				"BAG",
+				"JEWELLERY",
+				"ACCESSORY",
+				"UNKNOWN" -> normalized;
+			default -> throw new IllegalArgumentException("category must be a canonical product category or UNKNOWN");
 		};
 	}
 
