@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -79,7 +80,13 @@ def backend_env(parsed: dict[str, str], root: Path) -> dict[str, str]:
         ),
         **FROZEN_BUCKETS,
     }
-    for key in ("FASHN_API_KEY", "FIREBASE_PROJECT_ID", "OTEL_EXPORTER_OTLP_ENDPOINT"):
+    for key in (
+        "FASHN_API_KEY",
+        "FIREBASE_PROJECT_ID",
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+        "JAVA_TOOL_OPTIONS",
+        "SERVER_PORT",
+    ):
         if parsed.get(key, "").strip():
             child[key] = parsed[key].strip()
     return child
@@ -106,6 +113,12 @@ def main(argv: list[str] | None = None) -> int:
     env = os.environ.copy()
     env.update(child)
     env.pop("LOCALSTACK_AUTH_TOKEN", None)
+    if os.name == "nt":
+        # os.exec* cannot replace the image with a .cmd batch wrapper on
+        # Windows; it spawns a detached child instead. Run in-process so the
+        # launcher's exit code and stdio stay attached to the backend.
+        cmd = ["cmd.exe", "/d", "/c", *cmd]
+        return subprocess.call(cmd, env=env)
     os.execvpe(cmd[0], cmd, env)
     return 0
 

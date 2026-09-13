@@ -32,7 +32,7 @@ services:
       test:
         [
           "CMD",
-          "python",
+          "python3",
           "-c",
           "import json,urllib.request; d=json.load(urllib.request.urlopen('http://127.0.0.1:4566/_localstack/init/ready')); raise SystemExit(0 if d.get('completed') is True and not any(s.get('state')=='ERROR' for s in d.get('scripts') or []) else 1)",
         ]
