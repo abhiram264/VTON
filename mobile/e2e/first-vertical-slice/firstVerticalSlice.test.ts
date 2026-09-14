@@ -1,3 +1,44 @@
+/*
+ * classification: integration/orchestration
+ *
+ * Integration/orchestration coverage, NOT device end-to-end coverage. This
+ * suite is mock-based: it replaces globalThis.fetch with a fake and injects
+ * the picker, token (getAccessToken) and delay seams. It exercises the
+ * createLook -> upload -> generation -> Look orchestration only; no device,
+ * camera, network or backend participates. Reclassified by PR-01 from a title
+ * that overstated its coverage as a device test (plan finding F13).
+ *
+ * Retained assertions, unchanged in behavior: exact request call order, the
+ * POST /generations Authorization + Idempotency-Key headers, the direct
+ * private PUT body, and picker cancellation as a complete no-op.
+ *
+ * Baseline failing-boundary evidence, recorded by PR-01 for the still
+ * unconfigured mounted defaults. PR-04 wires the mobile API/auth composition;
+ * PR-05 owns the upload/profile boundary. These are reproducible probes, not
+ * permanently failing required tests: this suite passes only because it
+ * injects config, so the probes below are what those tickets must close.
+ *
+ *   $ grep -n "baseUrl: ''" mobile/src/features/generation/generationApi.ts
+ *   126:  baseUrl: '',
+ *   $ grep -n "getAccessToken: () => null" mobile/src/features/generation/generationApi.ts
+ *   127:  getAccessToken: () => null,
+ *   $ grep -n "baseUrl: ''" mobile/src/features/vault/vaultApi.ts
+ *   23:const config = { baseUrl: '', getAccessToken: () => null };
+ *   $ grep -n "return null;" mobile/src/features/my-model/photoSource.ts
+ *   25:  return null;
+ *   29:  return null;
+ *
+ * Failure consequence, read from the paths those probes point at:
+ * apiRequest (mobile/src/features/my-model/http.ts:48-52) resolves the request
+ * URL as `${baseUrl.replace(/\/+$/, '')}${path}` and adds Authorization only
+ * when the token is truthy, so the mounted default issues a relative URL such
+ * as /generations/<id> with no Authorization header; a device fetch of a
+ * relative URL fails before any backend contract is exercised.
+ * takePhoto/choosePhoto (mobile/src/features/my-model/photoSource.ts:24-30)
+ * unconditionally return null, and createLook
+ * (mobile/src/features/generation/createLook.ts:51-54) maps a null photo to
+ * { outcome: 'cancelled' }, so the real picker path can never start an upload.
+ */
 import {
   clearActiveGeneration,
   getActiveGeneration,
@@ -50,7 +91,7 @@ function url(input: RequestInfo | URL): string {
     : input.url;
 }
 
-describe('first vertical slice mobile e2e', () => {
+describe('first vertical slice integration/orchestration coverage', () => {
   const fetchMock = jest.fn();
   const config = { baseUrl: BASE, getAccessToken: () => 'access-token' };
 

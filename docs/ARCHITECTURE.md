@@ -1,12 +1,63 @@
 # Architecture
 
-This document is the canonical home for AI Fashion Vault system architecture.
+Canonical home for AI Fashion Vault system architecture. It describes the system that
+exists in this tree today; later-ticket work is referenced, never described as built.
 
-Status: deferred.
+**Frozen inventory:** [docs/CONTRACT_INVENTORY.md](CONTRACT_INVENTORY.md) — the
+source-confirmed route, store, and configuration census (ten controllers / 36 mounted
+mappings, tables mapped to migrations, runtime config keys, trust boundaries). This
+document summarizes; the inventory is the authority for counts, names, and line anchors.
 
-Repository Initialization reserves this path only. Substantive architecture, runtime topology, and component design belong to later slices. This file is not an approved architecture.
+**PR backlog:** [docs/AI_Fashion_Vault_MVP_Production_Readiness_PR_Plan.md](AI_Fashion_Vault_MVP_Production_Readiness_PR_Plan.md)
+remains the PR backlog (PR-01 … PR-26) for undelivered work. It states intent; where it
+and this document disagree about current behavior, this document and the inventory win.
 
-Settled repository-init decisions that later architecture must respect:
+## Current shape
+
+- **One private monorepo**, package-by-feature backend, one React Native app.
+- **Modular monolith** (ADR-001): one Spring Boot service with feature packages under
+  `backend/src/main/java/com/aifashionvault/` — `vault`, `avatar`, `collection`,
+  `importer`, `look`, `studio`, `generation`, `admission`, `privacy`, `retention`,
+  `notification`, `featureflag`, `integrity`, `normalization`, `analytics`, `user`,
+  `platform`.
+- **Backend stack** (ADR-003): Spring Boot 4.1.0 on Java 21, Spring MVC, Spring JDBC —
+  no JPA, no Redis.
+- **Persistence** (ADR-004): PostgreSQL 18 is the source of truth and Flyway is the sole
+  schema channel. See [docs/DATA_MODEL.md](DATA_MODEL.md).
+- **Queue and object storage** (ADR-005, ADR-006): AWS SQS and S3 through AWS SDK v2;
+  locally both are emulated by LocalStack (`s3,sqs`, ADR-016).
+- **Runtime topology (local)**: `compose.yaml` runs PostgreSQL and LocalStack only. The
+  backend and the mobile app run on host toolchains (`python scripts/run_backend.py`;
+  `mobile/` npm scripts).
+- **HTTP surface**: ten `@RestController` classes, 36 mappings, bearer-only fail-closed
+  authentication, actuator `health`+`metrics` only. See
+  [docs/API_CONTRACTS.md](API_CONTRACTS.md).
+- **Generation path**: `POST /generations` → durable SQS work queue → worker → callback
+  inbox. FASHN is the only constructed VTON provider (ADR-008), and `FASHN_API_KEY` is a
+  mandatory startup property today.
+- **Mobile** (ADR-002): React Native 0.86.2 / React 19.2.3 with Android and iOS
+  share-import hosts. Native builds are not executed or verified on this host.
+- **Identity** (ADR-007): external bearer verification mapped to an internal `UserId`;
+  the authenticated principal is the only actor identity.
+- **Attestation**: `vault.generation.attestation-required` gates `POST /generations`,
+  `vault.avatar.attestation-required` gates `POST`/`PATCH /avatars`, and
+  `vault.integrity.required` is verifier strictness only.
+- **Deletion and retention**: `DELETE /me` starts account deletion; temporary media is
+  swept hourly at PT24H plus a LocalStack 1-day lifecycle. See
+  [docs/PRIVACY.md](PRIVACY.md).
+
+## Not current architecture
+
+Routes and components named only by the backlog are PROPOSED and unmounted — currently
+`/studio/sessions/**` and the minimal import-confirmation endpoint; no `/studio` handler
+exists in this tree. Provider selection, no-provider generation behavior, and share-link
+removal are PR-02/PR-16 work.
+
+## Settled repository-init decisions
 
 - One private monorepo with canonical repository slug `ai-fashion-vault`.
 - Generator-owned paths (`mobile/`, `backend/`, `compose.yaml`) are created by later initialization slices, not by Repository Initialization.
+
+Those slices have since landed: `mobile/`, `backend/`, and `compose.yaml` exist in this
+tree today, and the decisions stand as the ownership boundary that keeps Repository
+Initialization out of them.
