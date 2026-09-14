@@ -28,22 +28,23 @@ jobs:
             docs/API_CONTRACTS.md
             docs/PRIVACY.md
             docs/AI_EVALUATION.md
+            docs/CONTRACT_INVENTORY.md
+            docs/BASELINE.md
             docs/ADR/README.md
             .github/workflows/repo-sanity.yml
           )
           for path in "${required[@]}"; do
-            [ -f "$path" ] || die "missing required Phase-zero file: $path"
+            [ -f "$path" ] || die "missing required file: $path"
           done
 
-          stubs=(
+          inventory_docs=(
             docs/ARCHITECTURE.md
             docs/DATA_MODEL.md
             docs/API_CONTRACTS.md
             docs/PRIVACY.md
-            docs/AI_EVALUATION.md
           )
-          for path in "${stubs[@]}"; do
-            grep -q 'Status: deferred.' "$path" || die "stub missing 'Status: deferred.': $path"
+          for path in "${inventory_docs[@]}"; do
+            grep -q 'CONTRACT_INVENTORY.md' "$path" || die "canonical doc does not reference the contract inventory: $path"
           done
 
           prd_size=$(wc -c < docs/PRD.md | tr -d ' ')
@@ -51,9 +52,10 @@ jobs:
           grep -q 'Executive Summary' docs/PRD.md || die "docs/PRD.md missing 'Executive Summary'"
 
           grep -q 'ai-fashion-vault' README.md || die "README.md missing 'ai-fashion-vault'"
-          grep -q 'Phase-zero' README.md || die "README.md missing 'Phase-zero'"
           grep -q 'Target topology' README.md || die "README.md missing 'Target topology'"
           grep -q 'docs/PRD.md' README.md || die "README.md missing docs/PRD.md reference"
+          grep -q 'scripts/run_backend.py' README.md || die "README.md missing the current backend startup command"
+          grep -q 'npm run test:ci' README.md || die "README.md missing the current mobile validation command"
 
           docs_links=(
             docs/PRD.md
@@ -62,10 +64,12 @@ jobs:
             docs/API_CONTRACTS.md
             docs/PRIVACY.md
             docs/AI_EVALUATION.md
+            docs/CONTRACT_INVENTORY.md
+            docs/BASELINE.md
             docs/ADR/README.md
           )
           for path in "${docs_links[@]}"; do
-            [ -f "$path" ] || die "Phase-zero documentation link does not resolve: $path"
+            [ -f "$path" ] || die "documentation link does not resolve: $path"
           done
 
           grep -q 'eol=lf' .gitattributes || die ".gitattributes must contain eol=lf"
