@@ -19,7 +19,20 @@ and this document disagree about current behavior, this document and the invento
   `backend/src/main/java/com/aifashionvault/` — `vault`, `avatar`, `collection`,
   `importer`, `look`, `studio`, `generation`, `admission`, `privacy`, `retention`,
   `notification`, `featureflag`, `integrity`, `normalization`, `analytics`, `user`,
-  `platform`.
+  `platform`, plus the cross-cutting `shared` value-type kernel
+  (`backend/src/main/java/com/aifashionvault/shared/UserId.java:1`; 27 files), which is
+  a Modulith module in its own right — `platform`'s `allowedDependencies` lists it at
+  `backend/src/main/java/com/aifashionvault/platform/package-info.java:5`.
+  Boundaries are enforced, not conventional: spring-modulith 2.1.0
+  (`backend/pom.xml:31`) checks them in `ModulithVerificationTest.java:10`, with
+  `platform`'s `allowedDependencies` at
+  `backend/src/main/java/com/aifashionvault/platform/package-info.java:1-19` and the
+  named interfaces `generation :: vton`
+  (`backend/src/main/java/com/aifashionvault/generation/vton/package-info.java:1`) and
+  `generation :: benchmark`
+  (`backend/src/main/java/com/aifashionvault/generation/benchmark/package-info.java:1`).
+  `importer` and `generation` exist both as top-level modules and as `platform/<name>`
+  adapter directories that hold the web/worker wiring.
 - **Backend stack** (ADR-003): Spring Boot 4.1.0 on Java 21, Spring MVC, Spring JDBC —
   no JPA, no Redis.
 - **Persistence** (ADR-004): PostgreSQL 18 is the source of truth and Flyway is the sole
@@ -29,9 +42,11 @@ and this document disagree about current behavior, this document and the invento
 - **Runtime topology (local)**: `compose.yaml` runs PostgreSQL and LocalStack only. The
   backend and the mobile app run on host toolchains (`python scripts/run_backend.py`;
   `mobile/` npm scripts).
-- **HTTP surface**: ten `@RestController` classes, 36 mappings, bearer-only fail-closed
-  authentication, actuator `health`+`metrics` only. See
-  [docs/API_CONTRACTS.md](API_CONTRACTS.md).
+- **HTTP surface**: ten `@RestController` classes, 36 mappings — nine live under
+  `backend/src/main/java/com/aifashionvault/platform/web/` and the tenth is
+  `backend/src/main/java/com/aifashionvault/featureflag/FeatureFlagController.java:7`,
+  so a `platform/web`-only scan undercounts. Bearer-only fail-closed authentication,
+  actuator `health`+`metrics` only. See [docs/API_CONTRACTS.md](API_CONTRACTS.md).
 - **Generation path**: `POST /generations` → durable SQS work queue → worker → callback
   inbox. FASHN is the only constructed VTON provider (ADR-008), and `FASHN_API_KEY` is a
   mandatory startup property today.
@@ -50,8 +65,13 @@ and this document disagree about current behavior, this document and the invento
 
 Routes and components named only by the backlog are PROPOSED and unmounted — currently
 `/studio/sessions/**` and the minimal import-confirmation endpoint; no `/studio` handler
-exists in this tree. Provider selection, no-provider generation behavior, and share-link
-removal are PR-02/PR-16 work.
+exists in this tree. The studio *domain* is nonetheless built here and only unexposed
+over HTTP: `backend/src/main/java/com/aifashionvault/studio/agent/StudioAgent.java:20`
+declares the ten-tool `ALLOWED` set, capped at ten calls per execution at
+`backend/src/main/java/com/aifashionvault/studio/agent/StudioAgent.java:24`, alongside
+`backend/src/main/java/com/aifashionvault/studio/StudioSession.java:1` and
+`backend/src/main/java/com/aifashionvault/studio/StudioItem.java:1`. Provider selection,
+no-provider generation behavior, and share-link removal are PR-02/PR-16 work.
 
 ## Settled repository-init decisions
 
