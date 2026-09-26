@@ -413,7 +413,7 @@ class UploadsApiTest {
 		@Bean
 		@Primary
 		UploadWorkflow fakeUploadWorkflow(FakeUploadStore store) {
-			return new UploadWorkflow(store, new ImageInspector());
+			return UploadWorkflow.forTesting(store, new ImageInspector());
 		}
 	}
 
