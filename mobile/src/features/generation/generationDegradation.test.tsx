@@ -1,5 +1,12 @@
 import { render, screen, fireEvent, act } from '@testing-library/react-native';
 import GenerateScreen from '../../screens/GenerateScreen';
+
+jest.mock('../../config/apiConfig', () => ({
+  productionApiConfig: {
+    baseUrl: 'https://api.test',
+    getAccessToken: () => 'test-token',
+  },
+}));
 import { createGenerationApi } from './generationApi';
 import { createLook } from './createLook';
 import {
