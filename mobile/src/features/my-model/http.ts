@@ -1,4 +1,8 @@
 import type { AvatarApiConfig } from './types';
+// A hung socket must not hang the caller forever, so every request is
+// bounded. AbortController + setTimeout only: no new dependency.
+const REQUEST_TIMEOUT_MS = 30_000;
+
 
 export type UploadTicket = {
   id: string;
@@ -49,11 +53,23 @@ export async function apiRequest(
   if (token) {
     headers.Authorization = `Bearer ${token}`;
   }
-  return fetch(`${config.baseUrl.replace(/\/+$/, '')}${path}`, {
-    method: init.method,
-    headers,
-    body: init.body,
-  });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    return await fetch(`${config.baseUrl.replace(/\/+$/, '')}${path}`, {
+      method: init.method,
+      headers,
+      body: init.body,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new Error(`Request timed out after ${REQUEST_TIMEOUT_MS}ms: ${path}`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function extractProblemCode(response: Response): Promise<string | null> {
