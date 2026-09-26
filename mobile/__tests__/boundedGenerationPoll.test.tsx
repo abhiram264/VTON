@@ -67,12 +67,20 @@ test('default poll bound covers the server job deadline and its retries', () => 
   const SERVER_ORCHESTRATION_DEADLINE_MS = 30 * 60 * 1000;
   const ADAPTER_READ_TIMEOUT_MS = 300 * 1000;
   const MAX_TRANSMISSIONS = 3;
+  const POLL_DEADLINE_MARGIN_MS = 60 * 1000;
 
   expect(POLL_DEADLINE_MS).toBeGreaterThanOrEqual(SERVER_ORCHESTRATION_DEADLINE_MS);
   expect(POLL_DEADLINE_MS).toBeGreaterThanOrEqual(
     MAX_TRANSMISSIONS * ADAPTER_READ_TIMEOUT_MS,
   );
   expect(POLL_MAX_ATTEMPTS * 2000).toBeGreaterThanOrEqual(POLL_DEADLINE_MS);
+  // And an UPPER bound, so the set is not one-directional: the client should
+  // wait out the server's budget plus its documented margin, not an arbitrary
+  // longer time. Without this, a pathologically large bound would satisfy every
+  // assertion above.
+  expect(POLL_DEADLINE_MS).toBeLessThanOrEqual(
+    SERVER_ORCHESTRATION_DEADLINE_MS + POLL_DEADLINE_MARGIN_MS,
+  );
 });
 
 // The production attempt bound is what makes the poll finite; this asserts it
