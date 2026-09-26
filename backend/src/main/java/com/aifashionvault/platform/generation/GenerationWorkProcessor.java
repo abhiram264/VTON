@@ -107,7 +107,7 @@ import com.aifashionvault.shared.UserId;
 public final class GenerationWorkProcessor {
 
 	private static final Logger log = LoggerFactory.getLogger(GenerationWorkProcessor.class);
-	private static final Duration VISIBILITY_EXTENSION = Duration.ofSeconds(90);
+	static final Duration VISIBILITY_EXTENSION = Duration.ofSeconds(90);
 	private static final Duration HEARTBEAT_INTERVAL =
 		Duration.ofSeconds(SqsGenerationWorkQueue.HEARTBEAT_INTERVAL_SECONDS);
 	private static final Duration FIRST_POLL_DELAY = AttemptRedeliveryPolicy.FIRST_POLL_DELAY;
