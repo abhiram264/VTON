@@ -82,11 +82,14 @@ vault:
     # See the NOT YET ENFORCING note above; true today = 403 on all generation
     # writes, including POST /looks/{id}/regenerate.
     attestation-required: false
-    queue:
-      visibility-timeout-seconds: 120
-      heartbeat-seconds: 45
-      long-poll-seconds: 20
-      receive-batch-size: 1
-      main-retention-seconds: 345600
-      dlq-retention-seconds: 1209600
-      max-receive-count: 5
+    # Queue sizing is NOT application configuration. SQS visibility timeout, long
+    # poll, message retention and redrive are provisioned with the queue itself
+    # (infra/terraform/queue.tf, infra/docker/localstack_ready.py), and the
+    # application-side values are the constants in SqsGenerationWorkQueue and
+    # GenerationWorkProcessor. An earlier version of this file declared them
+    # here, but no code ever read vault.generation.queue.* - changing them had
+    # no effect, which is worse than not offering them. Resizing the queue means
+    # changing provisioning and the matching constants together, and must keep
+    # HEARTBEAT_INTERVAL_SECONDS < VISIBILITY_EXTENSION <= VISIBILITY_TIMEOUT_SECONDS
+    # (pinned by GenerationWorkProcessorSlowProviderTest) so a multi-minute
+    # provider call is never reaped mid-flight.
