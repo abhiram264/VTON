@@ -46,6 +46,10 @@ vault:
     look-bucket: ${S3_LOOK_BUCKET}
     temp-bucket: ${S3_TEMP_BUCKET}
   fashn:
+    # Provider keys are OPTIONAL at boot (t220): an unset variable resolves to the empty
+    # default below, which @ConditionalOnNonBlankApiKey treats as "no provider beans" —
+    # the app boots honestly unavailable (503 GENERATION_PROVIDER_UNAVAILABLE on create).
+    # Do NOT require these keys in VaultEnvironmentValidator or here.
     api-key: ${FASHN_API_KEY:}
   inferhub:
     api-key: ${VTON_IMAGE_API_KEY:}

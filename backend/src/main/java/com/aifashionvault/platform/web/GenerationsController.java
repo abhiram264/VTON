@@ -64,7 +64,7 @@ public class GenerationsController {
 		this.service = new GenerationCreationService(
 			store, new JdbcTemplate(dataSource), properties, Clock.systemUTC(),
 			mediaStore, new JdbcGenerationRateLimiter(dataSource, Clock.systemUTC()),
-			generationMetrics.getIfAvailable(), FashnConfig.providerConfigured(vaultProperties));
+			generationMetrics.getIfAvailable(), FashnConfig.anyProviderConfigured(vaultProperties));
 	}
 
 	@PostMapping

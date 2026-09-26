@@ -10,6 +10,7 @@ public record VaultEnvironmentProperties(
 	Sqs sqs,
 	S3 s3,
 	Fashn fashn,
+	Inferhub inferhub,
 	Firebase firebase,
 	Otel otel
 ) {
@@ -44,6 +45,13 @@ public record VaultEnvironmentProperties(
 		@Override
 		public String toString() {
 			return "Fashn[]";
+		}
+	}
+
+	public record Inferhub(String apiKey) {
+		@Override
+		public String toString() {
+			return "Inferhub[]";
 		}
 	}
 

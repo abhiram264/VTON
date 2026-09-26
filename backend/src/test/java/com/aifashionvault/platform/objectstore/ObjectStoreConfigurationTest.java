@@ -251,6 +251,7 @@ class ObjectStoreConfigurationTest {
 			new VaultEnvironmentProperties.Sqs(queue),
 			new VaultEnvironmentProperties.S3(prefix + "-avatar", prefix + "-vault", prefix + "-look", prefix + "-temp"),
 			new VaultEnvironmentProperties.Fashn("test-fashn-key"),
+			new VaultEnvironmentProperties.Inferhub(null),
 			new VaultEnvironmentProperties.Firebase("demo-ai-fashion-vault"),
 			new VaultEnvironmentProperties.Otel("ai-fashion-vault-api", "deployment.environment.name=" + env, "http://127.0.0.1:4317", null));
 	}

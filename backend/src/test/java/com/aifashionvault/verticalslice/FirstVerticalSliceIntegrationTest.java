@@ -230,7 +230,7 @@ class FirstVerticalSliceIntegrationTest {
 
 	private static VaultEnvironmentProperties queueProperties() {
 		return new VaultEnvironmentProperties(AppEnv.development, null, null,
-			new VaultEnvironmentProperties.Sqs("https://sqs.invalid/generation"), null, null, null, null);
+			new VaultEnvironmentProperties.Sqs("https://sqs.invalid/generation"), null, null, null, null, null);
 	}
 
 	private record Owner(String token, UUID userId) {}

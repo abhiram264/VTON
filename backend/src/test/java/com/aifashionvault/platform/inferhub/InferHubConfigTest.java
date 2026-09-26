@@ -7,6 +7,7 @@ import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 
 import com.aifashionvault.generation.vton.ProviderKey;
 import com.aifashionvault.generation.vton.ProviderRegistry;
+import com.aifashionvault.generation.vton.ProviderRegistryComposition;
 import com.aifashionvault.platform.environment.AppEnv;
 import com.aifashionvault.platform.environment.VaultEnvironmentProperties;
 import com.aifashionvault.platform.fashn.FashnClient;
@@ -30,7 +31,7 @@ class InferHubConfigTest {
     private static final String INFERHUB_KEY = "test-inferhub-key";
 
     private final ApplicationContextRunner runner = new ApplicationContextRunner()
-        .withUserConfiguration(InferHubConfig.class, FashnConfig.class)
+        .withUserConfiguration(InferHubConfig.class, FashnConfig.class, ProviderRegistryComposition.class)
         .withPropertyValues(
             "vault.inferhub.api-key=" + INFERHUB_KEY,
             "vault.fashn.api-key=test-fashn-key")
@@ -63,6 +64,107 @@ class InferHubConfigTest {
             });
     }
 
+    /**
+     * t220 mandated cell: the `${VTON_IMAGE_API_KEY:}`/`${FASHN_API_KEY:}` defaults turn an
+     * unset environment variable into a PRESENT-EMPTY property, which the old
+     * {@code @ConditionalOnProperty} matched — half-creating beans whose client builders then
+     * threw. {@code @ConditionalOnNonBlankApiKey} must reject present-empty exactly like
+     * absent: context starts, no provider beans, no registry, mappers ungated.
+     */
+    @Test
+    void presentEmptyKeysMeanNoProviderBeansAndNoRegistry() {
+        new ApplicationContextRunner()
+            .withUserConfiguration(InferHubConfig.class, FashnConfig.class, ProviderRegistryComposition.class)
+            .withPropertyValues("vault.inferhub.api-key=", "vault.fashn.api-key=")
+            .withBean(ObjectStore.class, NoopObjectStore::new)
+            .withBean(VaultEnvironmentProperties.class, InferHubConfigTest::properties)
+            .run(context -> {
+                assertThat(context).hasNotFailed();
+                // FactoryBean products resolvable by type; a null product is a NullBean.
+                assertThat(context.getBeanProvider(ProviderRegistry.class).getIfAvailable()).isNull();
+                assertThat(context).doesNotHaveBean(InferHubVtonProvider.class);
+                assertThat(context).doesNotHaveBean(FashnVtonProvider.class);
+                assertThat(context).doesNotHaveBean(InferHubClient.class);
+                assertThat(context).doesNotHaveBean(FashnClient.class);
+                assertThat(context).hasSingleBean(InferHubMapper.class);
+                assertThat(context).hasSingleBean(FashnMapper.class);
+            });
+    }
+
+    /**
+     * t220 mandated cell: the composed registry exists with the InferHub provider selected
+     * when InferHub is the only configured provider.
+     */
+    @Test
+    void inferHubOnlySetupSelectsInferHub() {
+        new ApplicationContextRunner()
+            .withUserConfiguration(InferHubConfig.class, FashnConfig.class, ProviderRegistryComposition.class)
+            .withPropertyValues("vault.inferhub.api-key=" + INFERHUB_KEY)
+            .withBean(ObjectStore.class, NoopObjectStore::new)
+            .withBean(VaultEnvironmentProperties.class, InferHubConfigTest::properties)
+            .run(context -> {
+                assertThat(context).hasNotFailed();
+                assertThat(context).hasSingleBean(ProviderRegistry.class);
+                ProviderRegistry registry = context.getBean(ProviderRegistry.class);
+                assertThat(registry.selectedProviderKey()).isEqualTo(new ProviderKey("inferhub"));
+                assertThat(registry.resolve(new ProviderKey("inferhub")))
+                    .isSameAs(context.getBean(InferHubVtonProvider.class));
+                // FASHN is absent (blank key), so the registry is InferHub-only.
+                assertThat(registry.providerKeys()).containsExactly(new ProviderKey("inferhub"));
+            });
+    }
+
+    /**
+     * t220 mandated cell: both keys set — BOTH providers registered, and the selection is
+     * deterministic (forced-provider unset, no inferhub/fashn pin overrides, inferhub wins
+     * by the frozen order) and NOT dependent on bean construction order. The two runs flip
+     * the registration order of the user configurations to prove order-independence.
+     */
+    @Test
+    void bothKeysSetRegistersBothAndSelectsDeterministically() {
+        for (boolean inferHubFirst : new boolean[] {true, false}) {
+            Class<?>[] configurationOrder = inferHubFirst
+                ? new Class<?>[] {InferHubConfig.class, FashnConfig.class, ProviderRegistryComposition.class}
+                : new Class<?>[] {FashnConfig.class, InferHubConfig.class, ProviderRegistryComposition.class};
+            new ApplicationContextRunner()
+                .withUserConfiguration(configurationOrder)
+                .withPropertyValues(
+                    "vault.inferhub.api-key=" + INFERHUB_KEY,
+                    "vault.fashn.api-key=test-fashn-key")
+                .withBean(ObjectStore.class, NoopObjectStore::new)
+                .withBean(VaultEnvironmentProperties.class, InferHubConfigTest::properties)
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(context).hasSingleBean(ProviderRegistry.class);
+                    ProviderRegistry registry = context.getBean(ProviderRegistry.class);
+                    assertThat(registry.providerKeys())
+                        .containsExactlyInAnyOrder(new ProviderKey("inferhub"), new ProviderKey("fashn"));
+                    assertThat(registry.selectedProviderKey()).isEqualTo(new ProviderKey("inferhub"));
+                    assertThat(registry.resolve(new ProviderKey("fashn")))
+                        .isSameAs(context.getBean(FashnVtonProvider.class));
+                });
+        }
+    }
+
+    /**
+     * t220 mandated cell: the provider-agnostic admission predicate replaces the
+     * FASHN-specific one at the create path, so an InferHub-only setup must be admitted.
+     */
+    @Test
+    void anyProviderConfiguredIsTrueForInferHubOnlyAndFalseWhenBothBlank() {
+        assertThat(FashnConfig.anyProviderConfigured(properties())).isTrue();
+        assertThat(FashnConfig.anyProviderConfigured(new VaultEnvironmentProperties(
+            AppEnv.development, null, null, null, null,
+            new VaultEnvironmentProperties.Fashn("   "),
+            new VaultEnvironmentProperties.Inferhub(null), null, null))).isFalse();
+        assertThat(FashnConfig.anyProviderConfigured(null)).isFalse();
+        // FASHN-only keeps working through the same predicate.
+        assertThat(FashnConfig.anyProviderConfigured(new VaultEnvironmentProperties(
+            AppEnv.development, null, null, null, null,
+            new VaultEnvironmentProperties.Fashn("test-fashn-key"),
+            new VaultEnvironmentProperties.Inferhub(""), null, null))).isTrue();
+    }
+
     @Test
     void fashnBeansAreUnchangedByTheInferHubConfig() {
         runner.run(context -> {
@@ -70,10 +172,11 @@ class InferHubConfigTest {
             assertThat(context).hasSingleBean(FashnMapper.class);
             assertThat(context).hasSingleBean(FashnClient.class);
             assertThat(context).hasSingleBean(FashnVtonProvider.class);
-            // FashnConfig's registry still selects FASHN and resolves its own provider.
+            // The composed registry selects inferhub with both keys set (deterministic order)
+            // and still resolves the FASHN provider.
             assertThat(context).hasSingleBean(ProviderRegistry.class);
             ProviderRegistry registry = context.getBean(ProviderRegistry.class);
-            assertThat(registry.selectedProviderKey()).isEqualTo(new ProviderKey("fashn"));
+            assertThat(registry.selectedProviderKey()).isEqualTo(new ProviderKey("inferhub"));
             assertThat(registry.resolve(new ProviderKey("fashn")))
                 .isSameAs(context.getBean(FashnVtonProvider.class));
         });
@@ -87,6 +190,7 @@ class InferHubConfigTest {
             new VaultEnvironmentProperties.Sqs("http://127.0.0.1:4566/000000000000/q"),
             new VaultEnvironmentProperties.S3("avatar", "vault", "look", "temp"),
             new VaultEnvironmentProperties.Fashn("test-fashn-key"),
+            new VaultEnvironmentProperties.Inferhub(INFERHUB_KEY),
             new VaultEnvironmentProperties.Firebase("demo-ai-fashion-vault"),
             new VaultEnvironmentProperties.Otel("ai-fashion-vault-api", "", "", ""));
     }

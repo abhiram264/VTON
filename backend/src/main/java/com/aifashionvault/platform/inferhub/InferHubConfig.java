@@ -3,7 +3,6 @@ package com.aifashionvault.platform.inferhub;
 import java.net.http.HttpClient;
 import java.time.Duration;
 
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.env.Environment;
@@ -11,6 +10,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
 
+import com.aifashionvault.platform.environment.ConditionalOnNonBlankApiKey;
 import com.aifashionvault.platform.objectstore.ObjectStore;
 
 /**
@@ -37,19 +37,19 @@ public class InferHubConfig {
     }
 
     @Bean
-    @ConditionalOnProperty(prefix = "vault.inferhub", name = "api-key")
+    @ConditionalOnNonBlankApiKey("vault.inferhub.api-key")
     RestClient inferHubRestClient(Environment environment) {
         return inferHubRestClientBuilder(environment.getProperty("vault.inferhub.api-key")).build();
     }
 
     @Bean
-    @ConditionalOnProperty(prefix = "vault.inferhub", name = "api-key")
+    @ConditionalOnNonBlankApiKey("vault.inferhub.api-key")
     InferHubClient inferHubClient(RestClient inferHubRestClient) {
         return new InferHubClient(inferHubRestClient);
     }
 
     @Bean
-    @ConditionalOnProperty(prefix = "vault.inferhub", name = "api-key")
+    @ConditionalOnNonBlankApiKey("vault.inferhub.api-key")
     InferHubVtonProvider inferHubVtonProvider(
         InferHubMapper inferHubMapper,
         InferHubClient inferHubClient,

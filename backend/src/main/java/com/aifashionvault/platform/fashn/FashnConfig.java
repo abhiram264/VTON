@@ -2,20 +2,16 @@ package com.aifashionvault.platform.fashn;
 
 import java.net.http.HttpClient;
 import java.time.Duration;
-import java.util.List;
-import java.util.Map;
 
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import com.aifashionvault.platform.environment.ConditionalOnNonBlankApiKey;
+import com.aifashionvault.platform.environment.VaultEnvironmentProperties;
+import com.aifashionvault.platform.objectstore.ObjectStore;
+
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
-
-import com.aifashionvault.generation.vton.DefaultProviderRegistry;
-import com.aifashionvault.generation.vton.ProviderRegistry;
-import com.aifashionvault.platform.environment.VaultEnvironmentProperties;
-import com.aifashionvault.platform.objectstore.ObjectStore;
 
 @Configuration(proxyBeanMethods = false)
 public class FashnConfig {
@@ -29,28 +25,26 @@ public class FashnConfig {
     }
 
     @Bean
-    @ConditionalOnProperty(prefix = "vault.fashn", name = "api-key")
+    @ConditionalOnNonBlankApiKey("vault.fashn.api-key")
     RestClient fashnRestClient(VaultEnvironmentProperties properties) {
         return fashnRestClientBuilder(properties.fashn().apiKey()).build();
     }
 
     @Bean
-    @ConditionalOnProperty(prefix = "vault.fashn", name = "api-key")
+    @ConditionalOnNonBlankApiKey("vault.fashn.api-key")
     FashnClient fashnClient(RestClient fashnRestClient) {
         return new FashnClient(fashnRestClient);
     }
 
     @Bean
-    @ConditionalOnProperty(prefix = "vault.fashn", name = "api-key")
+    @ConditionalOnNonBlankApiKey("vault.fashn.api-key")
     FashnVtonProvider fashnVtonProvider(FashnMapper fashnMapper, FashnClient fashnClient, ObjectStore objectStore) {
         return new FashnVtonProvider(fashnMapper, fashnClient, objectStore);
     }
 
-    @Bean
-    @ConditionalOnProperty(prefix = "vault.fashn", name = "api-key")
-    ProviderRegistry providerRegistry(FashnVtonProvider fashnVtonProvider) {
-        return new DefaultProviderRegistry(List.of(fashnVtonProvider), fashnVtonProvider.providerKey(), Map.of());
-    }
+    // The ProviderRegistry bean moved to ProviderRegistryComposition, which composes every
+    // registered VtonProvider with the deterministic selection order (forced-provider, then
+    // inferhub, then fashn). Two ProviderRegistry @Bean methods would collide.
 
     /**
      * Whether an image provider is genuinely configured. A blank or absent API key means no
@@ -61,6 +55,18 @@ public class FashnConfig {
     public static boolean providerConfigured(VaultEnvironmentProperties properties) {
         return properties != null && properties.fashn() != null
             && properties.fashn().apiKey() != null && !properties.fashn().apiKey().isBlank();
+    }
+
+    /**
+     * Provider-agnostic admission predicate: true when ANY image provider's key is
+     * genuinely non-blank (FASHN and/or InferHub). The create path must not answer
+     * 503 GENERATION_PROVIDER_UNAVAILABLE on an InferHub-only setup, so the
+     * FASHN-specific {@link #providerConfigured} is no longer used for admission.
+     */
+    public static boolean anyProviderConfigured(VaultEnvironmentProperties properties) {
+        return providerConfigured(properties)
+            || (properties != null && properties.inferhub() != null
+                && properties.inferhub().apiKey() != null && !properties.inferhub().apiKey().isBlank());
     }
 
     static RestClient.Builder fashnRestClientBuilder(String apiKey) {

@@ -126,6 +126,7 @@ class DevProfileSyntheticScannerTest {
 			null,
 			null,
 			null,
+			null,
 			null));
 	}
 

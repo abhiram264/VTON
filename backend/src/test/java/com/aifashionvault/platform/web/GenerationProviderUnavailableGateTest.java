@@ -74,9 +74,30 @@ class GenerationProviderUnavailableGateTest {
 	void blankOrAbsentApiKeyMeansNoProvider() {
 		assertThat(FashnConfig.providerConfigured(null)).isFalse();
 		assertThat(FashnConfig.providerConfigured(new VaultEnvironmentProperties(null, null, null, null, null,
-			new VaultEnvironmentProperties.Fashn(null), null, null))).isFalse();
+			new VaultEnvironmentProperties.Fashn(null), new VaultEnvironmentProperties.Inferhub(null), null,
+			null))).isFalse();
 		assertThat(FashnConfig.providerConfigured(new VaultEnvironmentProperties(null, null, null, null, null,
-			new VaultEnvironmentProperties.Fashn("   "), null, null))).isFalse();
+			new VaultEnvironmentProperties.Fashn("   "), new VaultEnvironmentProperties.Inferhub(null), null,
+			null))).isFalse();
+	}
+
+	/**
+	 * t220: the create-path admission gate is now the provider-agnostic
+	 * {@code anyProviderConfigured}, so an InferHub-only setup is admitted and a
+	 * blank/absent key on either provider is never mistaken for a configured one.
+	 */
+	@Test
+	void anyProviderConfiguredAdmitsEitherProviderAndRefusesBlank() {
+		assertThat(FashnConfig.anyProviderConfigured(null)).isFalse();
+		assertThat(FashnConfig.anyProviderConfigured(new VaultEnvironmentProperties(null, null, null, null, null,
+			new VaultEnvironmentProperties.Fashn(null), new VaultEnvironmentProperties.Inferhub("   "), null,
+			null))).isFalse();
+		assertThat(FashnConfig.anyProviderConfigured(new VaultEnvironmentProperties(null, null, null, null, null,
+			new VaultEnvironmentProperties.Fashn(null), new VaultEnvironmentProperties.Inferhub("test-inferhub-key"),
+			null, null))).isTrue();
+		assertThat(FashnConfig.anyProviderConfigured(new VaultEnvironmentProperties(null, null, null, null, null,
+			new VaultEnvironmentProperties.Fashn("test-fashn-key"), new VaultEnvironmentProperties.Inferhub(null),
+			null, null))).isTrue();
 	}
 
 }
