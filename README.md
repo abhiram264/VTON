@@ -46,7 +46,7 @@ Repository sanity is checked by [`.github/workflows/repo-sanity.yml`](.github/wo
 
 ## Stack
 
-- **Backend** — Spring Boot 4.1.0 on Java 21, Spring MVC with Spring JDBC (no JPA), Flyway migrations `V001`–`V023`, PostgreSQL 18 as the source of truth.
+- **Backend** — Spring Boot 4.1.0 on Java 21, Spring MVC with Spring JDBC (no JPA), Flyway migrations `V001`–`V024`, PostgreSQL 18 as the source of truth.
 - **Queues and storage** — AWS SQS and S3 through the AWS SDK v2. Locally both are emulated by LocalStack (`s3,sqs`).
 - **Mobile** — React Native 0.86.2 / React 19.2.3, npm, Node `^22.13.0 || >=24`.
 
