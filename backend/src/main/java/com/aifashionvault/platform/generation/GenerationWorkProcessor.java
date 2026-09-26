@@ -6,9 +6,12 @@ import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Objects;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.UUID;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -19,6 +22,7 @@ import java.util.function.DoubleSupplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
+import tools.jackson.databind.ObjectMapper;
 import com.aifashionvault.platform.logging.LoggingPolicy;
 import com.aifashionvault.admission.GlobalCostCircuitBreaker;
 import com.aifashionvault.admission.ProviderExecutionBudgetRequest;
@@ -125,6 +129,7 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 	private static final Duration NOTIFICATION_TTL = Duration.ofHours(24);
 	private static final int PROVIDER_CAPACITY_SLOTS = 8;
 	private static final int MAX_LOGICAL_ATTEMPTS_PER_STEP = 3;
+	private static final ObjectMapper RENDER_PLAN_JSON = new ObjectMapper();
 
 
 	private final GenerationStore generationStore;
@@ -557,7 +562,7 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 
 		ResolvedMedia media;
 		try {
-			media = mediaResolver.resolve(job);
+			media = stepScopedMedia(job);
 		}
 		catch (GenerationInputMissingException ex) {
 			failTerminal(job, attempt, lease, TerminalReason.INPUT_MEDIA_MISSING.name(), false);
@@ -946,7 +951,9 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 			return;
 		}
 		if (latest.currentStep() < latest.totalSteps()) {
-			outputStore.discard();
+			// Sequential composition: the accepted intermediate stays in TEMP
+			// as the next step's subject input (F07); only the final step's
+			// output is promoted into LOOK.
 			GenerationAttempt finished = finishedAttempt(
 				attempt,
 				"SUCCESS",
@@ -1046,7 +1053,7 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 			job.id(),
 			job.studioSessionId(),
 			lookKey,
-			job.requestedMode(),
+			renderPlanJson(job.id()),
 			attempt.provider(),
 			attempt.model(),
 			QualityDecision.PASS,
@@ -1258,7 +1265,7 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 		byte[] subjectBytes = null;
 		byte[] garmentBytes = null;
 		try {
-			ResolvedMedia media = mediaResolver.resolve(job);
+			ResolvedMedia media = stepScopedMedia(job);
 			subjectBytes = loadAuthorizedBytes(media.avatar());
 			int productIndex = Math.min(job.currentStep() - 1, media.products().size() - 1);
 			if (productIndex >= 0) {
@@ -2679,6 +2686,62 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 	private static VtonMode mode(GenerationJob job) {
 		String requested = job.requestedMode() == null || job.requestedMode().isBlank() ? "try-on" : job.requestedMode();
 		return new VtonMode(requested);
+	}
+
+	/**
+	 * Serializes the job's persisted render plan as the Look's provenance
+	 * (F06): the renderPlan column must carry the actual plan (version and
+	 * step identities), never the requested mode string. Jobs without a
+	 * persisted plan store NULL rather than fake provenance.
+	 */
+	private String renderPlanJson(GenerationJobId jobId) {
+		return renderPlan(jobId).map(RENDER_PLAN_JSON::writeValueAsString).orElse(null);
+	}
+
+	/**
+	 * Sequential composition (PRD multi-item flow, F07): each render step
+	 * sends only its planned items, and from step 2 on the subject is the
+	 * previous render step's accepted output (its retained TEMP key). Step 1
+	 * renders the original authorized avatar with its own planned items. A
+	 * missing previous accepted output for step > 1 is a broken composition
+	 * invariant and fails as absent input instead of silently re-rendering
+	 * the original avatar.
+	 */
+	private ResolvedMedia stepScopedMedia(GenerationJob job) {
+		ResolvedMedia media = mediaResolver.resolve(job);
+		Optional<RenderPlan> plan = renderPlan(job.id());
+		if (plan.isEmpty() || job.currentStep() < 1 || job.currentStep() > plan.get().steps().size()) {
+			return media;
+		}
+		RenderStep currentStep = plan.get().steps().get(job.currentStep() - 1);
+		PrivateMediaRef subject = media.avatar();
+		if (job.currentStep() > 1) {
+			UUID previousStepId = plan.get().steps().get(job.currentStep() - 2).id();
+			StorageKey previousOutput = generationStore.listAttempts(job.id()).stream()
+				.filter(existing -> "SUCCESS".equals(existing.technicalOutcome()) && existing.failureCode() == null)
+				.filter(existing -> sameRenderStep(existing.renderStepId(), previousStepId))
+				.map(GenerationAttempt::tempStorageKey)
+				.filter(Objects::nonNull)
+				.reduce((first, second) -> second)
+				.orElseThrow(() -> new GenerationInputMissingException(
+					"previous render step has no retained accepted output",
+					null));
+			subject = new PrivateMediaRef(previousOutput, OptionalLong.empty());
+		}
+		List<VtonProductAsset> scoped = new ArrayList<>();
+		List<VaultItemId> jobProductIds = job.productVaultItemIds();
+		for (int i = 0; i < media.products().size() && i < jobProductIds.size(); i++) {
+			int index = i;
+			boolean planned = currentStep.items().stream()
+				.anyMatch(item -> item.vaultItemId().equals(jobProductIds.get(index)));
+			if (planned) {
+				scoped.add(media.products().get(i));
+			}
+		}
+		if (scoped.isEmpty()) {
+			scoped = media.products();
+		}
+		return new ResolvedMedia(subject, scoped);
 	}
 
 
