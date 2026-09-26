@@ -166,6 +166,24 @@ describe('MyModelScreen', () => {
     ).toBe(false);
   });
 
+  test('null pick shows a user-visible notice instead of a silent no-op', async () => {
+    fetchMock.mockResolvedValue(await jsonResponse(200, []));
+    takePhotoMock.mockResolvedValue(null);
+
+    await render(<MyModelScreen />);
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Take photo' })).toBeTruthy();
+    });
+
+    fireEvent.press(screen.getByRole('button', { name: 'Take photo' }));
+
+    const notice = await screen.findByText(
+      'No photo was selected. Photo selection may be unavailable. Try again.',
+    );
+    expect(notice.props.accessibilityLiveRegion).toBe('polite');
+    expect(screen.getByRole('button', { name: 'Take photo' })).toBeTruthy();
+  });
+
   test('ready state shows the private preview', async () => {
     fetchMock.mockResolvedValue(await jsonResponse(200, [AVATAR]));
 
