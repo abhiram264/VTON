@@ -136,10 +136,18 @@ public final class ShareImportService {
 		return switch (store.delete(owner, id)) {
 			case JdbcShareImportStore.Deleted deleted -> {
 				deleteObject(deleted.storageKey());
+				markCleanedUp(owner, id);
 				yield true;
 			}
 			case JdbcShareImportStore.AlreadyDeleted alreadyDeleted -> {
-				deleteObject(alreadyDeleted.storageKey());
+				// A retained key on an already-DELETED row is the cleanup-FAILED
+				// signal: retry the physical removal exactly once. A successful
+				// cleanup cleared the key, so an ordinary repeated DELETE skips
+				// the removal and stays a 204 (idempotent logical delete).
+				if (alreadyDeleted.storageKey() != null) {
+					deleteObject(alreadyDeleted.storageKey());
+					markCleanedUp(owner, id);
+				}
 				yield true;
 			}
 			case JdbcShareImportStore.Missing ignored -> false;
@@ -162,6 +170,10 @@ public final class ShareImportService {
 			.orElseThrow(ShareImportProblem::notFound);
 	}
 
+
+	private void markCleanedUp(UserId owner, ShareImportId id) {
+		store.markCleanedUp(owner, id);
+	}
 
 	private void deleteObject(com.aifashionvault.shared.StorageKey key) {
 		if (key == null) {

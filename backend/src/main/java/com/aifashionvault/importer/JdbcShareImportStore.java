@@ -373,6 +373,21 @@ public class JdbcShareImportStore {
 		throw new IllegalStateException("share import delete was not applied: " + id.value());
 	}
 
+	/**
+	 * Clears the storage key of an already-DELETED row once its object removal
+	 * has SUCCEEDED, so a later DELETE reads no key and does not repeat the
+	 * removal. A row whose key is still set is a cleanup-FAILED row, which a
+	 * later delete call retries. The clear is owner-scoped and state-fenced.
+	 */
+	public void markCleanedUp(UserId ownerId, ShareImportId id) {
+		Objects.requireNonNull(ownerId, "ownerId");
+		Objects.requireNonNull(id, "id");
+		jdbc.update(
+			"UPDATE share_import SET storage_key = NULL, updated_at = ? "
+				+ "WHERE id = ? AND user_id = ? AND resolver_state = 'DELETED'",
+			Timestamp.from(clock.instant()), id.value(), ownerId.value());
+	}
+
 	public List<StorageKey> storageKeysFor(UserId ownerId) {
 		Objects.requireNonNull(ownerId, "ownerId");
 		return jdbc.queryForList(
