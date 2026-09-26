@@ -1,7 +1,10 @@
 import { createBottomTabNavigator, type BottomTabBarButtonProps, type BottomTabScreenProps } from '@react-navigation/bottom-tabs';
 import { useFocusEffect, type CompositeScreenProps } from '@react-navigation/native';
 import { createNativeStackNavigator, type NativeStackScreenProps } from '@react-navigation/native-stack';
-import { Pressable, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { useEffect, useState, type ReactNode } from 'react';
+import { subscribeToAuthSession, type AuthSession } from '../config/firebase';
+import SignInScreen from '../screens/SignInScreen';
 import GenerateScreen from '../screens/GenerateScreen';
 import HomeScreen from '../screens/HomeScreen';
 import LookScreen from '../screens/LookScreen';
@@ -75,10 +78,31 @@ function ProfileSettings({ navigation }: NativeStackScreenProps<RootStackParamLi
   return <View><Pressable accessibilityRole="button" accessibilityLabel="Back" onPress={navigation.goBack}><Text>Back</Text></Pressable><MyModelScreen onCreateLook={() => navigation.navigate('Generate')} /></View>;
 }
 
-export default function RootNavigator() {
+// Leading `loading` is the no-flash contract: a restored session never shows
+// the sign-in screen because the first committed state is the holding view.
+function useAuthSession(): AuthSession {
+  const [session, setSession] = useState<AuthSession>({ status: 'loading' });
+  useEffect(() => subscribeToAuthSession(setSession), []);
+  return session;
+}
+
+// The gate controls WHICH SCREEN IS PRESENTED, never WHICH ROUTES EXIST:
+// every route stays registered on the navigation ref so AppShell's by-name
+// pushes (`Look`, `ShareImport`) always land, even while signed out.
+function SessionGate({ session, signedIn }: { session: AuthSession; signedIn?: ReactNode }) {
+  if (session.status === 'signed-in') return <>{signedIn ?? null}</>;
+  if (session.status === 'loading') return <View style={styles.holding} testID="auth-holding" />;
+  return <SignInScreen />;
+}
+
+export default function RootNavigator({ session: injectedSession }: { session?: AuthSession } = {}) {
+  const subscribedSession = useAuthSession();
+  const session = injectedSession ?? subscribedSession;
   return (
     <Stack.Navigator initialRouteName="MainTabs">
-      <Stack.Screen name="MainTabs" component={MainTabs} options={{ headerShown: false }} />
+      <Stack.Screen name="MainTabs" options={{ headerShown: false }}>
+        {() => <SessionGate session={session} signedIn={<MainTabs />} />}
+      </Stack.Screen>
       <Stack.Screen name="ProfileSettings" component={ProfileSettings} options={{ title: 'Profile and settings', headerShown: false }} />
       <Stack.Screen name="MyModel">
         {({ navigation }) => <MyModelScreen onCreateLook={() => navigation.navigate('Generate')} />}
@@ -86,8 +110,20 @@ export default function RootNavigator() {
       <Stack.Screen name="Generate">
         {({ navigation }) => <GenerateScreen onCreateLook={lookId => navigation.navigate('Look', { lookId })} onMissingModel={() => navigation.navigate('MyModel')} />}
       </Stack.Screen>
-      <Stack.Screen name="Look">{({ route }) => <LookScreen lookId={route.params.lookId} />}</Stack.Screen>
-      <Stack.Screen name="ShareImport">{({ route }) => <ShareImportScreen payload={route.params.payload} />}</Stack.Screen>
+      <Stack.Screen name="Look">
+        {({ route }) => <SessionGate session={session} signedIn={<LookScreen lookId={route.params.lookId} />} />}
+      </Stack.Screen>
+      <Stack.Screen name="ShareImport">
+        {({ route }) => (
+          session.status === 'signed-in'
+            ? <ShareImportScreen payload={route.params.payload} />
+            : <SessionGate session={session} />
+        )}
+      </Stack.Screen>
     </Stack.Navigator>
   );
 }
+
+const styles = StyleSheet.create({
+  holding: { flex: 1 },
+});

@@ -1,0 +1,107 @@
+import { act, render, screen } from '@testing-library/react-native';
+import { NavigationContainer, StackActions, createNavigationContainerRef } from '@react-navigation/native';
+import RootNavigator, { type RootStackParamList } from '../src/navigation/RootNavigator';
+import { NOT_CONFIGURED_MESSAGE } from '../src/screens/SignInScreen';
+import type { AuthSession } from '../src/config/firebase';
+import type { SharePayload } from '../src/features/share/types';
+
+jest.mock('../src/features/vault/vaultApi', () => ({ vaultApi: { list: jest.fn().mockResolvedValue([]) } }));
+jest.mock('../src/features/vault/collectionApi', () => ({ collectionApi: { list: jest.fn().mockResolvedValue([]) } }));
+jest.mock('../src/features/looks/looksApi', () => ({ looksApi: { list: jest.fn().mockResolvedValue([]) } }));
+
+// Probe: records every payload the navigator hands to the Share Import
+// screen, so the test asserts the payload SURVIVES the sign-in transition.
+const receivedPayloads: SharePayload[] = [];
+jest.mock('../src/screens/ShareImportScreen', () => {
+  const { Text } = require('react-native');
+  return {
+    __esModule: true,
+    default: ({ payload }: { payload: SharePayload }) => {
+      receivedPayloads.push(payload);
+      return <Text>PAYLOAD_PROBE</Text>;
+    },
+  };
+});
+
+const navigationRef = createNavigationContainerRef<RootStackParamList>();
+
+function Harness({ session }: { session: AuthSession }) {
+  return (
+    <NavigationContainer ref={navigationRef}>
+      <RootNavigator session={session} />
+    </NavigationContainer>
+  );
+}
+
+function treeState(): 'holding' | 'sign-in' | 'main-tabs' | 'unknown' {
+  if (screen.queryByTestId('auth-holding')) return 'holding';
+  if (screen.queryByRole('header', { name: 'Sign In' })) return 'sign-in';
+  if (screen.queryByRole('tab', { name: /HOME/ })) return 'main-tabs';
+  return 'unknown';
+}
+
+test('loading renders the holding view, not sign-in and not MainTabs', async () => {
+  await render(<Harness session={{ status: 'loading' }} />);
+  expect(screen.queryByTestId('auth-holding')).toBeTruthy();
+  expect(screen.queryByRole('header', { name: 'Sign In' })).toBeNull();
+  expect(screen.queryByRole('tab', { name: /HOME/ })).toBeNull();
+});
+
+test('signed-out renders the sign-in screen and not MainTabs', async () => {
+  await render(<Harness session={{ status: 'signed-out' }} />);
+  expect(screen.getByRole('header', { name: 'Sign In' })).toBeTruthy();
+  expect(screen.queryByRole('tab', { name: /HOME/ })).toBeNull();
+  expect(screen.queryByTestId('auth-holding')).toBeNull();
+});
+
+test('unavailable renders the not-configured notice and not MainTabs', async () => {
+  await render(<Harness session={{ status: 'unavailable' }} />);
+  expect(screen.getByText(NOT_CONFIGURED_MESSAGE)).toBeTruthy();
+  expect(screen.queryByRole('tab', { name: /HOME/ })).toBeNull();
+  expect(screen.queryByTestId('auth-holding')).toBeNull();
+});
+
+test('signed-in renders MainTabs and not the sign-in screen', async () => {
+  await render(<Harness session={{ status: 'signed-in', uid: 'u1', getIdToken: async () => 't' }} />);
+  expect(await screen.findByRole('tab', { name: /HOME/ })).toBeTruthy();
+  expect(screen.queryByRole('header', { name: 'Sign In' })).toBeNull();
+});
+
+test('loading to signed-in never shows the sign-in screen at any committed state', async () => {
+  const utils = await render(<Harness session={{ status: 'loading' }} />);
+  const states = [treeState()];
+  utils.rerender(<Harness session={{ status: 'signed-in', uid: 'u1', getIdToken: async () => 't' }} />);
+  expect(await screen.findByRole('tab', { name: /HOME/ })).toBeTruthy();
+  states.push(treeState());
+  expect(states).not.toContain('sign-in');
+  expect(states[0]).toBe('holding');
+  expect(states[states.length - 1]).toBe('main-tabs');
+});
+
+test('a share pushed while signed-out is not consumed and survives to sign-in', async () => {
+  receivedPayloads.length = 0;
+  const utils = await render(<Harness session={{ status: 'signed-out' }} />);
+  expect(screen.getByRole('header', { name: 'Sign In' })).toBeTruthy();
+
+  const payload: SharePayload = { kind: 'url', url: 'https://example.com/item/1' };
+  // AppShell queues by-name pushes until the ref is ready; mirror that drain.
+  await act(async () => {
+    for (let i = 0; i < 100 && !navigationRef.isReady(); i += 1) {
+      await Promise.resolve();
+    }
+    navigationRef.dispatch(StackActions.push('ShareImport', { payload }));
+  });
+  expect(navigationRef.isReady()).toBe(true);
+  expect(navigationRef.getState()?.routes.map(r => r.name)).toContain('ShareImport');
+  // Signed-out consumer must not receive the payload; sign-in still shown.
+  expect(screen.getByRole('header', { name: 'Sign In' })).toBeTruthy();
+  expect(receivedPayloads).toHaveLength(0);
+
+  // Sign in happens in place: the same tree, the pushed route still on the
+  // stack, the payload params untouched across the transition.
+  await act(async () => {
+    await utils.rerender(<Harness session={{ status: 'signed-in', uid: 'u1', getIdToken: async () => 't' }} />);
+  });
+  // The exact payload object survives the transition, still consumable.
+  expect(receivedPayloads).toEqual([payload]);
+});
