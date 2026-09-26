@@ -109,7 +109,7 @@ resource "aws_ecs_task_definition" "worker" {
         { name = "OTEL_SERVICE_NAME", value = local.worker_otel_service_name },
         { name = "OTEL_RESOURCE_ATTRIBUTES", value = "service.name=ai-fashion-vault-worker,deployment.environment=${var.environment}" },
         { name = "OTEL_EXPORTER_OTLP_ENDPOINT", value = "http://127.0.0.1:4317" },
-        { name = "VAULT_GENERATION_QUEUE_RELAYENABLED", value = "true" },
+        { name = "VAULT_GENERATION_QUEUE_RELAY_ENABLED", value = "true" },
         { name = "VAULT_GENERATION_RECOVERY_ENABLED", value = "true" }
       ]
       secrets = [
