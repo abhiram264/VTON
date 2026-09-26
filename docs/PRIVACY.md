@@ -87,7 +87,10 @@ remains the backlog; PR-17 owns the deletion rework.
   `privacy/Consent.java:6` models it, but **no code writes or reads the table** — the
   only `consent` references in main source are the migration and the record. The
   captured value is enforced nowhere. Consent must still be captured and enforced
-  before processing; that requirement stands.
+  before processing; that requirement stands. Whether such a row would be deleted
+  on account closure is a product-owner decision rather than an implementation
+  gap: rows are retained, and the reasoning is under "Consent record retention"
+  below.
 - Deletion completeness is therefore **not** established today: nothing in this tree
   proves complete erasure.
 - **Per-object delete suppression now applies only to the temp-retention sweep.** The
@@ -110,6 +113,66 @@ remains the backlog; PR-17 owns the deletion rework.
   `AI_Fashion_Vault_MVP_Production_Readiness_PR_Plan.md:82`; the plan's F16 at `:94` is the
   deletion finding above.)
 
+## Consent record retention
+
+- **Consent records are kept, not deleted.** The product owner decided on
+  2026-09-26 that a consent row stays in the database after the account it belongs
+  to is closed. The database enforces the other half of this rather than leaving
+  it to convention: every row carries a `user_id` pointing at the user with
+  `ON DELETE RESTRICT` (`V010__create_consents.sql:3`), so the database refuses a
+  hard delete of the user row while the consent row exists. That is a rule about
+  rows in the database, not about your account — closing your account marks it
+  deleted (`users.deleted_at`) and takes it out of use, because a marked-deleted
+  account can no longer be authenticated
+  (`platform/security/ExternalBearerAuthenticationFilter.java:90`) — and the
+  consent row is what stays behind, as the audit trail. Nothing since has changed
+  this (no later migration alters the `consent` table: no `ALTER TABLE consent`
+  exists anywhere in `V001`–`V024`), and no code in this tree deletes a consent
+  row.
+- **What a retained row actually holds** (`V010__create_consents.sql:2-7`): a row
+  id, the `user_id` of the person who agreed, a `purpose` (free-form text — the
+  schema defines no fixed set of purposes), the `version` of the terms they agreed
+  to, and two timestamps — `granted_at`, plus `revoked_at` if they later withdrew.
+  A consent row holds no photo, no video or other media, no model input, and
+  nothing sent to or received from an AI provider. The only personal information in
+  it is the internal `user_id`, a system-generated identifier rather than a name,
+  email address, or phone number.
+- **How long: indefinitely, per that 2026-09-26 decision.** There is no
+  expiry period, time-to-live, cleanup sweep, or scheduled job that removes consent
+  rows. The one retention scheduler in the tree
+  (`platform/retention/RetentionConfiguration.java:52`) sweeps temporary media in
+  object storage, not database rows.
+- **Why the row is kept.** A consent row is the only lasting evidence of *what a
+  person agreed to, which version of the terms they agreed to, and from what
+  date*. Keeping it after the account is closed is what makes the question "was
+  this processing allowed, and under which terms?" answerable long after the
+  account itself is gone. Deleting the row on account closure would delete the
+  proof that the agreement ever existed.
+- **Withdrawing consent does not delete the record.** `revoked_at` is written onto
+  the same row (`V010__create_consents.sql:7`); the row itself stays. The only rule
+  the code enforces about it is that a withdrawal cannot be dated before the grant
+  (`privacy/Consent.java:24-26`). A withdrawn consent therefore keeps its original
+  `granted_at` and stays readable, leaving the row as the record of both the grant
+  and the withdrawal.
+- **What this means for someone asking to be forgotten.** The only identifier kept
+  is the internal `user_id`. Deleting an account here sets `users.deleted_at`
+  rather than removing the user row (`user/JdbcIdentityProvisioning.java:113-117`),
+  so that identifier stays live and a retained consent row can still be tied back
+  to a soft-deleted account. The trade-off that decision accepts: the consent
+  record is kept, and because your internal account ID stays in it, that record
+  could still be linked back to your closed account. The account-deletion
+  workflow that would otherwise erase such records exists but is not wired in
+  (`docs/PRIVACY.md:25-30`, `:31-43`); its `ANONYMIZE_OPERATIONAL_DATA` step
+  (`privacy/AccountDeletionStep.java:11`) is written down but never switched on,
+  so no code runs it today. What survives is a uuid, two text fields, and two
+  timestamps — no image and no media.
+- **What is not true today.** No production code writes or reads the `consent`
+  table (`docs/DATA_MODEL.md:73-74`), so in this tree no consent is actually being
+  recorded or enforced. The retention described above is what the schema is
+  *designed* to do, not a description of a live audit trail — there is nothing to
+  retain yet. Consent must still be captured and enforced before processing; that
+  requirement stands.
+
 ## Not claimed
 
 - No compliance certification (GDPR, CCPA, or any other) is claimed or implied here, or
@@ -120,7 +183,8 @@ remains the backlog; PR-17 owns the deletion rework.
   erasure path that failure is logged and rethrown, leaving the account undeleted; on the
   temp-retention sweep it is logged and swallowed until a later sweep retries.
 - No claim that a user can obtain a data export or that consent is recorded or enforced:
-  neither has a production writer.
+  neither has a production writer. Whether a retained consent row is ever deleted is a
+  separate matter, answered under "Consent record retention" above.
 
 ## Settled repository-init decisions
 

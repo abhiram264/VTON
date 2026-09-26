@@ -35,7 +35,7 @@ function androidRegisteredUriHosts(): Set<string> {
   return new Set(
     Array.from(
       manifest.matchAll(/android:scheme="([^"]+)"\s+android:host="([^"]+)"/g),
-      match => `${match[1]}://${match[2]}`,
+      (match: RegExpMatchArray) => `${match[1]}://${match[2]}`,
     ),
   );
 }
@@ -48,7 +48,7 @@ function iosRegisteredSchemes(): Set<string> {
       plist.matchAll(
         /CFBundleURLSchemes<\/key>\s*<array>\s*<string>([^<]+)<\/string>/g,
       ),
-      match => match[1],
+      (match: RegExpMatchArray) => match[1],
     ),
   );
 }

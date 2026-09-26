@@ -167,7 +167,7 @@ export async function pollGeneration(options: {
     options.delay ??
     ((ms: number) =>
       new Promise<void>((resolve, reject) => {
-        let timer: number;
+        let timer: ReturnType<typeof setTimeout>;
         const onAbort = () => {
           clearTimeout(timer);
           options.signal?.removeEventListener('abort', onAbort);
