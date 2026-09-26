@@ -12,6 +12,17 @@ management:
   endpoint:
     health:
       show-details: never
+  cloudwatch2:
+    metrics:
+      export:
+        # Micrometer CloudWatch2 step registry (micrometer-registry-cloudwatch2, BOM-managed
+        # via micrometer-bom 1.17.0 imported by spring-boot-dependencies 4.1.0).
+        # namespace must equal infra/alerts/variables.tf var.metric_namespace (default
+        # "AI-Fashion-Vault"); step must not exceed the shortest alarm period in
+        # infra/alerts (ai-quality-collapse period = 300s) so every alarm window sees data.
+        enabled: ${CLOUDWATCH_METRICS_EXPORT:false}
+        namespace: ${CLOUDWATCH_METRICS_NAMESPACE:AI-Fashion-Vault}
+        step: 1m
 
 vault:
   env: ${APP_ENV}
