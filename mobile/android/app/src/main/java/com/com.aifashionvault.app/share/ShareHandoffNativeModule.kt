@@ -31,14 +31,21 @@ class ShareHandoffNativeModule(reactContext: ReactApplicationContext) :
 
   @ReactMethod
   fun consumeShare(shareId: String?, promise: Promise) {
-    promise.resolve(ShareHandoffEnvelope.build(store().consume(shareId)).toWritableMap())
+    val result =
+        try {
+          store().consume(shareId)
+        } catch (_: Exception) {
+          PendingShareStore.ConsumeResult.InvalidPayload
+        }
+    promise.resolve(ShareHandoffEnvelope.build(result).toWritableMap())
   }
 
   @ReactMethod
   fun releaseStagedImage(localImageUri: String?, promise: Promise) {
-    val stagingDir = File(reactApplicationContext.cacheDir, "share-staging")
+    val stagingDir = ShareRuntime.stagingDir(reactApplicationContext)
     try {
-      StagedImagePaths.stagedFile(stagingDir, localImageUri)?.delete()
+      val file = StagedImagePaths.stagedFile(stagingDir, localImageUri)
+      if (file != null && !store().isStagedFileReferenced(localImageUri)) file.delete()
     } catch (_: Exception) {
       // Never throw to JS; release is best-effort cleanup.
     }

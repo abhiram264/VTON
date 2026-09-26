@@ -7,8 +7,8 @@ import com.aifashionvault.shared.UserId;
 import com.aifashionvault.shared.AccountMediaPurge;
 
 /**
- * Account-deletion purge port: hides every owner import and best-effort
- * removes every owned private object.
+ * Account-deletion purge port. Rows remain retryable until every owned object
+ * deletion returns successfully or is confirmed already absent.
  */
 public class ShareImportAccountMediaPurge implements AccountMediaPurge {
 

@@ -38,6 +38,8 @@ public class GenerationCreationService {
 	static final String PRODUCT_UPLOAD_ALREADY_CLAIMED = "PRODUCT_UPLOAD_ALREADY_CLAIMED";
 	static final String GENERATION_NOT_CANCELLABLE = "GENERATION_NOT_CANCELLABLE";
 	static final String ADMISSION_PAUSED = "ADMISSION_PAUSED";
+	static final String CREATE_OUTCOME_UNKNOWN = "CREATE_OUTCOME_UNKNOWN";
+	static final String GENERATION_MEDIA_UNAVAILABLE = "GENERATION_MEDIA_UNAVAILABLE";
 
     private final GenerationStore store;
     private final JdbcTemplate jdbc;
@@ -87,6 +89,9 @@ public class GenerationCreationService {
                 return toResponse(existing);
             }
         }
+        if (mediaStore == null) {
+            throw problem(HttpStatus.SERVICE_UNAVAILABLE, GENERATION_MEDIA_UNAVAILABLE);
+        }
         Instant now = clock.instant();
         UUID generationId = UUID.randomUUID();
         MediaAssetId productMediaId = new MediaAssetId(UUID.randomUUID());
@@ -102,6 +107,7 @@ public class GenerationCreationService {
 			if (!reservation.decision().allowed()) throw problem(HttpStatus.TOO_MANY_REQUESTS, reservation.decision().reason());
 		}
 		boolean claimed = false;
+		boolean accepted = false;
 		try {
 			ClaimResult claim = mediaStore.claimProductInput(claimCommand);
 			if (claim instanceof ClaimResult.Conflict) throw problem(HttpStatus.CONFLICT, PRODUCT_UPLOAD_ALREADY_CLAIMED);
@@ -116,19 +122,60 @@ public class GenerationCreationService {
 			FrozenSingleItemIntent intent = new FrozenSingleItemIntent(job.id(), userId, avatar.imageId(), productMediaId, 1, 1);
 			GenerationResponse response = switch (store.createSingleItem(command, intent, job)) {
 				case GenerationStore.CreateSingleItemResult.Created created -> {
+					if (reservation != null) {
+						rateLimiter.commit(reservation);
+						reservation = null;
+					}
+					claimed = false;
 					if (metrics != null) {
 						metrics.recordGenerationCount();
 					}
+					accepted = true;
 					yield toResponse(created.job());
 				}
-				case GenerationStore.CreateSingleItemResult.Replayed replayed -> toResponse(replayed.job());
+				case GenerationStore.CreateSingleItemResult.Replayed replayed -> {
+					RuntimeException cleanup = null;
+					if (claimed && mediaStore != null) {
+						claimed = false;
+						try { mediaStore.releaseProductInput(claimCommand); }
+						catch (RuntimeException compensation) { cleanup = compensation; }
+					}
+					if (reservation != null) {
+						com.aifashionvault.admission.GenerationRateLimiter.Reservation replayReservation = reservation;
+						reservation = null;
+						try { rateLimiter.release(replayReservation); }
+						catch (RuntimeException compensation) {
+							if (cleanup == null) cleanup = compensation;
+							else cleanup.addSuppressed(compensation);
+						}
+					}
+					if (cleanup != null) throw cleanup;
+					yield toResponse(replayed.job());
+				}
 				case GenerationStore.CreateSingleItemResult.FingerprintConflict ignored -> throw problem(HttpStatus.CONFLICT, IDEMPOTENCY_KEY_CONFLICT);
 				case GenerationStore.CreateSingleItemResult.ProductUploadAlreadyClaimed ignored -> throw problem(HttpStatus.CONFLICT, PRODUCT_UPLOAD_ALREADY_CLAIMED);
 			};
-			if (reservation != null) rateLimiter.commit(reservation);
 			return response;
 		}
 		catch (RuntimeException failure) {
+			if (accepted) {
+				throw failure;
+			}
+			boolean durableJobExists;
+			try {
+				durableJobExists = durableJobExists(userId, key, fingerprint);
+			}
+			catch (RuntimeException lookupEx) {
+				Problem unknown = problem(HttpStatus.SERVICE_UNAVAILABLE, CREATE_OUTCOME_UNKNOWN);
+				unknown.addSuppressed(lookupEx);
+				unknown.initCause(failure);
+				throw unknown;
+			}
+			if (durableJobExists) {
+				Problem unknown = problem(HttpStatus.SERVICE_UNAVAILABLE, CREATE_OUTCOME_UNKNOWN);
+				unknown.initCause(failure);
+				throw unknown;
+			}
 			if (claimed) releaseClaim(claimCommand, failure);
 			if (reservation != null) releaseReservation(reservation, failure);
 			throw failure;
@@ -136,12 +183,16 @@ public class GenerationCreationService {
  	}
 
 	private void preflight(ProductInputClaimCommand command) {
+		if (mediaStore == null) {
+			throw problem(HttpStatus.SERVICE_UNAVAILABLE, GENERATION_MEDIA_UNAVAILABLE);
+		}
 		try { mediaStore.preflightProductInput(command); }
 		catch (ObjectStoreExceptions.StagedObjectMissingException ex) { throw problem(HttpStatus.UNPROCESSABLE_ENTITY, PRODUCT_UPLOAD_MISSING); }
 		catch (ObjectStoreExceptions.ImageValidationException | IllegalArgumentException ex) { throw problem(HttpStatus.UNPROCESSABLE_ENTITY, MALFORMED_REQUEST); }
 	}
 
 	private void releaseClaim(ProductInputClaimCommand command, RuntimeException failure) {
+		if (mediaStore == null) return;
 		try { mediaStore.releaseProductInput(command); }
 		catch (RuntimeException compensation) { failure.addSuppressed(compensation); }
 	}
@@ -149,6 +200,17 @@ public class GenerationCreationService {
 	private void releaseReservation(com.aifashionvault.admission.GenerationRateLimiter.Reservation reservation, RuntimeException failure) {
 		try { rateLimiter.release(reservation); }
 		catch (RuntimeException compensation) { failure.addSuppressed(compensation); }
+	}
+
+	private boolean durableJobExists(UserId userId, String key, String fingerprint) {
+		for (GenerationJob existing : store.listJobsByUser(userId)) {
+			if (existing.clientRequestId() != null
+					&& key.equals(existing.clientRequestId().value())
+					&& fingerprint.equals(existing.requestFingerprint())) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	public GenerationResponse get(UserId userId, String generationId) { return toResponse(requireOwnedJob(userId, generationId)); }

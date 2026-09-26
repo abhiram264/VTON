@@ -10,8 +10,10 @@ import {
 } from '../src/features/generation/activeGeneration';
 import {
   classifyGenerationFailure,
+  isProviderOutage,
   OUTAGE_FAILURE_CODES,
 } from '../src/features/generation/failureContract';
+import type { GenerationResource } from '../src/features/generation/types';
 
 const BASE_URL = 'https://api.example.invalid';
 const SIGNED_URL =
@@ -238,8 +240,8 @@ describe('createLook', () => {
     // Canonical polling only: one wait between GENERATING and COMPLETED.
     expect(waits).toEqual([2000]);
 
-    // The generation ID is persisted for canonical polling.
-    expect(getActiveGeneration()).toBe(GENERATION_ID);
+    // Successful completion clears the resumable active-generation state.
+    expect(getActiveGeneration()).toBeNull();
 
     for (const [, init] of fetchMock.mock.calls) {
       const body = init?.body;
@@ -248,6 +250,127 @@ describe('createLook', () => {
         expect(body).not.toContain(LOCAL_URI);
       }
     }
+  });
+
+  test('create-phase response loss is non-retryable and does not issue a second POST', async () => {
+    const picker = jest.fn().mockResolvedValue({ uri: LOCAL_URI });
+    const uploadOnce = jest.fn().mockResolvedValue(UPLOAD_ID);
+    const create = jest.fn().mockRejectedValue(new TypeError('Network request failed'));
+    const get = jest.fn();
+    const getLook = jest.fn();
+    const api = { create, get, getLook };
+
+    const result = await createLook({
+      photo: { uri: LOCAL_URI },
+      picker,
+      upload: uploadOnce,
+      api,
+      delay: noDelay,
+    });
+
+    expect(result).toEqual({
+      outcome: 'failed',
+      reason: 'error',
+      networkLevel: true,
+      retryable: false,
+    });
+    expect(uploadOnce).toHaveBeenCalledTimes(1);
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(get).not.toHaveBeenCalled();
+    expect(getLook).not.toHaveBeenCalled();
+    expect(picker).not.toHaveBeenCalled();
+  });
+
+  test('poll-phase response loss resumes the active generation without re-upload or create', async () => {
+    const picker = jest.fn().mockResolvedValue({ uri: LOCAL_URI });
+    const uploadOnce = jest.fn().mockResolvedValue(UPLOAD_ID);
+    const create = jest
+      .fn()
+      .mockResolvedValue(generationResource() as GenerationResource);
+    const get = jest
+      .fn()
+      .mockRejectedValueOnce(new Error('Network response lost'))
+      .mockResolvedValue(
+        generationResource({
+          status: 'COMPLETED',
+          phase: 'READY',
+          lookId: LOOK_ID,
+        }) as GenerationResource,
+      );
+    const getLook = jest
+      .fn()
+      .mockResolvedValue(lookResource('https://signed.example.invalid/read?token=a'));
+    const api = { create, get, getLook };
+
+    const first = await createLook({
+      photo: { uri: LOCAL_URI },
+      picker,
+      upload: uploadOnce,
+      api,
+      delay: noDelay,
+    });
+    expect(first).toEqual({
+      outcome: 'failed',
+      reason: 'error',
+    });
+
+    const second = await createLook({
+      photo: { uri: LOCAL_URI },
+      picker,
+      upload: uploadOnce,
+      api,
+      delay: noDelay,
+    });
+    expect(second).toEqual({ outcome: 'ready', lookId: LOOK_ID });
+    expect(uploadOnce).toHaveBeenCalledTimes(1);
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(get).toHaveBeenCalledTimes(2);
+    expect(picker).not.toHaveBeenCalled();
+  });
+
+  test('completed generation clears active state for a new intent', async () => {
+    const picker = jest.fn();
+    const upload = jest.fn().mockResolvedValue(UPLOAD_ID);
+    const create = jest
+      .fn()
+      .mockResolvedValueOnce(generationResource({ id: 'generation-1' }) as GenerationResource)
+      .mockResolvedValueOnce(generationResource({ id: 'generation-2' }) as GenerationResource);
+    const get = jest.fn((id: string) =>
+      Promise.resolve(
+        generationResource({
+          id,
+          status: 'COMPLETED',
+          phase: 'READY',
+          lookId: LOOK_ID,
+        }) as GenerationResource,
+      ),
+    );
+    const getLook = jest
+      .fn()
+      .mockResolvedValue(lookResource('https://signed.example.invalid/read?token=a'));
+    const api = { create, get, getLook };
+
+    const first = await createLook({
+      photo: { uri: 'file:///first.png' },
+      picker,
+      upload,
+      api,
+      delay: noDelay,
+    });
+    expect(first).toEqual({ outcome: 'ready', lookId: LOOK_ID });
+    expect(getActiveGeneration()).toBeNull();
+
+    const second = await createLook({
+      photo: { uri: 'file:///second.png' },
+      picker,
+      upload,
+      api,
+      delay: noDelay,
+    });
+    expect(second).toEqual({ outcome: 'ready', lookId: LOOK_ID });
+    expect(upload).toHaveBeenCalledTimes(2);
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(picker).not.toHaveBeenCalled();
   });
 
   test.each([
@@ -643,6 +766,50 @@ describe('generationApi', () => {
       'Unknown generation status',
     );
   });
+
+  test('response loss retry reuses the idempotency key and does not mint a second paid request', async () => {
+    let attempts = 0;
+    fetchMock.mockImplementation((input, init) => {
+      const url = requestUrl(input);
+      const method = (init?.method ?? 'GET').toUpperCase();
+      if (url === `${BASE_URL}/generations` && method === 'POST') {
+        attempts += 1;
+        if (attempts === 1) {
+          return Promise.reject(new TypeError('Network request failed'));
+        }
+        return jsonResponse(
+          202,
+          generationResource({ id: GENERATION_ID, status: 'QUEUED' }),
+        );
+      }
+      throw new Error(`unexpected fetch ${method} ${url}`);
+    });
+
+    const api = createGenerationApi(config());
+    const idempotencyKey = createIdempotencyKey();
+
+    await expect(api.create(UPLOAD_ID, idempotencyKey)).rejects.toThrow(
+      'Network request failed',
+    );
+
+    const generation = await api.create(UPLOAD_ID, idempotencyKey);
+    expect(generation.id).toBe(GENERATION_ID);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const [firstCall, secondCall] = fetchMock.mock.calls;
+    expect(firstCall[1]?.headers).toEqual(
+      expect.objectContaining({ 'Idempotency-Key': idempotencyKey }),
+    );
+    expect(secondCall[1]?.headers).toEqual(
+      expect.objectContaining({ 'Idempotency-Key': idempotencyKey }),
+    );
+    expect(firstCall[1]?.body).toBe(
+      JSON.stringify({ productUploadId: UPLOAD_ID }),
+    );
+    expect(secondCall[1]?.body).toBe(
+      JSON.stringify({ productUploadId: UPLOAD_ID }),
+    );
+  });
 });
 
 describe('classifyGenerationFailure', () => {
@@ -652,6 +819,11 @@ describe('classifyGenerationFailure', () => {
       expect(classifyGenerationFailure(code, false)).toBe('OUTAGE');
     },
   );
+
+  test('literally classifies STORAGE_UNAVAILABLE as OUTAGE and provider outage', () => {
+    expect(classifyGenerationFailure('STORAGE_UNAVAILABLE', false)).toBe('OUTAGE');
+    expect(isProviderOutage('STORAGE_UNAVAILABLE', false)).toBe(true);
+  });
 
   test('maps network-level failures to OUTAGE with precedence over codes', () => {
     expect(classifyGenerationFailure(undefined, true)).toBe('OUTAGE');

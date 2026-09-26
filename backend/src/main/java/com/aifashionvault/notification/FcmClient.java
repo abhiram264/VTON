@@ -76,6 +76,10 @@ public final class FcmClient {
 	}
 
 	public FcmSendResult send(String deviceToken, Map<String, String> data, Instant now) {
+		return send(deviceToken, data, now, now.plus(ttl));
+	}
+
+	public FcmSendResult send(String deviceToken, Map<String, String> data, Instant now, Instant deadlineAt) {
 		if (deviceToken == null || deviceToken.isBlank()) {
 			throw new IllegalArgumentException("deviceToken is required");
 		}
@@ -85,12 +89,18 @@ public final class FcmClient {
 		if (now == null) {
 			throw new IllegalArgumentException("now is required");
 		}
+		if (deadlineAt == null) {
+			throw new IllegalArgumentException("deadlineAt is required");
+		}
+		if (!now.isBefore(deadlineAt)) {
+			throw new IllegalArgumentException("deadlineAt must be after now");
+		}
 		rejectUnsafePayload(data);
 		String token = accessToken.get();
 		if (token == null || token.isBlank()) {
 			throw new IllegalStateException("access token is required");
 		}
-		byte[] body = encode(messageBody(deviceToken, data, now));
+		byte[] body = encode(messageBody(deviceToken, data, now, deadlineAt));
 		HttpRequest request = HttpRequest.newBuilder()
 			.uri(URI.create(baseUrl + "/v1/projects/" + projectId + "/messages:send"))
 			.timeout(Duration.ofSeconds(10))
@@ -121,11 +131,17 @@ public final class FcmClient {
 		return "FcmClient[]";
 	}
 
-	private Map<String, Object> messageBody(String deviceToken, Map<String, String> data, Instant now) {
+	private Map<String, Object> messageBody(
+			String deviceToken,
+			Map<String, String> data,
+			Instant now,
+			Instant deadlineAt) {
+		Duration remaining = Duration.between(now, deadlineAt);
+		Duration effectiveTtl = ttl.compareTo(remaining) < 0 ? ttl : remaining;
 		Map<String, Object> android = new LinkedHashMap<>();
-		android.put("ttl", ttl.toSeconds() + "s");
+		android.put("ttl", effectiveTtl.toSeconds() + "s");
 		Map<String, String> apnsHeaders = new LinkedHashMap<>();
-		apnsHeaders.put("apns-expiration", Long.toString(now.plus(ttl).getEpochSecond()));
+		apnsHeaders.put("apns-expiration", Long.toString(now.plus(effectiveTtl).getEpochSecond()));
 		Map<String, Object> apns = new LinkedHashMap<>();
 		apns.put("headers", apnsHeaders);
 		Map<String, Object> message = new LinkedHashMap<>();
@@ -150,7 +166,7 @@ public final class FcmClient {
 	}
 
 	private static boolean isRetryable(int status) {
-		return status == 429 || status >= 500;
+		return status == 401 || status == 429 || status >= 500;
 	}
 
 	static Duration parseRetryAfter(String header, Instant now) {

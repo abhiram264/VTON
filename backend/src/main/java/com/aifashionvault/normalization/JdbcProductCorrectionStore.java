@@ -7,7 +7,7 @@ import java.util.Optional;
 
 import javax.sql.DataSource;
 
-import org.springframework.dao.DataAccessException;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 
@@ -41,7 +41,7 @@ public final class JdbcProductCorrectionStore {
 				event.correctedCategory().name(), event.confidence(), Timestamp.from(event.createdAt()));
 			return event;
 		}
-		catch (DataAccessException ex) {
+		catch (DuplicateKeyException ex) {
 			Optional<CorrectionEvent> existing = findById(event.id());
 			if (existing.isEmpty()) {
 				throw ex;

@@ -6,7 +6,9 @@ import java.security.NoSuchAlgorithmException;
 import java.time.Clock;
 import java.util.Locale;
 import java.util.Set;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -19,7 +21,6 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 @RestController
-@ConditionalOnBean(CallbackInboxStore.class)
 public class GenerationCallbackController {
 
 	static final int MIN_TOKEN_HEX_CHARS = 64;
@@ -31,9 +32,6 @@ public class GenerationCallbackController {
 	private final Clock clock;
 
 	public GenerationCallbackController(CallbackInboxStore inboxStore, Clock clock) {
-		if (inboxStore == null) {
-			throw new IllegalArgumentException("inboxStore is required");
-		}
 		if (clock == null) {
 			throw new IllegalArgumentException("clock is required");
 		}
@@ -41,11 +39,19 @@ public class GenerationCallbackController {
 		this.clock = clock;
 	}
 
+	@Autowired
+	public GenerationCallbackController(ObjectProvider<CallbackInboxStore> stores, ObjectProvider<Clock> clocks) {
+		this(stores.getIfAvailable(), clocks.getIfAvailable(Clock::systemUTC));
+	}
+
 	@PostMapping("/generation-callbacks/{token}")
 	public ResponseEntity<Void> receive(
 		@PathVariable String token,
 		@RequestBody(required = false) byte[] body
 	) {
+		if (inboxStore == null) {
+			return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).build();
+		}
 		if (!validToken(token)) {
 			return ResponseEntity.notFound().build();
 		}

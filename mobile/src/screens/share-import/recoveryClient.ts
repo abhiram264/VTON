@@ -7,13 +7,20 @@ import type {ShareImportResponse} from '../../features/share/importTypes';
 const STATUS_PATH = '/share/imports';
 
 // Mirrors the frozen response validation in importClient.ts (not exported
-// there): recovery must not mistake an unresolved 202 for READY.
-function isShareImportResponse(value: unknown): value is ShareImportResponse {
+// there) and binds the response to the import whose image was attached.
+function isShareImportResponse(
+  value: unknown,
+  expectedImportId: string,
+): value is ShareImportResponse {
   if (value === null || typeof value !== 'object') {
     return false;
   }
   const record = value as Record<string, unknown>;
-  if (typeof record.importId !== 'string') {
+  if (
+    typeof record.importId !== 'string' ||
+    record.importId.trim().length === 0 ||
+    record.importId !== expectedImportId
+  ) {
     return false;
   }
   switch (record.status) {
@@ -73,13 +80,13 @@ export async function attachRecoveryImage(
     throw new Error('Aborted');
   }
   const payload = await requireOk(
-    await apiRequest(config, `${STATUS_PATH}/${importId}/image`, {
+    await apiRequest(config, `${STATUS_PATH}/${encodeURIComponent(importId)}/image`, {
       method: 'PUT',
       body: JSON.stringify({uploadId} satisfies {uploadId: string}),
       extraHeaders: {'Idempotency-Key': recoveryIdempotencyKey(importId)},
     }),
   );
-  if (!isShareImportResponse(payload)) {
+  if (!isShareImportResponse(payload, importId)) {
     throw new Error('Invalid import response');
   }
   return payload;

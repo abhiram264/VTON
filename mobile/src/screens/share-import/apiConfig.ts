@@ -2,9 +2,11 @@ import type {AvatarApiConfig} from '../../features/my-model/types';
 
 export type ShareImportApiConfig = AvatarApiConfig;
 
-// Same convention as avatarApi/generationApi: unauthenticated local default;
-// the auth boundary attaches the token provider in the running app.
+// The mounted default must fail before any relative or bearer-less request.
+// M06 owns replacing this with the live configured authenticated session.
 export const apiConfig: ShareImportApiConfig = {
   baseUrl: '',
-  getAccessToken: () => null,
+  getAccessToken: () => {
+    throw new Error('Share import API is not configured');
+  },
 };

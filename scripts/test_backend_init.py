@@ -3,8 +3,10 @@
 
 from __future__ import annotations
 
+import errno
 import shutil
 import subprocess
+import re
 import sys
 import tempfile
 import unittest
@@ -147,6 +149,22 @@ class IsolatedTempRoot(unittest.TestCase):
 
 
 class TestBackendInit(IsolatedTempRoot):
+    def _symlink(self, link: Path, target: Path, *, directory: bool) -> None:
+        try:
+            link.symlink_to(target, target_is_directory=directory)
+        except OSError as exc:
+            if (
+                exc.errno in {errno.EACCES, errno.EPERM}
+                or getattr(exc, "winerror", None) == 1314
+            ):
+                self.skipTest("directory symlinks are unavailable")
+            raise
+
+    def _assert_collision(self, proc: subprocess.CompletedProcess[str]) -> None:
+        self.assertEqual(proc.returncode, 2, proc.stderr)
+        self._assert_stdout_state(proc, "COLLISION")
+        self.assertNotIn("ValueError", proc.stderr)
+
     def _assert_stdout_state(self, proc: subprocess.CompletedProcess[str], state: str) -> None:
         payload = _stdout_payload(proc.stdout)
         self.assertTrue(payload, proc.stderr)
@@ -161,7 +179,7 @@ class TestBackendInit(IsolatedTempRoot):
         self.assertTrue(pom_path.is_file())
         pom = pom_path.read_text(encoding="utf-8")
         self.assertIn("<java.version>21</java.version>", pom)
-        self.assertIn("4.1.0", pom)
+        self.assertRegex(pom, r"<version>4\.[^<]+</version>")
         self.assertIn("com.aifashionvault", pom)
         self.assertIn("<artifactId>backend</artifactId>", pom)
         for needle in REQUIRED_POM:
@@ -285,6 +303,78 @@ class TestBackendInit(IsolatedTempRoot):
         self._assert_stdout_state(proc, "INITIALIZED")
         self.assertEqual(_snapshot(self.root / "backend"), before)
 
+    def test_external_git_symlink_is_normal_collision(self) -> None:
+        backend = self.root / "backend"
+        backend.mkdir()
+        external_git = self.root / "external-git"
+        external_git.mkdir()
+        (external_git / "marker").write_bytes(b"keep\n")
+        self._symlink(backend / ".git", external_git, directory=True)
+
+        proc = _run_init(self.root)
+
+        self._assert_collision(proc)
+        self.assertEqual(_collision_paths(proc.stdout), ["backend/.git"])
+        self.assertEqual((external_git / "marker").read_bytes(), b"keep\n")
+
+    def test_external_wrapper_symlink_is_collision_without_write(self) -> None:
+        src = _ensure_greenfield_cache()
+        self.assertTrue(src.is_dir(), getattr(_ABSENT_PROC, "stderr", ""))
+        _copy_backend(src, self.root)
+        wrapper = self.root / "backend" / ".mvn" / "wrapper"
+        shutil.rmtree(wrapper)
+        external_wrapper = self.root / "external-wrapper"
+        external_wrapper.mkdir()
+        (external_wrapper / "marker").write_bytes(b"keep\n")
+        self._symlink(wrapper, external_wrapper, directory=True)
+
+        proc = _run_init(self.root)
+
+        self._assert_collision(proc)
+        self.assertIn(
+            "backend/.mvn/wrapper/maven-wrapper.properties",
+            _collision_paths(proc.stdout),
+        )
+        self.assertEqual((external_wrapper / "marker").read_bytes(), b"keep\n")
+        self.assertFalse((external_wrapper / "maven-wrapper.properties").exists())
+
+    def test_external_src_symlink_is_collision_without_write(self) -> None:
+        src = _ensure_greenfield_cache()
+        self.assertTrue(src.is_dir(), getattr(_ABSENT_PROC, "stderr", ""))
+        _copy_backend(src, self.root)
+        backend_src = self.root / "backend" / "src"
+        shutil.rmtree(backend_src)
+        external_src = self.root / "external-src"
+        external_src.mkdir()
+        (external_src / "marker").write_bytes(b"keep\n")
+        self._symlink(backend_src, external_src, directory=True)
+
+        proc = _run_init(self.root)
+
+        self._assert_collision(proc)
+        self.assertIn(
+            "backend/src/main/resources/application.yaml",
+            _collision_paths(proc.stdout),
+        )
+        self.assertEqual((external_src / "marker").read_bytes(), b"keep\n")
+        self.assertFalse((external_src / "main").exists())
+
+    def test_external_mvnw_symlink_is_collision_without_write(self) -> None:
+        src = _ensure_greenfield_cache()
+        self.assertTrue(src.is_dir(), getattr(_ABSENT_PROC, "stderr", ""))
+        _copy_backend(src, self.root)
+        mvnw = self.root / "backend" / "mvnw"
+        mvnw.unlink()
+        external_mvnw = self.root / "external-mvnw"
+        external_mvnw.write_bytes(b"keep\n")
+        self._symlink(mvnw, external_mvnw, directory=False)
+
+        proc = _run_init(self.root)
+
+        self._assert_collision(proc)
+        self.assertIn("backend/mvnw", _collision_paths(proc.stdout))
+        self.assertEqual(external_mvnw.read_bytes(), b"keep\n")
+
     def test_gradle_boot3_nested_git_are_collisions(self) -> None:
         gradle_root = self.root / "gradle_case"
         gradle_root.mkdir()
@@ -305,8 +395,11 @@ class TestBackendInit(IsolatedTempRoot):
         boot3_root.mkdir()
         _copy_backend(src, boot3_root)
         pom = boot3_root / "backend" / "pom.xml"
-        edited = pom.read_text(encoding="utf-8").replace(
-            "<version>4.1.0</version>", "<version>3.4.5</version>", 1
+        edited = re.sub(
+            r"(<artifactId>spring-boot-starter-parent</artifactId>\s*<version>)[^<]+(</version>)",
+            r"\g<1>3.4.5\g<2>",
+            pom.read_text(encoding="utf-8"),
+            count=1,
         )
         pom.write_text(edited, encoding="utf-8")
         before = _snapshot(boot3_root / "backend")
@@ -335,8 +428,11 @@ class TestBackendInit(IsolatedTempRoot):
         self.assertTrue(src.is_dir(), getattr(_ABSENT_PROC, "stderr", ""))
         _copy_backend(src, self.root)
         pom = self.root / "backend" / "pom.xml"
-        edited = pom.read_text(encoding="utf-8").replace(
-            "<version>4.1.0</version>", "<version>4.0.0</version>", 1
+        edited = re.sub(
+            r"(<artifactId>spring-boot-starter-parent</artifactId>\s*<version>)[^<]+(</version>)",
+            r"\g<1>4.0.0\g<2>",
+            pom.read_text(encoding="utf-8"),
+            count=1,
         )
         pom.write_text(edited, encoding="utf-8")
         before = _snapshot(self.root / "backend")

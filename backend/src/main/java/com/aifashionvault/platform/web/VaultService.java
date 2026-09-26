@@ -4,6 +4,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -37,12 +38,13 @@ public final class VaultService {
 	}
 	private VaultItem doCreate(UserId user,VaultItemCreateRequest request){
 		validateAttributes(request.attributes()); UploadId upload=parseUpload(request.uploadId()); SourceReferenceId source=parseSource(request.sourceReferenceId());
+		UUID stableId=UUID.nameUUIDFromBytes((user.value()+":"+upload.value()).getBytes(StandardCharsets.UTF_8)); VaultItemId id=new VaultItemId(stableId);
+		Optional<VaultItem> replay=store.findByIdForUser(id,user);
+		if(replay.isPresent()){VaultItem item=replay.get();if(!matches(item,source,request))throw problem(ProblemCode.VAULT_INVALID_REQUEST);return item;}
 		if(source!=null&&!store.sourceExists(source))throw problem(ProblemCode.VAULT_SOURCE_NOT_FOUND);
 		ObjectMetadata metadata;
 		try{metadata=media.head(new ObjectRef(StorageDomain.TEMP,StorageKeys.stagingKey(user,upload).value()));}catch(ObjectStoreExceptions.StagedObjectMissingException e){throw problem(ProblemCode.VAULT_UPLOAD_NOT_CLAIMABLE);}catch(ObjectStoreExceptions.ObjectStoreUnavailableException e){throw problem(ProblemCode.VAULT_MEDIA_UNAVAILABLE);}
-		ImageMediaType type=mediaType(metadata.contentType());
-		UUID stableId=UUID.nameUUIDFromBytes((user.value()+":"+upload.value()).getBytes(StandardCharsets.UTF_8));
-		VaultItemId id=new VaultItemId(stableId); StorageKey key=StorageKeys.persistentKey(user,StorageDomain.VAULT,stableId,type);
+		ImageMediaType type=mediaType(metadata.contentType()); StorageKey key=StorageKeys.persistentKey(user,StorageDomain.VAULT,stableId,type);
 		Optional<VaultItem> existing=store.findByStorageKeyForUser(key,user); if(existing.isPresent())return existing.get();
 		ClaimResult claim;
 		try{claim=media.claim(new ClaimCommand(user,upload,key,StorageDomain.VAULT,"vault:"+user.value()+":"+upload.value(),metadata.version()));}catch(RuntimeException e){throw problem(ProblemCode.VAULT_MEDIA_UNAVAILABLE);}
@@ -59,6 +61,7 @@ public final class VaultService {
 	private static SourceReferenceId parseSource(String value){if(value==null)return null;try{return new SourceReferenceId(UUID.fromString(value));}catch(Exception e){throw problem(ProblemCode.VAULT_SOURCE_NOT_FOUND);}}
 	private static ImageMediaType mediaType(String value){if("image/jpeg".equalsIgnoreCase(value))return ImageMediaType.JPEG;if("image/png".equalsIgnoreCase(value))return ImageMediaType.PNG;throw problem(ProblemCode.VAULT_UPLOAD_NOT_CLAIMABLE);}
 	private static void validateAttributes(tools.jackson.databind.JsonNode value){if(value!=null&&!value.isObject())throw problem(ProblemCode.VAULT_INVALID_REQUEST);}
+	private static boolean matches(VaultItem item,SourceReferenceId source,VaultItemCreateRequest request){return Objects.equals(item.sourceReferenceId(),source)&&Objects.equals(item.name(),request.name())&&Objects.equals(item.brand(),request.brand())&&Objects.equals(item.category(),request.category())&&Objects.equals(item.subcategory(),request.subcategory())&&Objects.equals(item.color(),request.color())&&Objects.equals(item.pattern(),request.pattern())&&Objects.equals(item.attributes(),request.attributes());}
 	static VaultProblem problem(ProblemCode code){return new VaultProblem(code);}
 	public static final class VaultProblem extends RuntimeException{private final ProblemCode code;VaultProblem(ProblemCode code){this.code=code;}ProblemCode code(){return code;}}
 }

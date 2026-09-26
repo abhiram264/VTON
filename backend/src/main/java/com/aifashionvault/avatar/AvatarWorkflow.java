@@ -63,7 +63,7 @@ public class AvatarWorkflow {
 				image(prepared, profileId, uploadId, now));
 		}
 		catch (RuntimeException ex) {
-			compensatePersistent(prepared.destination());
+			LOGGER.warn("Avatar mutation outcome is ambiguous; preserving claimed object for orphan reconciliation");
 			throw ex;
 		}
 		releaseAcceptedStaging(userId, uploadId);
@@ -106,7 +106,7 @@ public class AvatarWorkflow {
 				image(prepared, profileId, uploadId, Instant.now(clock)));
 		}
 		catch (RuntimeException ex) {
-			compensatePersistent(prepared.destination());
+			LOGGER.warn("Avatar mutation outcome is ambiguous; preserving claimed object for orphan reconciliation");
 			throw ex;
 		}
 		releaseAcceptedStaging(userId, uploadId);
@@ -176,15 +176,6 @@ public class AvatarWorkflow {
 	private void requireNotConsumed(UserId userId, UploadId uploadId) {
 		if (store.isUploadConsumed(userId, uploadId)) {
 			throw new AvatarException(AvatarProblemCode.AVATAR_UPLOAD_NOT_CLAIMABLE);
-		}
-	}
-
-	private void compensatePersistent(StorageKey storageKey) {
-		try {
-			mediaAccess.deletePersistent(storageKey);
-		}
-		catch (RuntimeException ignored) {
-			LOGGER.warn("Avatar media compensation failed; orphan reconciliation will retry");
 		}
 	}
 

@@ -4,6 +4,7 @@ import java.net.SocketTimeoutException;
 import java.net.URI;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Base64;
 import java.util.HashMap;
 import java.util.List;
@@ -34,7 +35,6 @@ import com.aifashionvault.platform.objectstore.ObjectRef;
 import com.aifashionvault.platform.objectstore.ObjectStore;
 import com.aifashionvault.platform.objectstore.ObjectStoreExceptions;
 import com.aifashionvault.platform.objectstore.PresignedAccess;
-import com.aifashionvault.shared.StorageDomain;
 import com.aifashionvault.platform.objectstore.UploadCapability;
 import com.aifashionvault.platform.objectstore.UploadPurpose;
 import com.aifashionvault.shared.StorageKey;
@@ -156,6 +156,9 @@ final class FashnTestSupport {
     static final class FakeObjectStore implements ObjectStore {
         private final Map<String, Stored> objects = new HashMap<>();
         private final URI signedUri = URI.create(SIGNED_URI);
+        private final List<ObjectRef> headRefs = new ArrayList<>();
+        private final List<BoundedRead> boundedReads = new ArrayList<>();
+        private final List<ObjectRef> presignRefs = new ArrayList<>();
         int headCount;
         int readCount;
         int presignCount;
@@ -168,6 +171,18 @@ final class FashnTestSupport {
 
         void putSized(String key, byte[] bytes, String contentType, long reportedLength) {
             objects.put(key, new Stored(bytes, contentType, "\"v1\"", reportedLength));
+        }
+
+        List<ObjectRef> headRefs() {
+            return List.copyOf(headRefs);
+        }
+
+        List<BoundedRead> boundedReads() {
+            return List.copyOf(boundedReads);
+        }
+
+        List<ObjectRef> presignRefs() {
+            return List.copyOf(presignRefs);
         }
 
         @Override
@@ -183,6 +198,7 @@ final class FashnTestSupport {
         @Override
         public ObjectMetadata head(ObjectRef object) {
             headCount++;
+            headRefs.add(object);
             if (headFailure != null) {
                 throw headFailure;
             }
@@ -196,9 +212,16 @@ final class FashnTestSupport {
         @Override
         public byte[] readBounded(ObjectRef object, String expectedVersion, int maxBytes) {
             readCount++;
+            boundedReads.add(new BoundedRead(object, expectedVersion, maxBytes));
             Stored stored = objects.get(object.objectKey());
             if (stored == null) {
                 throw new ObjectStoreExceptions.StagedObjectMissingException("missing object");
+            }
+            if (!stored.version.equals(expectedVersion)) {
+                throw new IllegalArgumentException("unexpected object version");
+            }
+            if (maxBytes < 0 || stored.bytes.length > maxBytes) {
+                throw new IllegalArgumentException("bounded read exceeds maxBytes");
             }
             return stored.bytes;
         }
@@ -226,11 +249,15 @@ final class FashnTestSupport {
         @Override
         public PresignedAccess presignGet(ObjectRef object, Duration ttl) {
             presignCount++;
+            presignRefs.add(object);
             lastTtl = ttl;
             if (!objects.containsKey(object.objectKey())) {
                 throw new ObjectStoreExceptions.StagedObjectMissingException("missing object");
             }
             return new PresignedAccess(object, "GET", signedUri, Map.of(), Instant.parse("2026-08-25T12:15:00Z"));
+        }
+
+        record BoundedRead(ObjectRef object, String expectedVersion, int maxBytes) {
         }
 
         private record Stored(byte[] bytes, String contentType, String version, long reportedLength) {

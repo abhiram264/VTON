@@ -17,8 +17,13 @@ public record AccountDeletionStatus(UUID workflowId, UserId userId, AccountDelet
 		if (attemptCount < 0) {
 			throw new IllegalArgumentException("attemptCount must be non-negative");
 		}
-		if ((state == AccountDeletionState.COMPLETE) != (nextStep == AccountDeletionStep.COMPLETE && completedAt != null)) {
+		if ((state == AccountDeletionState.COMPLETE) != (nextStep == AccountDeletionStep.COMPLETE)
+				|| (state == AccountDeletionState.COMPLETE) != (completedAt != null)) {
 			throw new IllegalArgumentException("completion fields are inconsistent");
+		}
+		if (updatedAt.isBefore(requestedAt)
+				|| completedAt != null && completedAt.isBefore(updatedAt)) {
+			throw new IllegalArgumentException("deletion timestamps are out of order");
 		}
 	}
 }

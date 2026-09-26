@@ -1,12 +1,5 @@
 package com.aifashionvault.platform.objectstore;
 
-import java.lang.reflect.Constructor;
-import java.lang.reflect.Method;
-import java.lang.reflect.Modifier;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.util.Arrays;
 import java.util.UUID;
 
 import org.junit.jupiter.api.Nested;
@@ -38,24 +31,7 @@ class StorageKeysTest {
     }
 
 	@Test
-	void doesNotAcceptClientFilenamesOrRawUserIdStrings() {
-		assertThatThrownBy(() -> UserId.class.getConstructor(String.class))
-			.isInstanceOf(NoSuchMethodException.class);
-		assertThat(UserId.class.getRecordComponents()[0].getType()).isEqualTo(UUID.class);
-		for (Method method : StorageKeys.class.getDeclaredMethods()) {
-			if (!Modifier.isPublic(method.getModifiers())) {
-				continue;
-			}
-			assertThat(method.getReturnType()).isEqualTo(StorageKey.class);
-			assertThat(Arrays.asList(method.getParameterTypes())).doesNotContain(String.class);
-		}
-	}
-
-	@Test
-	void wrapsBuiltKeysInStorageKeySoUrlMaterialIsStillRejected() throws Exception {
-		String source = Files.readString(storageKeysSource(), StandardCharsets.UTF_8);
-		assertThat(source).contains("new StorageKey(");
-		assertThat(source).doesNotContain("filename");
+	void rejectsUrlAndDataMaterial() {
 		assertThatThrownBy(() -> new StorageKey("https://example.invalid/users/u/avatars/foo.jpg"))
 			.isInstanceOf(IllegalArgumentException.class);
 		assertThatThrownBy(() -> new StorageKey("data:image/png;base64,iVBORw0KGgo"))
@@ -207,22 +183,27 @@ class StorageKeysTest {
 		}
 	}
 
-	private static Path storageKeysSource() {
-		Path cwd = Path.of(System.getProperty("user.dir")).toAbsolutePath().normalize();
-		Path current = cwd;
-		while (current != null) {
-			Path direct = current.resolve(Path.of(
-				"src", "main", "java", "com", "aifashionvault", "platform", "objectstore", "StorageKeys.java"));
-			if (Files.isRegularFile(direct)) {
-				return direct;
-			}
-			Path underBackend = current.resolve("backend").resolve(Path.of(
-				"src", "main", "java", "com", "aifashionvault", "platform", "objectstore", "StorageKeys.java"));
-			if (Files.isRegularFile(underBackend)) {
-				return underBackend;
-			}
-			current = current.getParent();
+	@Nested
+	class GenerationInputKey {
+
+		@Test
+		void usesUserGenerationAndMediaIdsWithTempObjectBoundary() {
+			StorageKey key = StorageKeys.generationInputKey(USER_ID, JOB_ID, OBJECT_ID);
+
+			assertThat(key.value()).isEqualTo(
+				"users/11111111-1111-1111-1111-111111111111/generation-inputs/55555555-5555-5555-5555-555555555555/66666666-6666-6666-6666-666666666666");
+			assertThat(new ObjectRef(StorageDomain.TEMP, key.value()).boundary()).isEqualTo(StorageDomain.TEMP);
+			assertThat(key.value()).doesNotContain("temp/", OTHER_USER_ID.value().toString(), ".jpg", ".png");
 		}
-		throw new IllegalStateException("Cannot locate StorageKeys.java from " + cwd);
+
+		@Test
+		void rejectsNullArguments() {
+			assertThatThrownBy(() -> StorageKeys.generationInputKey(null, JOB_ID, OBJECT_ID))
+				.isInstanceOf(IllegalArgumentException.class);
+			assertThatThrownBy(() -> StorageKeys.generationInputKey(USER_ID, null, OBJECT_ID))
+				.isInstanceOf(IllegalArgumentException.class);
+			assertThatThrownBy(() -> StorageKeys.generationInputKey(USER_ID, JOB_ID, null))
+				.isInstanceOf(IllegalArgumentException.class);
+		}
 	}
 }

@@ -24,6 +24,7 @@ import org.springframework.http.client.ClientHttpResponse;
 import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.web.client.RestClient;
 
+import com.aifashionvault.generation.FrozenSingleItemIntent;
 import com.aifashionvault.generation.vton.AttemptRedeliveryPolicy;
 import com.aifashionvault.generation.vton.GenerationStatus;
 import com.aifashionvault.generation.vton.GenerationSubmission;
@@ -43,8 +44,15 @@ import com.aifashionvault.generation.vton.SubmissionKey;
 import com.aifashionvault.generation.vton.VtonMode;
 import com.aifashionvault.generation.vton.VtonProductAsset;
 import com.aifashionvault.generation.vton.VtonRequest;
+import com.aifashionvault.platform.objectstore.ObjectRef;
 import com.aifashionvault.platform.objectstore.ObjectStoreExceptions;
+import com.aifashionvault.platform.objectstore.StorageKeys;
+import com.aifashionvault.shared.AvatarImageId;
+import com.aifashionvault.shared.GenerationJobId;
+import com.aifashionvault.shared.MediaAssetId;
+import com.aifashionvault.shared.StorageDomain;
 import com.aifashionvault.shared.StorageKey;
+import com.aifashionvault.shared.UserId;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
@@ -556,16 +564,25 @@ class FashnVtonProviderTest {
     }
 
     @Test
-    void generationOwnedProductUsesPrivateTransferBoundary() {
+    void frozenSingleItemClothingCategoryPassesRealFashnCapabilityValidation() {
         FashnTestSupport.Harness harness = FashnTestSupport.harness();
-        String productKey = "users/11111111-1111-1111-1111-111111111111/generation-inputs/"
-            + "22222222-2222-2222-2222-222222222222/product";
+        FrozenSingleItemIntent intent = new FrozenSingleItemIntent(
+            new GenerationJobId(UUID.fromString("22222222-2222-2222-2222-222222222222")),
+            new UserId(UUID.fromString("11111111-1111-1111-1111-111111111111")),
+            new AvatarImageId(UUID.fromString("77777777-7777-7777-7777-777777777777")),
+            new MediaAssetId(UUID.fromString("44444444-4444-4444-4444-444444444444")),
+            1,
+            1);
+        String productKey = StorageKeys.generationInputKey(
+            intent.ownerId(), intent.generationId().value(), intent.productMediaId().value()).value();
         harness.store().put(productKey, FashnTestSupport.PNG, "image/png");
-        expectRun(harness).andRespond(withSuccess(FashnTestSupport.runSuccess(), MediaType.APPLICATION_JSON));
+        expectRun(harness)
+            .andExpect(jsonPath("$.inputs.category").value("auto"))
+            .andRespond(withSuccess(FashnTestSupport.runSuccess(), MediaType.APPLICATION_JSON));
 
         GenerationSubmission submission = harness.provider().submit(
             FashnTestSupport.request(
-                FashnTestSupport.STANDARD,
+                FashnTestSupport.FAST,
                 FashnTestSupport.CLOTHING,
                 Optional.empty(),
                 OptionalLong.of(FashnTestSupport.PNG.length),
@@ -574,6 +591,14 @@ class FashnVtonProviderTest {
             FashnTestSupport.key());
 
         assertThat(submission).isInstanceOf(GenerationSubmission.Accepted.class);
+        assertThat(harness.store().headRefs()).containsExactly(
+            new ObjectRef(StorageDomain.TEMP, FashnTestSupport.AVATAR_KEY),
+            new ObjectRef(StorageDomain.TEMP, productKey));
+        assertThat(harness.store().boundedReads()).containsExactly(
+            new FashnTestSupport.FakeObjectStore.BoundedRead(
+                new ObjectRef(StorageDomain.TEMP, FashnTestSupport.AVATAR_KEY), "\"v1\"", Math.toIntExact(FashnMapper.MAX_INLINE_BYTES)),
+            new FashnTestSupport.FakeObjectStore.BoundedRead(
+                new ObjectRef(StorageDomain.TEMP, productKey), "\"v1\"", Math.toIntExact(FashnMapper.MAX_INLINE_BYTES)));
         harness.server().verify();
     }
 
@@ -607,6 +632,14 @@ class FashnVtonProviderTest {
 
         assertThat(submission.toString()).doesNotContain("data:", "base64", FashnTestSupport.PNG_DATA_URI);
         assertThat(harness.store().readCount).isEqualTo(2);
+        assertThat(harness.store().headRefs()).containsExactly(
+            new ObjectRef(StorageDomain.TEMP, FashnTestSupport.AVATAR_KEY),
+            new ObjectRef(StorageDomain.TEMP, FashnTestSupport.PRODUCT_KEY));
+        assertThat(harness.store().boundedReads()).containsExactly(
+            new FashnTestSupport.FakeObjectStore.BoundedRead(
+                new ObjectRef(StorageDomain.TEMP, FashnTestSupport.AVATAR_KEY), "\"v1\"", Math.toIntExact(FashnMapper.MAX_INLINE_BYTES)),
+            new FashnTestSupport.FakeObjectStore.BoundedRead(
+                new ObjectRef(StorageDomain.TEMP, FashnTestSupport.PRODUCT_KEY), "\"v1\"", Math.toIntExact(FashnMapper.MAX_INLINE_BYTES)));
         assertThat(harness.store().presignCount).isZero();
         harness.server().verify();
     }
@@ -636,6 +669,12 @@ class FashnVtonProviderTest {
         assertThat(harness.store().lastTtl).isEqualTo(Duration.ofMinutes(5));
         assertThat(harness.store().lastTtl.compareTo(Duration.ofHours(1)) < 0).isTrue();
         assertThat(harness.store().readCount).isZero();
+        assertThat(harness.store().headRefs()).containsExactly(
+            new ObjectRef(StorageDomain.TEMP, FashnTestSupport.AVATAR_KEY),
+            new ObjectRef(StorageDomain.TEMP, FashnTestSupport.PRODUCT_KEY));
+        assertThat(harness.store().presignRefs()).containsExactly(
+            new ObjectRef(StorageDomain.TEMP, FashnTestSupport.AVATAR_KEY),
+            new ObjectRef(StorageDomain.TEMP, FashnTestSupport.PRODUCT_KEY));
         harness.server().verify();
     }
 

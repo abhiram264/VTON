@@ -155,6 +155,10 @@ final class VaultEnvironmentValidator {
 		}
 		String host = uri.getHost().toLowerCase(Locale.ROOT);
 		boolean local = "localhost".equals(host) || "127.0.0.1".equals(host) || host.contains("localstack");
+		boolean http = "http".equalsIgnoreCase(uri.getScheme()) || "https".equalsIgnoreCase(uri.getScheme());
+		if (!http) {
+			return false;
+		}
 		if (env == AppEnv.development) {
 			return local;
 		}

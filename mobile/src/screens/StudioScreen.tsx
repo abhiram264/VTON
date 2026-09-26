@@ -1,8 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { isFeatureEnabled } from '../config/featureFlags';
-import { studioApi } from '../features/studio/studioApi';
-
+import { studioApi, type StudioState } from '../features/studio/studioApi';
 type Props = {
   studioSessionId?: string;
   sourceLookId?: string;
@@ -14,24 +13,64 @@ type Props = {
 };
 
 export default function StudioScreen({ studioSessionId, sourceLookId, selectedVaultItemId, onAddFromVault, onAvatar, onGenerate, onProfile }: Props) {
+  const trimmedSessionId = studioSessionId?.trim() ?? '';
   const [command, setCommand] = useState('');
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
-  const hasSession = Boolean(studioSessionId);
-  const hasCompatibleItem = Boolean(selectedVaultItemId || sourceLookId);
-  const canGenerate = hasSession && hasCompatibleItem;
+  const [sessionStatus, setSessionStatus] = useState<'checking' | 'ready' | 'unavailable'>(trimmedSessionId ? 'checking' : 'unavailable');
+  const [studioState, setStudioState] = useState<StudioState | null>(null);
+  const commandLock = useRef(false);
+  const commandRequest = useRef(0);
+  const activeSession = sessionStatus === 'ready' && studioState?.sessionId === trimmedSessionId ? studioState : null;
+  const sessionChecking = Boolean(trimmedSessionId) && !activeSession && sessionStatus !== 'unavailable';
+  const sessionUnavailable = !trimmedSessionId || sessionStatus === 'unavailable';
+
+  useEffect(() => {
+    let mounted = true;
+    commandRequest.current += 1;
+    commandLock.current = false;
+    setBusy(false);
+    setCommand('');
+    setNotice(null);
+    setStudioState(null);
+
+    if (!trimmedSessionId) {
+      setSessionStatus('unavailable');
+      return () => { mounted = false; };
+    }
+
+    setSessionStatus('checking');
+    studioApi.get(trimmedSessionId).then(state => {
+      if (!mounted) return;
+      if (state.sessionId !== trimmedSessionId) throw new Error('Studio session mismatch');
+      setStudioState(state);
+      setSessionStatus('ready');
+    }).catch(() => {
+      if (!mounted) return;
+      setStudioState(null);
+      setSessionStatus('unavailable');
+    });
+    return () => { mounted = false; };
+  }, [trimmedSessionId]);
+
   async function applyCommand() {
-    const text = command.trim();
-    if (!studioSessionId || !text || busy) return;
+    const submittedCommand = command;
+    const text = submittedCommand.trim();
+    if (!activeSession || !text || commandLock.current) return;
+    const request = ++commandRequest.current;
+    commandLock.current = true;
     setBusy(true);
     setNotice(null);
     try {
-      await studioApi.command(studioSessionId, text);
-      setCommand('');
+      await studioApi.command(activeSession.sessionId, text);
+      if (commandRequest.current === request) setCommand(current => current === submittedCommand ? '' : current);
     } catch {
-      setNotice('Could not apply command. Use manual controls below.');
+      if (commandRequest.current === request) setNotice('Could not apply command. Use manual controls below.');
     } finally {
-      setBusy(false);
+      if (commandRequest.current === request) {
+        commandLock.current = false;
+        setBusy(false);
+      }
     }
   }
 
@@ -43,21 +82,23 @@ export default function StudioScreen({ studioSessionId, sourceLookId, selectedVa
       </View>
       <Action label="Avatar" onPress={onAvatar} />
       <Text accessibilityRole="header" style={styles.heading}>Active outfit</Text>
-      <Text>{sourceLookId ? 'Loading outfit from selected Look.' : 'No active outfit.'}</Text>
+      <Text>{activeSession ? activeSession.itemIds.length > 0 ? `Studio session loaded with ${activeSession.itemIds.length} outfit item(s).` : 'Authorized Studio session has no outfit items yet.' : sessionChecking ? 'Checking Studio session.' : 'No authorized Studio session is available.'}</Text>
+      {sourceLookId ? <Text>Selected Look was not loaded into this Studio session.</Text> : null}
       <Text accessibilityRole="header" style={styles.heading}>Slots</Text>
-      <Text>{selectedVaultItemId ? 'Selected Vault item is ready to confirm.' : 'No items in outfit slots.'}</Text>
-      <Action label="Add from Vault" onPress={() => studioSessionId && onAddFromVault(studioSessionId)} disabled={!hasSession} />
-      {!hasSession ? <Text>Start or load a Studio session to add from Vault.</Text> : null}
+      <Text>{selectedVaultItemId ? 'Selected Vault item has not been added to this Studio session.' : activeSession?.itemIds.length ? 'The server session contains the current outfit items.' : 'No verified outfit items are available.'}</Text>
+      <Action label="Add from Vault" onPress={() => activeSession && onAddFromVault(activeSession.sessionId)} disabled={!activeSession} />
+      {sessionChecking ? <Text accessibilityLiveRegion="polite">Checking Studio session.</Text> : null}
+      {sessionUnavailable ? <Text accessibilityLiveRegion="polite">Studio session unavailable. Start or load an authorized session.</Text> : null}
 {isFeatureEnabled('NATURAL_LANGUAGE_STUDIO') ? (
   <>
-    <TextInput accessibilityLabel="Natural-language command" editable={hasSession} multiline onChangeText={setCommand} placeholder="Describe an outfit change" style={styles.input} value={command} />
-    <Action label="Apply command" onPress={applyCommand} disabled={!hasSession || command.trim().length === 0 || busy} />
+    <TextInput accessibilityLabel="Natural-language command" accessibilityState={{ disabled: !activeSession || busy }} editable={Boolean(activeSession) && !busy} multiline onChangeText={setCommand} placeholder="Describe an outfit change" style={styles.input} value={command} />
+    <Action label="Apply command" onPress={applyCommand} disabled={!activeSession || command.trim().length === 0 || busy} />
     {notice ? <Text accessibilityLiveRegion="polite">{notice}</Text> : null}
-    {!hasSession ? <Text>Commands require an authorized Studio session.</Text> : null}
+    {!activeSession ? <Text>Commands require a verified Studio session.</Text> : null}
   </>
 ) : null}
-      <Action label="Generate" onPress={onGenerate} disabled={!canGenerate} />
-      {!canGenerate ? <Text>Add an avatar session and a compatible item before generating.</Text> : null}
+      <Action label="Generate" onPress={onGenerate} disabled />
+      <Text>Generation is unavailable until an immutable Studio outfit can be handed to the generation flow.</Text>
     </View>
   );
 }

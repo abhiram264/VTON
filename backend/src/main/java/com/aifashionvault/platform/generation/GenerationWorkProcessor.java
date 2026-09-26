@@ -560,11 +560,11 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 			media = mediaResolver.resolve(job);
 		}
 		catch (GenerationInputMissingException ex) {
-			failTerminal(job, attempt, lease, CODE_PROVIDER_OUTPUT_INVALID, false);
+			failTerminal(job, attempt, lease, TerminalReason.INPUT_MEDIA_MISSING.name(), false);
 			return;
 		}
 		catch (GenerationInputUnavailableException ex) {
-			failTerminal(job, attempt, lease, CODE_PROVIDER_UNAVAILABLE, false);
+			failTerminal(job, attempt, lease, TerminalReason.STORAGE_UNAVAILABLE.name(), false);
 			return;
 		}
 		catch (UnauthorizedGenerationMediaException ex) {
@@ -809,9 +809,14 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 			return;
 		}
 		GenerationJob latestForQuality = generationStore.findJob(job.id()).orElse(job);
-		if (unavailable(latestForQuality) || latestForQuality.completedAt() != null) {
+		if (unavailable(latestForQuality) || terminal(latestForQuality)) {
 			outputStore.discard();
-			completeDeleted(latestForQuality, attempt, lease, temp, outputs.getFirst());
+			if (subjectDeleted(latestForQuality)) {
+				completeDeleted(latestForQuality, attempt, lease, temp, outputs.getFirst());
+				return;
+			}
+			releaseCapacity(attempt);
+			queue.delete(lease);
 			return;
 		}
 		Optional<QualityResult> stored = generationStore.findQualityResult(attempt.id());
@@ -841,6 +846,12 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 		}
 		if (!qualityCheck) {
 			outputStore.discard();
+			GenerationJob current = generationStore.findJob(job.id()).orElse(latestJob);
+			if (subjectDeleted(current)) {
+				completeDeleted(current, attempt, lease, temp, outputs.getFirst());
+				return;
+			}
+			releaseCapacity(attempt);
 			queue.delete(lease);
 			return;
 		}
@@ -849,9 +860,16 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 		}
         if (!stillActive(job)) {
             outputStore.discard();
-            completeDeleted(generationStore.findJob(job.id()).orElse(latestJob), attempt, lease, temp, outputs.getFirst());
-            return;
-        }
+			GenerationJob current = generationStore.findJob(job.id()).orElse(latestJob);
+			if (subjectDeleted(current)) {
+				completeDeleted(current, attempt, lease, temp, outputs.getFirst());
+			}
+			else {
+				releaseCapacity(attempt);
+				queue.delete(lease);
+			}
+			return;
+		}
 		QualityEvaluationRequest request = qualityEvaluationRequest(job, attempt, bytes);
 		QualityEvaluationOutcome outcome = qualityGate.evaluate(request);
 		enrichWorkerScope(attempt, resolveProvider(attempt), job);
@@ -868,17 +886,18 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 			case QualityEvaluationOutcome.Completed completed -> {
                 if (!stillActive(job)) {
                     outputStore.discard();
-                    String deletionReason = completed.result().decision() == QualityDecision.PASS
-                        ? TerminalReason.USER_DELETED.name()
-                        : CODE_QUALITY_REJECTED;
-                    completeDeleted(
-                        generationStore.findJob(job.id()).orElse(job),
-                        attempt,
-                        lease,
-                        temp,
-                        outputs.getFirst(),
-                        deletionReason);
-                    return;
+					GenerationJob current = generationStore.findJob(job.id()).orElse(job);
+					if (subjectDeleted(current)) {
+						String deletionReason = completed.result().decision() == QualityDecision.PASS
+							? TerminalReason.USER_DELETED.name()
+							: CODE_QUALITY_REJECTED;
+						completeDeleted(current, attempt, lease, temp, outputs.getFirst(), deletionReason);
+					}
+					else {
+						releaseCapacity(attempt);
+						queue.delete(lease);
+					}
+					return;
                 }
 				QualityResult quality = completed.result();
 				recordQuality(job, attempt, quality);
@@ -916,9 +935,14 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 		VtonProvider active
 	) {
 		GenerationJob latest = generationStore.findJob(job.id()).orElse(job);
-		if (unavailable(latest) || latest.completedAt() != null) {
+		if (unavailable(latest) || terminal(latest)) {
 			outputStore.discard();
-			completeDeleted(latest, attempt, lease, temp, outputRef);
+			if (subjectDeleted(latest)) {
+				completeDeleted(latest, attempt, lease, temp, outputRef);
+				return;
+			}
+			releaseCapacity(attempt);
+			queue.delete(lease);
 			return;
 		}
 		if (latest.currentStep() < latest.totalSteps()) {
@@ -982,14 +1006,15 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 		}
         if (!stillActive(job)) {
             outputStore.discard();
-            GenerationJob current = generationStore.findJob(job.id()).orElse(job);
-            if (unavailable(current)) {
-                completeDeleted(current, attempt, lease, temp, outputRef);
-                return;
-            }
-            queue.delete(lease);
-            return;
-        }
+			GenerationJob current = generationStore.findJob(job.id()).orElse(job);
+			if (subjectDeleted(current)) {
+				completeDeleted(current, attempt, lease, temp, outputRef);
+				return;
+			}
+			releaseCapacity(attempt);
+			queue.delete(lease);
+			return;
+		}
 		ClaimResult claimed = outputStore.promote(metadata.version());
 		if (claimed instanceof ClaimResult.Conflict) {
 			outputStore.discard();
@@ -1002,10 +1027,15 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 			StorageDomain.LOOK,
 			attempt.id().value(),
 			mediaTypeFromTemp(temp.storageKey()));
-		if (unavailable(latest) || latest.completedAt() != null) {
+		if (unavailable(latest) || terminal(latest)) {
 			objectStore.delete(new ObjectRef(StorageDomain.LOOK, lookKey.value()));
 			outputStore.discard();
-			completeDeleted(latest, attempt, lease, temp, outputRef);
+			if (subjectDeleted(latest)) {
+				completeDeleted(latest, attempt, lease, temp, outputRef);
+				return;
+			}
+			releaseCapacity(attempt);
+			queue.delete(lease);
 			return;
 		}
 		LookId lookId = new LookId(UUID.randomUUID());
@@ -1026,7 +1056,13 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 		if (stored.isEmpty()) {
 			objectStore.delete(new ObjectRef(StorageDomain.LOOK, lookKey.value()));
 			outputStore.discard();
-			completeDeleted(generationStore.findJob(job.id()).orElse(latest), attempt, lease, temp, outputRef);
+			GenerationJob current = generationStore.findJob(job.id()).orElse(latest);
+			if (subjectDeleted(current)) {
+				completeDeleted(current, attempt, lease, temp, outputRef);
+				return;
+			}
+			releaseCapacity(attempt);
+			queue.delete(lease);
 			return;
 		}
 		outputStore.discard();
@@ -1683,7 +1719,7 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 	private static String terminalCategoryForReason(TerminalReason reason) {
 		return switch (reason) {
 			case CANCELLED_BY_USER -> GenerationMetrics.TERMINAL_CANCELLED;
-			case USER_DELETED, INPUT_MEDIA_DELETED, INPUT_MEDIA_MISSING -> GenerationMetrics.TERMINAL_SUBJECT_DELETED;
+			case USER_DELETED, INPUT_MEDIA_DELETED -> GenerationMetrics.TERMINAL_SUBJECT_DELETED;
 			case SUBMISSION_OUTCOME_INDETERMINATE, PROVIDER_UNKNOWN_FAILURE -> GenerationMetrics.TERMINAL_UNKNOWN;
 			case ORCHESTRATION_DEADLINE_EXCEEDED -> GenerationMetrics.TERMINAL_DEADLINE_EXPIRED;
 			case RETRY_BUDGET_EXHAUSTED, QUALITY_RETRY_EXHAUSTED, QUALITY_EVALUATOR_UNAVAILABLE,
@@ -1875,14 +1911,14 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
     }
 
 
-	private boolean completeAttemptAfterSubjectDeletion(GenerationJob job, GenerationAttempt finished) {
-		GenerationJob latest = generationStore.findJob(job.id()).orElse(job);
-		if (latest.subjectDeletedAt() == null && !CODE_SUBJECT_DELETED.equals(latest.terminalReason())) {
-			return false;
-		}
-		generationStore.completeAttempt(finished);
-		return true;
-	}
+    private boolean completeAttemptAfterSubjectDeletion(GenerationJob job, GenerationAttempt finished) {
+        GenerationJob latest = generationStore.findJob(job.id()).orElse(job);
+        if (!subjectDeleted(latest)) {
+            return false;
+        }
+        generationStore.completeAttempt(finished);
+        return true;
+    }
 
 	private void continueLater(GenerationJob job, GenerationWorkLease lease, Duration delay) {
 		if (workOutboxStore == null) {
@@ -2629,6 +2665,10 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 
 	private static boolean unavailable(GenerationJob job) {
 		return job.cancelledAt() != null || job.subjectDeletedAt() != null;
+	}
+
+	private static boolean subjectDeleted(GenerationJob job) {
+		return job != null && (job.subjectDeletedAt() != null || CODE_SUBJECT_DELETED.equals(job.terminalReason()));
 	}
 
 	private boolean stillActive(GenerationJob observed) {

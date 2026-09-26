@@ -33,6 +33,9 @@ public record VaultItem(
 		if (storageKey == null) {
 			throw new IllegalArgumentException("storageKey is required");
 		}
+		if (attributes != null && !attributes.isObject()) {
+			throw new IllegalArgumentException("attributes must be a JSON object or null");
+		}
 		if (createdAt == null) {
 			throw new IllegalArgumentException("createdAt is required");
 		}

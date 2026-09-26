@@ -129,72 +129,15 @@ This relational model supports queries like “get all tops in user’s Vault”
 
 ## API Contracts  
 
-We define REST endpoints (mobile → backend, backend → VTON provider). All payloads use JSON over HTTPS. Example contracts:
+The current HTTP contract is maintained in [API_CONTRACTS.md](API_CONTRACTS.md) and the source-confirmed route census in [CONTRACT_INVENTORY.md](CONTRACT_INVENTORY.md). The examples below use those mounted routes; unmounted Studio and quality routes are explicitly marked **PROPOSED**.
 
-- **Mobile Share/Import:**  
-  - **Endpoint:** `POST /api/share/import`  
-  - **Headers:** Auth (user token)  
-  - **Payload:** `{ "item_url": "https://myntra.com/...", "image_data": "<base64 or multipart image>", "source_app": "Myntra" }`  
-  - **Response:** `200 OK` with `{ "vault_item_id": 123, "name": "Black Oversized Shirt", "category": "TOP", "image_url": "...", "actions": ["try_on","add_to_vault"] }`.  
-  - The server scrapes or downloads the URL image, normalizes metadata, and creates a Vault_Item stub (if add).  
-  - *Sample:* Based on FASHN’s example, an import call might look like:  
-    ```json
-    POST /api/share/import
-    {
-      "item_url": "https://www.myntra.com/rare-rabbit-black-shirt",
-      "source_app": "Myntra",
-      "user_id": 42
-    }
-    ```
-    which returns the item preview (cite: structure inspired by FASHN’s API patterns).
+- **Mobile share/import (current):** `POST /share/imports` accepts `{ "kind": "URL", "sourceUrl": "https://www.myntra.com/rare-rabbit-black-shirt" }` (or an `uploadId` for staged media) and returns `{ "importId": "...", "status": "...", "reason": "...", "recoveryActions": [...] }`. `GET`, `PUT /share/imports/{importId}/image`, and `DELETE /share/imports/{importId}` are also mounted. See the contract inventory for exact optional fields and idempotency rules.
+- **Vault and collections (current):** `GET/POST /vault/items`, `PATCH/DELETE /vault/items/{id}`, and the mounted `/collections` routes.
+- **Avatars (current):** `POST/GET /avatars`, plus the mounted item routes. Avatar creation consumes an existing upload capability; the API does not expose the obsolete `/api/avatar` form.
+- **Generation (current):** `POST /generations` returns `202 Accepted` with a generation location; `GET /generations/{generationId}` and `POST /generations/{generationId}/cancel` are mounted. The backend queues durable work in AWS SQS (LocalStack locally) and the worker invokes the registered provider adapter.
+- **Studio and quality routes (PROPOSED / unmounted):** `/studio/sessions/**` and a standalone quality endpoint are backlog contracts, not current APIs. Do not integrate against them until a controller and contract tests are mounted.
 
-- **Vault API:**  
-  - `GET /api/vault/items` – list user’s items (support query by category/collection).  
-  - `POST /api/vault/items` – add new item (if user provides image manually).  
-  - `PUT /api/vault/items/{id}` – update metadata (e.g. tag as “favorite”).  
-  - `POST /api/collections` & `POST /api/collections/{cid}/items` – manage collections.  
-
-- **Avatar API:**  
-  - `POST /api/avatar` – upload avatar photo, return avatar_id.  
-  - `GET /api/avatar` – list avatars.  
-
-- **Studio/Composition API:**  
-  - `POST /api/studio/session` – start a new outfit session.  
-  - `POST /api/studio/session/{sid}/items` – add vault_item to outfit (JSON: `{ "vault_item_id": 10, "slot": "UPPER_BODY" }`).  
-  - `DELETE /api/studio/session/{sid}/items/{studio_item_id}` – remove item.  
-  - `GET /api/studio/session/{sid}` – fetch current composition.  
-
-- **VTON Generation:**  
-  - `POST /api/studio/session/{sid}/generate` – trigger try-on of current outfit. Returns a VTON job ID.  
-  - The backend then internally calls the provider’s API (e.g. FASHN) sequentially per item. For FASHN:  
-    ```bash
-    curl -X POST https://api.fashn.ai/v1/run \
-         -H "Authorization: Bearer API_KEY" \
-         -d '{ 
-             "model_name": "tryon-max",
-             "inputs": {
-               "model_image": "https://mycdn.com/avatar42.jpg",
-               "product_image": "https://mycdn.com/garment99.png",
-               "return_base64": true
-             }
-           }'
-    ```  
-    (Above from FASHN docs.)  
-  - **VTON Webhook/Status:** The job is async. Mobile polls `GET /api/vton/jobs/{jid}` or we use webhooks.  
-  - **Response (final):** Once complete and QC-passed, `200 OK` with `{ "look_id": 55, "image_url": "...", "items": [...], "timestamp": "..." }`. If fail QC, returns `400 BadRequest` with reason.  
-
-- **Quality Gate:** After provider returns an image, the backend runs a quick check (e.g. ensure the avatar’s face and key garment pixels are intact). If it fails (garment warped, missing parts), the response signals failure. For example:  
-  ```json
-  POST /api/vton/jobs/789/quality
-  {
-    "image_url": "...",
-    "avatar_id": 42,
-    "items": [10, 15, 22]
-  }
-  ```  
-  with response `{ "passed": true, "score": 0.92 }`. (Cutoffs are empirically set in offline tests.)
-
-These API specs are only indicative; actual names and fields may vary. However, they ensure decoupling: mobile apps talk only to our backend, and our backend talks to any VTON provider via an **adapter layer**. This lets us switch or parallelize providers later without changing the mobile client.
+Mobile clients therefore talk to the mounted backend routes; the backend owns provider integration through its adapter. API shape changes must follow the contract inventory and contract tests.
 
 ## Security & Privacy  
 
@@ -271,20 +214,19 @@ sequenceDiagram
 
     User->>Android: Share product (URL/image)
     Android->>App: Intent.ACTION_SEND (item URL/image)
-    App->>Server: POST /api/share/import (payload with URL/data)
-    Server->>App: {item preview data}
-    App->>User: Display item, ask [Try On Me]/[Add to Vault]
+    App->>Server: POST /share/imports (kind + sourceUrl or uploadId)
+    Server->>App: ShareImportResponse (importId/status/reason/recoveryActions)
+    App->>User: Display import state, ask [Try On Me]/[Add to Vault]
     alt Add to Vault
-        App->>Server: POST /api/vault/items (item image+meta)
-        Server->>App: Success
+        App->>Server: POST /vault/items (current contract)
+        Server->>App: VaultItemResponse
         App->>User: "Added to Vault!"
     else Try On Me
-        App->>Server: POST /api/studio/session (avatar + item)
-        Server->>App: session_id
-        App->>Server: POST /api/studio/session/{id}/generate
-        Server->>Server: (calls VTON providers, QC)
-        Server->>App: 200 OK {look image, items...}
-        App->>User: Show generated look (Studio UI)
+        App->>Server: POST /generations (productUploadId)
+        Server->>App: 202 Accepted + generation location
+        App->>Server: GET /generations/{id} (poll)
+        Server->>App: Generation status/result
+        App->>User: Show generated result
     end
 ```
 
@@ -292,19 +234,11 @@ sequenceDiagram
 
 1. **User Action:** In any app on iOS, user taps Share and picks *OurApp* from the iOS share sheet.  
 2. **Share Extension UI:** Our iOS Share Extension appears as a small sheet. It immediately shows the shared item (image or link preview) and two actions: **“Try with My Model”** and **“Add to Vault”**. (We list supported types in Info.plist.)  
-3. **Extension Handling:**  
-   - On *Add to Vault*, the extension sends a background request to our server with the image/URL (using shared container or direct upload), then dismisses.  
-   - On *Try with My Model*, if no avatar exists yet, prompt “Create your AI model first” with a button into the main app. Otherwise, it calls our server:  
-     ```json
-     POST /api/share/import
-     {
-       "item_url": "...",
-       "action": "try_on",
-       "avatar_id": 987
-     }
-     ```  
-     The extension then waits (or dismisses with a spinner) and the server enqueues the VTON job.  
-4. **Notification:** Due to iOS restrictions, we **cannot** directly launch the main app from the extension. Instead, when the server finishes generation, we send an APNs push notification: “✨ Your Look is Ready!” with a deep link (e.g. `yourapp://looks/LOOK_ID`). Tapping it opens the main app to that Look’s detail.  
+3. **Extension handling (current):**
+   - The share extension stages the accepted image or URL in the shared App Group and writes one handoff record. It does not call the backend, provider, or VTON service directly.
+   - The main app discovers the staged record through the host handoff-discovery bridge, emits the share-import route to React Native, and then uses the mounted `/share/imports` contract after normal host authentication. Generation is a separate host-originated flow, not an extension enqueue.
+   - The extension completes or cancels after durable staging; it does not wait for a server response.
+4. **Notification:** Due to iOS restrictions, we **cannot** directly launch the main app from the extension. Instead, when the server finishes generation, we send an APNs push notification: “✨ Your Look is Ready!” with a deep link in the frozen form `fashionvault://looks/<lowercase-canonical-UUID>`. Tapping it opens the main app to that Look’s detail.
 
 This design avoids hacks (like abusing URL schemes) and aligns with Apple’s guidelines. It ensures the share experience feels complete: *Share → brief confirmation → wait → notification opens result*.  
 
@@ -353,7 +287,7 @@ Each experiment will have a control and treatment group, tracking downstream con
 
 ## Backend Architecture & Tech Stack  
 
-We propose a modular monolith or microservices on **Spring Boot** (Java) or Node.js, hosted on AWS/GCP. Key components:  
+V1 uses one feature-modular **Spring Boot** backend (Java) with asynchronous generation workers. The current architecture and route census are canonical in [ARCHITECTURE.md](ARCHITECTURE.md) and [CONTRACT_INVENTORY.md](CONTRACT_INVENTORY.md).
 
 ```mermaid
 flowchart LR
@@ -362,55 +296,37 @@ flowchart LR
       iOSClient
     end
     subgraph Backend
-      Auth[(Auth Service)]
-      Import[(Import Resolver)]
-      VaultSvc[(Vault Service)]
-      AvatarSvc[(Avatar Service)]
-      StudioSvc[(Studio Service)]
-      VTONAdaptor[(VTON Provider Adapter)]
-      Quality[(Quality Gate)]
-      LookSvc[(Look Service)]
-      Notification[(Push Service)]
+      API[Spring Boot modular monolith]
+      Generation[Generation worker]
+      Provider[FASHN provider adapter]
+      Callback[Callback inbox]
     end
     subgraph Infra
-      Postgres[(PostgreSQL)] 
-      Redis[(Redis Queue)]
-      S3[(S3 Image Storage)]
-      FCM[(Firebase Cloud Messaging)]
-      APNs[(Apple Push Service)]
+      Postgres[(PostgreSQL)]
+      S3[(S3 object storage)]
+      SQS[(AWS SQS / LocalStack SQS)]
     end
 
-    AndroidClient -->|HTTPS| Auth
-    iOSClient -->|HTTPS| Auth
-    Auth --> Import
-    Import --> VaultSvc
-    Import --> AvatarSvc
-    AvatarSvc --> S3
-    VaultSvc --> Postgres
-    StudioSvc --> Postgres
-    StudioSvc --> VTONAdaptor
-    VTONAdaptor --> Quality
-    Quality --> LookSvc
-    LookSvc --> Postgres
-    LookSvc --> S3
-    LookSvc --> Notification
-    Notification --> FCM
-    Notification --> APNs
-    Redis --> VTONAdaptor
+    AndroidClient -->|HTTPS| API
+    iOSClient -->|HTTPS| API
+    API --> Postgres
+    API --> S3
+    API --> SQS
+    SQS --> Generation
+    Generation --> Provider
+    Provider --> Callback
+    Callback --> API
 ```
 
-- **Mobile:** React Native (shared codebase), with native modules for Share Extension (iOS/Android).  
-- **Auth:** OAuth2/JWT for user accounts. Possibly use Firebase Auth or a self-hosted identity.  
-- **Import Resolver:** Adapters for each source (generic URL, Myntra, Ajio, Flipkart, Instagram, etc.) to extract images.  
-- **Vault/Avatar/Look Services:** Spring Boot microservices with REST APIs, connected to a **PostgreSQL** database for metadata and an **S3** bucket for images.  
-- **Studio Service:** Manages active outfit sessions (in Redis or DB).  
-- **VTON Provider Adapter:** An asynchronous job queue (Redis or RabbitMQ) where each `generate` request enqueues tasks. A worker pulls, calls the chosen AI API (FASHN or others), and stores results.  
-- **Quality Gate:** A lightweight service that analyzes images (face detection, pixel checks) before confirming a look. Could use OpenCV or a ML model.  
-- **Notification Service:** Pushes “look ready” notifications via FCM (Android) and APNs (iOS) with deep links.  
-- **Storage:** AWS S3 (or Cloud Storage) for user avatars, vault item images (downloaded from merchant), and final looks. Use signed URLs for providers (FASHN) or Base64.  
-- **Monitoring:** Use tools like AWS CloudWatch / Datadog for logging and usage metrics.  
+- **Backend:** One Spring Boot modular monolith with feature packages; Vault, Avatar, Import, Look, Notification, and Generation are modules, not separately deployed microservices. No JPA or Redis is part of the current stack.
+- **Persistence and queue:** PostgreSQL is the source of truth; S3 stores media. Generation work uses durable AWS SQS, emulated by LocalStack locally.
+- **Studio:** The persisted Studio session/controller is **PROPOSED and unmounted**. Do not treat the Studio feature wording or `/studio/**` routes as a deployed service.
+- **Provider boundary:** The backend's registered FASHN adapter performs provider calls. Provider selection beyond that registered adapter is not a current contract.
+- **Historical proposals:** Redis/RabbitMQ queues and independently deployed Studio/Auth/Vault/Avatar/Look microservices describe historical or future options only; they are not current architecture.
+- **Mobile:** React Native with native share hosts. iOS share-extension behavior is App Group staging plus host discovery; it does not make direct extension/backend calls.
+- **Notifications and storage:** Notification delivery and S3 media capabilities are backend concerns. Provider inputs use time-boxed capabilities; no direct provider URL is exposed by the share-import response.
 
-This stack scales with usage: we can autoscale the VTON adaptor workers when many jobs queue up. We rely on proven tech (Spring Boot, Postgres, S3) for robustness.  
+The current deployment shape is the modular monolith plus SQS/worker topology. Later service-splitting proposals must be labeled as proposed and linked to their owning contract before implementation.
 
 ## Deployment Plan & Timeline  
 

@@ -346,6 +346,9 @@ public final class SafeImportHttpClient implements AutoCloseable, ImportHttpFetc
 				catch (NumberFormatException ex) {
 					throw new IOException("malformed chunk size");
 				}
+				if (remaining < 0) {
+					throw new IOException("malformed chunk size");
+				}
 				if (remaining == 0) {
 					done = true;
 					return -1;

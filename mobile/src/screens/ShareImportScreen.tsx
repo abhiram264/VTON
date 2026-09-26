@@ -1,5 +1,6 @@
 import {useCallback, useEffect, useRef, useState} from 'react';
 import {Pressable, StyleSheet, Text, View} from 'react-native';
+import {ApiProblemError} from '../features/my-model/http';
 import {
   choosePhoto,
   isCameraPermissionDenied,
@@ -28,8 +29,37 @@ export type ShareImportFlowState =
   | {view: 'READY'}
   | {view: 'NEEDS_IMAGE'; importId: string}
   | {view: 'FAILED_RETRYABLE'; reason?: 'DEPENDENCY_UNAVAILABLE' | 'RESOLUTION_TIMEOUT'; importId?: string}
-  | {view: 'FAILED_TERMINAL'}
+  | {view: 'FAILED_TERMINAL'; message?: string}
   | {view: 'LEASE_EXPIRED'};
+
+function terminalMessage(code: string): string {
+  switch (code) {
+    case 'IMPORT_NOT_FOUND':
+      return 'This shared import is no longer available. Share the item again from its app.';
+    case 'IMPORT_STATE_CONFLICT':
+      return 'This shared import has already changed. Share the item again from its app.';
+    case 'UPLOAD_NOT_CLAIMABLE':
+      return 'That image could not be attached. Choose another image.';
+    default:
+      return 'This share could not be continued. Start a new share from its app.';
+  }
+}
+
+function toErrorFlowState(error: unknown): ShareImportFlowState {
+  if (error instanceof ApiProblemError) {
+    if (
+      error.code === 'DEPENDENCY_UNAVAILABLE' ||
+      error.code === 'RESOLUTION_TIMEOUT'
+    ) {
+      return {view: 'FAILED_RETRYABLE', reason: error.code};
+    }
+    if (/^HTTP_(?:408|425|429|5\d\d)$/.test(error.code)) {
+      return {view: 'FAILED_RETRYABLE'};
+    }
+    return {view: 'FAILED_TERMINAL', message: terminalMessage(error.code)};
+  }
+  return {view: 'FAILED_RETRYABLE'};
+}
 
 type Props = {
   payload: SharePayload;
@@ -49,7 +79,7 @@ function retryAfterLease(
     if (signal.aborted) {
       throw error;
     }
-    return {view: 'LEASE_EXPIRED'};
+    return toErrorFlowState(error);
   });
 }
 
@@ -67,6 +97,17 @@ function toFlowState(response: ShareImportResponse): ShareImportFlowState {
       // The client's bounded polling already spent the lease budget.
       return {view: 'LEASE_EXPIRED'};
   }
+}
+
+function sameSharePayload(left: SharePayload, right: SharePayload): boolean {
+  if (left.kind !== right.kind) return false;
+  if (left.kind === 'url' && right.kind === 'url') {
+    return left.url === right.url && left.sourcePackage === right.sourcePackage;
+  }
+  if (left.kind === 'image' && right.kind === 'image') {
+    return left.localImageUri === right.localImageUri && left.sourcePackage === right.sourcePackage;
+  }
+  return left.url === right.url && left.localImageUri === right.localImageUri && left.sourcePackage === right.sourcePackage;
 }
 
 export default function ShareImportScreen({
@@ -95,7 +136,7 @@ export default function ShareImportScreen({
   if (
     resolver !== undefined ||
     resolverRef.current === null ||
-    resolverRef.current.payload !== payload
+    !sameSharePayload(resolverRef.current.payload, payload)
   ) {
     resolverRef.current = {
       payload,
@@ -108,38 +149,57 @@ export default function ShareImportScreen({
   // after verified upload completion, or once on cancel before it). The
   // screen only cancels via the signal on unmount/navigation.
   const abortRef = useRef<AbortController | null>(null);
+  const operationRef = useRef(0);
+  const busyRef = useRef(false);
 
   useEffect(() => {
+    const operation = ++operationRef.current;
+    busyRef.current = true;
+    setBusy(false);
+    setNotice(null);
+    setState({view: 'RESOLVING'});
     const controller = new AbortController();
     abortRef.current = controller;
     const active = activeResolver;
     let cancelled = false;
     active(payloadRef.current, controller.signal).then(
       result => {
-        if (!cancelled) {
+        if (!cancelled && operation === operationRef.current) {
           setState(toFlowState(result));
         }
       },
-      () => {
-        // Client rejections are upload/network failures: retryable, never
-        // screenshot (spec D-infrastructure). Abort means unmount.
-        if (!cancelled && !controller.signal.aborted) {
-          setState({view: 'FAILED_RETRYABLE'});
+      error => {
+        if (
+          !cancelled &&
+          !controller.signal.aborted &&
+          operation === operationRef.current
+        ) {
+          setState(toErrorFlowState(error));
         }
       },
-    );
+    ).finally(() => {
+      if (!cancelled && operation === operationRef.current) {
+        busyRef.current = false;
+        setBusy(false);
+      }
+    });
     return () => {
       cancelled = true;
-      controller.abort();
+      if (abortRef.current === controller) {
+        abortRef.current.abort();
+        abortRef.current = null;
+      }
     };
     // activeResolver identity changes only with payload: the idempotency
     // key stays stable for the lifetime of the route (spec D-lifecycle).
   }, [payload, activeResolver]);
 
   const retry = useCallback(async () => {
-    if (busy) {
+    if (busyRef.current) {
       return;
     }
+    const operation = ++operationRef.current;
+    busyRef.current = true;
     setBusy(true);
     setNotice(null);
     setState({view: 'RESOLVING'});
@@ -151,15 +211,20 @@ export default function ShareImportScreen({
         payloadRef.current,
         controller.signal,
       );
-      setState(next);
-    } catch {
-      if (!controller.signal.aborted) {
-        setState({view: 'LEASE_EXPIRED'});
+      if (!controller.signal.aborted && operation === operationRef.current) {
+        setState(next);
+      }
+    } catch (error) {
+      if (!controller.signal.aborted && operation === operationRef.current) {
+        setState(toErrorFlowState(error));
       }
     } finally {
-      setBusy(false);
+      if (!controller.signal.aborted && operation === operationRef.current) {
+        busyRef.current = false;
+        setBusy(false);
+      }
     }
-  }, [busy, activeResolver]);
+  }, [activeResolver]);
 
   const recover = useCallback(
     async (_source: 'CHOOSE_SCREENSHOT' | 'UPLOAD_IMAGE') => {
@@ -169,76 +234,104 @@ export default function ShareImportScreen({
           : state.view === 'FAILED_RETRYABLE' && state.reason === 'DEPENDENCY_UNAVAILABLE'
           ? state.importId
           : undefined;
-      if (busy || !importId) {
+      if (busyRef.current || !importId) {
         return;
       }
-      let photo: LocalPhoto | null = null;
-      try {
-        photo = await picker();
-      } catch (error) {
-        setNotice(
-          isCameraPermissionDenied(error)
-            ? 'Photo access is off. Enable it in Settings, then try again.'
-            : 'Could not open the photo picker.',
-        );
-        return;
-      }
-      if (!photo) {
-        return;
-      }
+      const operation = ++operationRef.current;
+      busyRef.current = true;
       setBusy(true);
       setNotice(null);
       const controller = new AbortController();
       abortRef.current = controller;
+      const isCurrent = () =>
+        !controller.signal.aborted && operation === operationRef.current;
       try {
-        const result = await attachRecoveryImage(
-          api,
-          importId,
-          photo,
-          controller.signal,
-        );
-        if (!controller.signal.aborted) {
-          // 202 RESOLVING is an accepted-but-unresolved attach, not READY:
-          // show the neutral resolving view until state is observed again.
-          setState(
-            result.status === 'RESOLVING'
-              ? {view: 'RESOLVING'}
-              : toFlowState(result),
-          );
+        let photo: LocalPhoto | null;
+        try {
+          photo = await picker();
+        } catch (error) {
+          if (isCurrent()) {
+            setNotice(
+              isCameraPermissionDenied(error)
+                ? 'Photo access is off. Enable it in Settings, then try again.'
+                : 'Could not open the photo picker.',
+            );
+          }
+          return;
         }
-      } catch {
-        if (!controller.signal.aborted) {
-          setNotice('Could not attach that image. Try another one.');
+        if (!isCurrent() || !photo) {
+          return;
+        }
+        try {
+          const result = await attachRecoveryImage(
+            api,
+            importId,
+            photo,
+            controller.signal,
+          );
+          if (isCurrent()) {
+            // 202 RESOLVING is an accepted-but-unresolved attach, not READY:
+            // show the neutral resolving view until state is observed again.
+            setState(
+              result.status === 'RESOLVING'
+                ? {view: 'RESOLVING'}
+                : toFlowState(result),
+            );
+          }
+        } catch (error) {
+          if (isCurrent()) {
+            if (error instanceof ApiProblemError) {
+              if (error.code === 'UPLOAD_NOT_CLAIMABLE') {
+                setState({view: 'FAILED_RETRYABLE', reason: 'DEPENDENCY_UNAVAILABLE', importId});
+                setNotice('Could not attach that image. Try another one.');
+              } else {
+                const next = toErrorFlowState(error);
+                setState(next.view === 'FAILED_RETRYABLE' ? { ...next, importId } : next);
+                if (next.view === 'FAILED_RETRYABLE') {
+                  setNotice('Could not attach that image. Try another one.');
+                }
+              }
+            } else {
+              setNotice('Could not attach that image. Try another one.');
+            }
+          }
         }
       } finally {
-        setBusy(false);
+        if (isCurrent()) {
+          busyRef.current = false;
+          setBusy(false);
+        }
       }
     },
-    [busy, picker, api, state],
+    [picker, api, state],
   );
+
 
   // Neutral copy only: no shared URL, URI, or payload content is ever
   // rendered or logged (ADR-015).
   return (
     <View style={styles.page}>
       {state.view === 'RESOLVING' ? (
-        <>
-          <Text style={styles.title}>Preparing shared item</Text>
+        <View accessible accessibilityLiveRegion="polite">
+          <Text accessibilityRole="header" style={styles.title}>Preparing shared item</Text>
           <Text style={styles.body}>This usually takes a moment.</Text>
-        </>
+        </View>
       ) : null}
       {state.view === 'READY' ? (
-        <Text style={styles.title}>Shared item ready</Text>
+        <View accessible accessibilityLiveRegion="polite">
+          <Text accessibilityRole="header" style={styles.title}>Shared item ready</Text>
+        </View>
       ) : null}
       {state.view === 'NEEDS_IMAGE' ? (
         <>
-          <Text style={styles.title}>Add a photo to continue</Text>
-          <Text accessibilityLiveRegion="polite" style={styles.body}>
-            {EXTRACTION_FAILURE_BODY}
-          </Text>
+          <View accessible accessibilityLiveRegion="polite">
+            <Text accessibilityRole="header" style={styles.title}>Add a photo to continue</Text>
+            <Text accessibilityLiveRegion="polite" style={styles.body}>{EXTRACTION_FAILURE_BODY}</Text>
+          </View>
           <View style={styles.actions}>
             <Pressable
               accessibilityRole="button"
+              accessibilityState={{disabled: busy, busy}}
               disabled={busy}
               onPress={() => recover('CHOOSE_SCREENSHOT')}
               style={[styles.button, styles.primary, busy && styles.disabled]}
@@ -247,6 +340,7 @@ export default function ShareImportScreen({
             </Pressable>
             <Pressable
               accessibilityRole="button"
+              accessibilityState={{disabled: busy, busy}}
               disabled={busy}
               onPress={() => recover('UPLOAD_IMAGE')}
               style={[styles.button, styles.secondary, busy && styles.disabled]}
@@ -258,11 +352,14 @@ export default function ShareImportScreen({
       ) : null}
       {state.view === 'FAILED_RETRYABLE' || state.view === 'LEASE_EXPIRED' ? (
         <>
-          <Text style={styles.title}>Could not prepare the shared item</Text>
-          <Text style={styles.body}>This looks temporary. Try again.</Text>
-          <View style={styles.actions}>
+          <View accessible accessibilityLiveRegion="polite">
+            <Text accessibilityRole="header" style={styles.title}>Could not prepare the shared item</Text>
+            <Text style={styles.body}>This looks temporary. Try again.</Text>
+          </View>
+            <View style={styles.actions}>
             <Pressable
               accessibilityRole="button"
+              accessibilityState={{disabled: busy, busy}}
               disabled={busy}
               onPress={retry}
               style={[styles.button, styles.primary, busy && styles.disabled]}
@@ -270,10 +367,11 @@ export default function ShareImportScreen({
               <Text style={styles.primaryLabel}>Try Again</Text>
             </Pressable>
             {state.view === 'FAILED_RETRYABLE' &&
-            state.reason === 'DEPENDENCY_UNAVAILABLE' ? (
+            state.importId && state.reason === 'DEPENDENCY_UNAVAILABLE' ? (
               <>
                 <Pressable
                   accessibilityRole="button"
+                  accessibilityState={{disabled: busy, busy}}
                   disabled={busy}
                   onPress={() => recover('CHOOSE_SCREENSHOT')}
                   style={[styles.button, styles.primary, busy && styles.disabled]}
@@ -282,6 +380,7 @@ export default function ShareImportScreen({
                 </Pressable>
                 <Pressable
                   accessibilityRole="button"
+                  accessibilityState={{disabled: busy, busy}}
                   disabled={busy}
                   onPress={() => recover('UPLOAD_IMAGE')}
                   style={[styles.button, styles.secondary, busy && styles.disabled]}
@@ -294,14 +393,14 @@ export default function ShareImportScreen({
         </>
       ) : null}
       {state.view === 'FAILED_TERMINAL' ? (
-        <>
-          <Text style={styles.title}>Could not prepare the shared item</Text>
+        <View accessible accessibilityLiveRegion="assertive">
+          <Text accessibilityRole="header" style={styles.title}>Could not prepare the shared item</Text>
           <Text style={styles.body}>
-            This share is not supported. Share the item again from its app.
+            {state.message ?? 'This share is not supported. Share the item again from its app.'}
           </Text>
-        </>
+        </View>
       ) : null}
-      {notice ? <Text style={styles.notice}>{notice}</Text> : null}
+      {notice ? <Text accessibilityLiveRegion="assertive" style={styles.notice}>{notice}</Text> : null}
     </View>
   );
 }

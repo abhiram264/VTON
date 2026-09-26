@@ -575,6 +575,10 @@ class NotificationTest {
 		}
 
 		@Override
+		public Optional<NotificationEvent> findByGenerationAndType(GenerationJobId generationId, String type) {
+			return Optional.empty();
+		}
+		@Override
 		public boolean ensureDelivery(UUID eventId, String deviceIdentity) {
 			throw new UnsupportedOperationException("ensureDelivery is unused in these tests");
 		}
@@ -590,17 +594,17 @@ class NotificationTest {
 		}
 
 		@Override
-		public void markAccepted(UUID deliveryId, int attemptCount, String providerMessageId, Instant now) {
+		public void markAccepted(UUID deliveryId, UUID claimToken, long claimEpoch, int attemptCount, String providerMessageId, Instant now) {
 			throw new UnsupportedOperationException("markAccepted is unused in these tests");
 		}
 
 		@Override
-		public void scheduleRetry(UUID deliveryId, int attemptCount, Instant nextAttemptAt) {
+		public void scheduleRetry(UUID deliveryId, UUID claimToken, long claimEpoch, int attemptCount, Instant nextAttemptAt) {
 			throw new UnsupportedOperationException("scheduleRetry is unused in these tests");
 		}
 
 		@Override
-		public void markTerminal(UUID deliveryId, int attemptCount, String terminalResult, Instant now) {
+		public void markTerminal(UUID deliveryId, UUID claimToken, long claimEpoch, int attemptCount, String terminalResult, Instant now) {
 			throw new UnsupportedOperationException("markTerminal is unused in these tests");
 		}
 	}

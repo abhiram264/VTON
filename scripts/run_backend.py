@@ -93,7 +93,9 @@ def backend_env(parsed: dict[str, str], root: Path) -> dict[str, str]:
 
 
 def backend_command(root: Path) -> list[str]:
-    mvnw = root / "backend" / ("mvnw.cmd" if os.name == "nt" else "mvnw")
+    if os.name == "nt":
+        return ["cmd.exe", "/d", "/c", "mvnw.cmd", "-f", "pom.xml", "spring-boot:run"]
+    mvnw = root / "backend" / "mvnw"
     return [str(mvnw), "-f", str(root / "backend" / "pom.xml"), "spring-boot:run"]
 
 
@@ -114,11 +116,9 @@ def main(argv: list[str] | None = None) -> int:
     env.update(child)
     env.pop("LOCALSTACK_AUTH_TOKEN", None)
     if os.name == "nt":
-        # os.exec* cannot replace the image with a .cmd batch wrapper on
-        # Windows; it spawns a detached child instead. Run in-process so the
-        # launcher's exit code and stdio stay attached to the backend.
-        cmd = ["cmd.exe", "/d", "/c", *cmd]
-        return subprocess.call(cmd, env=env)
+        # Keep the caller-controlled root out of cmd.exe's command string; cwd
+        # is passed through the native process API and cannot be reparsed.
+        return subprocess.call(cmd, env=env, cwd=root / "backend")
     os.execvpe(cmd[0], cmd, env)
     return 0
 

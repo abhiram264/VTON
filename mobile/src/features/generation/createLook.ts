@@ -6,7 +6,13 @@ import type {
 } from './types';
 import { createIdempotencyKey, pollGeneration } from './generationApi';
 import { ProductRejectedError } from './productUpload';
-import { setActiveGeneration } from './activeGeneration';
+import {
+  clearActiveGeneration,
+  getActiveGeneration,
+  isPollPhaseFailure,
+  markPollPhaseFailure,
+  setActiveGeneration,
+} from './activeGeneration';
 import { ApiProblemError } from '../my-model/http';
 import type { LocalPhoto } from '../my-model/types';
 
@@ -18,6 +24,7 @@ export type CreateLookOutcome =
       reason: 'rejected' | 'error';
       code?: string;
       networkLevel?: boolean;
+      retryable?: boolean;
     };
 
 export function isNetworkError(error: unknown): boolean {
@@ -36,9 +43,85 @@ export function isNetworkError(error: unknown): boolean {
     msg.includes('load failed')
   );
 }
-
 // One manual product, one My Model, one asynchronous generation. Picker
 // cancellation happens first and performs no network call at all.
+// If an active generation exists after a poll-phase failure, retry resumes
+// polling that generation instead of re-uploading or minting a new request.
+function handleGenerationError(error: unknown): CreateLookOutcome {
+  if (error instanceof ProductRejectedError) {
+    return { outcome: 'failed', reason: 'rejected', code: error.code };
+  }
+  if (error instanceof ApiProblemError) {
+    const isRetryableOutcome = error.code === 'CREATE_OUTCOME_UNKNOWN';
+    return {
+      outcome: 'failed',
+      reason: 'error',
+      code: error.code,
+      ...(isRetryableOutcome ? { networkLevel: true } : {}),
+    };
+  }
+  if (
+    error &&
+    typeof error === 'object' &&
+    'code' in error &&
+    error.code === 'CREATE_OUTCOME_UNKNOWN'
+  ) {
+    return {
+      outcome: 'failed',
+      reason: 'error',
+      code: 'CREATE_OUTCOME_UNKNOWN',
+      networkLevel: true,
+    };
+  }
+  if (isNetworkError(error)) {
+    return { outcome: 'failed', reason: 'error', networkLevel: true };
+  }
+  return { outcome: 'failed', reason: 'error' };
+}
+function isCreateOutcomeUnknown(error: unknown): boolean {
+  if (error instanceof ApiProblemError) {
+    if (error.code === 'CREATE_OUTCOME_UNKNOWN') {
+      return true;
+    }
+    const match = /^HTTP_(\d{3})$/.exec(error.code);
+    return match !== null && Number(match[1]) >= 500;
+  }
+  return isNetworkError(error);
+}
+
+async function resolveGeneration(
+  api: GenerationApi,
+  generationId: string,
+  onUpdate?: (generation: GenerationResource) => void,
+  delay?: (ms: number) => Promise<void>,
+  hint?: { current: boolean },
+  signal?: AbortSignal,
+  deadlineMs?: number,
+  maxAttempts?: number,
+): Promise<CreateLookOutcome> {
+  const final = await pollGeneration({
+    get: api.get,
+    id: generationId,
+    onUpdate,
+    delay,
+    hint,
+    signal,
+    deadlineMs,
+    maxAttempts,
+  });
+  if (final.status !== 'COMPLETED' || final.lookId == null) {
+    clearActiveGeneration();
+    return {
+      outcome: 'failed',
+      reason: 'error',
+      code: final.failureCode,
+    };
+  }
+  clearActiveGeneration();
+  const look = await api.getLook(final.lookId);
+  return { outcome: 'ready', lookId: look.id };
+}
+
 export async function createLook(input: {
   picker: ProductPicker;
   upload: ProductUploader;
@@ -47,44 +130,87 @@ export async function createLook(input: {
   delay?: (ms: number) => Promise<void>;
   hint?: { current: boolean };
   photo?: LocalPhoto;
+  signal?: AbortSignal;
+  deadlineMs?: number;
+  maxAttempts?: number;
 }): Promise<CreateLookOutcome> {
+  if (input.signal?.aborted) {
+    throw new Error('Aborted');
+  }
+  const activeId = getActiveGeneration();
+  if (activeId && isPollPhaseFailure()) {
+    try {
+      return await resolveGeneration(
+        input.api,
+        activeId,
+        input.onUpdate,
+        input.delay,
+        input.hint,
+        input.signal,
+        input.deadlineMs,
+        input.maxAttempts,
+      );
+    } catch (error) {
+      if (
+        (error as { message?: string })?.message === 'Aborted' ||
+        input.signal?.aborted
+      ) {
+        markPollPhaseFailure();
+        throw error;
+      }
+      markPollPhaseFailure();
+      return handleGenerationError(error);
+    }
+  }
+
   const photo = input.photo ?? (await input.picker());
   if (!photo) {
     return { outcome: 'cancelled' };
   }
+  if (input.signal?.aborted) {
+    throw new Error('Aborted');
+  }
+  let createStarted = false;
   try {
     const productUploadId = await input.upload(photo);
+    if (input.signal?.aborted) {
+      throw new Error('Aborted');
+    }
+    createStarted = true;
     const generation = await input.api.create(
       productUploadId,
       createIdempotencyKey(),
     );
-    setActiveGeneration(generation.id);
-    const final = await pollGeneration({
-      get: input.api.get,
-      id: generation.id,
-      onUpdate: input.onUpdate,
-      delay: input.delay,
-      hint: input.hint,
-    });
-    if (final.status !== 'COMPLETED' || final.lookId == null) {
-      return {
-        outcome: 'failed',
-        reason: 'error',
-        code: final.failureCode,
-      };
-    }
-    const look = await input.api.getLook(final.lookId);
-    return { outcome: 'ready', lookId: look.id };
+    setActiveGeneration(generation.id, false);
+    return await resolveGeneration(
+      input.api,
+      generation.id,
+      input.onUpdate,
+      input.delay,
+      input.hint,
+      input.signal,
+      input.deadlineMs,
+      input.maxAttempts,
+    );
   } catch (error) {
-    if (error instanceof ProductRejectedError) {
-      return { outcome: 'failed', reason: 'rejected', code: error.code };
+    if (
+      (error as { message?: string })?.message === 'Aborted' ||
+      input.signal?.aborted
+    ) {
+      if (getActiveGeneration() != null) {
+        markPollPhaseFailure();
+      }
+      throw error;
     }
-    if (error instanceof ApiProblemError) {
-      return { outcome: 'failed', reason: 'error', code: error.code };
+    if (createStarted && getActiveGeneration() == null && isCreateOutcomeUnknown(error)) {
+      const outcome = handleGenerationError(error);
+      return outcome.outcome === 'failed'
+        ? {...outcome, retryable: false}
+        : outcome;
     }
-    if (isNetworkError(error)) {
-      return { outcome: 'failed', reason: 'error', networkLevel: true };
+    if (getActiveGeneration() != null) {
+      markPollPhaseFailure();
     }
-    return { outcome: 'failed', reason: 'error' };
+    return handleGenerationError(error);
   }
 }

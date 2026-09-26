@@ -69,8 +69,8 @@ public final class JdbcCollectionStore implements CollectionStore {
 			if (!exists("SELECT EXISTS(SELECT 1 FROM vault_item WHERE id=? AND user_id=?)", vaultItemId.value(), ownerId.value()))
 				return result(MembershipOutcome.VAULT_ITEM_NOT_FOUND, null);
 			try {
-				int inserted = jdbc.update("INSERT INTO collection_item(collection_id,vault_item_id,created_at) VALUES(?,?,?) ON CONFLICT DO NOTHING",
-					collectionId.value(), vaultItemId.value(), timestamp(now));
+				int inserted = jdbc.update("INSERT INTO collection_item(collection_id,vault_item_id,user_id,created_at) VALUES(?,?,?,?) ON CONFLICT DO NOTHING",
+					collectionId.value(), vaultItemId.value(), ownerId.value(), timestamp(now));
 				if (inserted == 1) jdbc.update("UPDATE collection SET updated_at=? WHERE id=? AND user_id=?", timestamp(now), collectionId.value(), ownerId.value());
 				return result(inserted == 1 ? MembershipOutcome.CHANGED : MembershipOutcome.UNCHANGED, find(ownerId, collectionId).orElseThrow());
 			}

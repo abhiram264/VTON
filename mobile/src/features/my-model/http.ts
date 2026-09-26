@@ -56,27 +56,43 @@ export async function apiRequest(
   });
 }
 
-async function readJson(response: Response): Promise<unknown> {
-  if (response.status === 204) {
-    return null;
+async function extractProblemCode(response: Response): Promise<string | null> {
+  try {
+    const contentType = response.headers?.get?.('content-type') ?? '';
+    if (contentType && !contentType.includes('application/json') && !contentType.includes('+json')) {
+      return null;
+    }
+    const payload = await response.json();
+    if (payload !== null && typeof payload === 'object' && 'code' in payload) {
+      const code = payload.code;
+      if (typeof code === 'string') {
+        return code;
+      }
+    }
+  } catch {
+    // Body is empty or unparsable non-JSON
   }
-  return response.json();
+  return null;
 }
 
 export async function requireOk(response: Response): Promise<unknown> {
-  const payload = await readJson(response);
   if (response.ok) {
-    return payload;
+    if (response.status === 204) {
+      return null;
+    }
+    return response.json();
   }
-  if (
-    payload !== null &&
-    typeof payload === 'object' &&
-    'code' in payload &&
-    typeof (payload as { code: unknown }).code === 'string'
-  ) {
-    throw new ApiProblemError((payload as { code: string }).code);
+
+  const problemCode = await extractProblemCode(response);
+  if (problemCode) {
+    throw new ApiProblemError(problemCode);
   }
-  throw new Error('Request failed');
+
+  if (response.status === 401) {
+    throw new ApiProblemError('UNAUTHORIZED');
+  }
+
+  throw new ApiProblemError(`HTTP_${response.status}`);
 }
 
 // Shared initiate -> direct private PUT -> complete upload path. Media bytes

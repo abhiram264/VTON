@@ -3,6 +3,9 @@ import java.io.InputStream;
 import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
+import java.util.Optional;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.Set;
 import java.util.TimeZone;
 import java.util.UUID;
@@ -32,6 +35,9 @@ import com.aifashionvault.platform.objectstore.GenerationMediaStore;
 import com.aifashionvault.platform.objectstore.ProductInputClaimCommand;
 import com.aifashionvault.platform.generation.RecordingVtonProvider;
 import com.aifashionvault.platform.generation.GenerationMetrics;
+import com.aifashionvault.platform.generation.GenerationWorkProcessor;
+import com.aifashionvault.platform.queue.GenerationWorkLease;
+import com.aifashionvault.platform.queue.GenerationWorkQueue;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -64,6 +70,8 @@ class GenerationHttpContractTest {
 	@Autowired JdbcTemplate jdbc;
 	@Autowired MeterRegistry meters;
 	@Autowired RecordingVtonProvider provider;
+	@Autowired GenerationWorkProcessor processor;
+	@Autowired RecordingWorkQueue queue;
 
 	@DynamicPropertySource
 	static void datasource(DynamicPropertyRegistry registry) {
@@ -78,7 +86,7 @@ class GenerationHttpContractTest {
 
 	@BeforeEach
 	void clearTables() {
-		jdbc.update("TRUNCATE TABLE generation_admission_counter, look_item, look, quality_result, "
+		jdbc.update("TRUNCATE TABLE generation_admission_counter, generation_admission_reservation, look_item, look, quality_result, "
 			+ "generation_callback_inbox, generation_work_outbox, generation_quota_reservation, "
 			+ "generation_notification_delivery, generation_notification_event, generation_provider_capacity_slot, "
 			+ "generation_attempt, generation_render_step_item, generation_render_step, generation_job_product, "
@@ -89,6 +97,10 @@ class GenerationHttpContractTest {
 	@Test
 	void createReturnsExact202ResourceAndDoesNotCallProvider() throws Exception {
 		Owner owner = seedOwner(true);
+		UUID expectedAvatarImageId = jdbc.queryForObject(
+			"SELECT primary_image_id FROM avatar_profile WHERE id = ?", UUID.class, owner.profileId());
+		int expectedAvatarRevision = jdbc.queryForObject(
+			"SELECT revision FROM avatar_profile WHERE id = ?", Integer.class, owner.profileId());
 		MvcResult result = create(owner, "key-1", owner.uploadId());
 		JsonNode body = MAPPER.readTree(result.getResponse().getContentAsString());
 
@@ -105,6 +117,10 @@ class GenerationHttpContractTest {
 		assertThat(count("generation_work_outbox")).isEqualTo(1);
 		assertThat(count("generation_attempt")).isZero();
 		assertThat(provider.submitCount()).isZero();
+		assertThat(jdbc.queryForObject("SELECT avatar_image_id FROM generation_job WHERE id = ?", UUID.class, id))
+			.isEqualTo(expectedAvatarImageId);
+		assertThat(jdbc.queryForObject("SELECT avatar_revision FROM generation_job WHERE id = ?", Integer.class, id))
+			.isEqualTo(expectedAvatarRevision);
 	}
 
 
@@ -219,6 +235,12 @@ class GenerationHttpContractTest {
 			.andExpect(status().isOk()).andReturn());
 		assertThat(replay).isEqualTo(first);
 		assertThat(count("look")).isZero();
+		GenerationWorkLease lateWork = new GenerationWorkLease(id, "late-work");
+		processor.process(lateWork);
+
+		assertThat(get(owner, id)).isEqualTo(first);
+		assertThat(queue.deleted()).containsExactly(lateWork);
+		assertThat(provider.submitCount()).isZero();
 	}
 
 	@Test
@@ -335,6 +357,7 @@ class GenerationHttpContractTest {
         @Bean @Primary GenerationMetrics testGenerationMetrics(SimpleMeterRegistry testGenerationMeterRegistry) {
             return new GenerationMetrics(testGenerationMeterRegistry);
         }
+        @Bean @Primary GenerationWorkQueue generationWorkQueue() { return new RecordingWorkQueue(); }
         @Bean @Primary GenerationMediaStore generationMediaStore() {
             return new GenerationMediaStore() {
                 @Override public void putBounded(StorageKey dest, InputStream source, long maxBytes, String mediaType) { }
@@ -347,4 +370,14 @@ class GenerationHttpContractTest {
             };
         }
     }
+
+	static final class RecordingWorkQueue implements GenerationWorkQueue {
+		private final List<GenerationWorkLease> deleted = new CopyOnWriteArrayList<>();
+
+		@Override public void send(UUID generationJobId) { }
+		@Override public Optional<GenerationWorkLease> receive() { return Optional.empty(); }
+		@Override public void extendVisibility(GenerationWorkLease lease, Duration extension) { }
+		@Override public void delete(GenerationWorkLease lease) { deleted.add(lease); }
+		private List<GenerationWorkLease> deleted() { return deleted; }
+	}
 }

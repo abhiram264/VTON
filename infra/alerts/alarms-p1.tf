@@ -6,7 +6,7 @@ resource "aws_cloudwatch_metric_alarm" "provider_errors" {
   comparison_operator = "GreaterThanOrEqualToThreshold"
   evaluation_periods  = 3
   datapoints_to_alarm = 2
-  metric_name         = "provider.error.count"
+  metric_name         = "provider.error"
   namespace           = var.metric_namespace
   period              = 300
   statistic           = "Sum"
@@ -23,7 +23,7 @@ resource "aws_cloudwatch_metric_alarm" "queue_oldest_age" {
   comparison_operator = "GreaterThanOrEqualToThreshold"
   evaluation_periods  = 3
   datapoints_to_alarm = 2
-  metric_name         = "queue.oldest_age.value"
+  metric_name         = "queue.oldest_age"
   namespace           = var.metric_namespace
   period              = 300
   statistic           = "Maximum"
@@ -79,7 +79,7 @@ resource "aws_cloudwatch_metric_alarm" "quality_reject_ratio" {
     return_data = false
 
     metric {
-      metric_name = "generation.quality.count"
+      metric_name = "generation.quality"
       namespace   = var.metric_namespace
       period      = 300
       stat        = "Sum"
@@ -95,7 +95,7 @@ resource "aws_cloudwatch_metric_alarm" "quality_reject_ratio" {
     return_data = false
 
     metric {
-      metric_name = "generation.quality.count"
+      metric_name = "generation.quality"
       namespace   = var.metric_namespace
       period      = 300
       stat        = "Sum"
@@ -111,7 +111,7 @@ resource "aws_cloudwatch_metric_alarm" "quality_reject_ratio" {
     return_data = false
 
     metric {
-      metric_name = "generation.quality.count"
+      metric_name = "generation.quality"
       namespace   = var.metric_namespace
       period      = 300
       stat        = "Sum"
@@ -129,7 +129,7 @@ resource "aws_cloudwatch_metric_alarm" "push_failures" {
   comparison_operator = "GreaterThanOrEqualToThreshold"
   evaluation_periods  = 3
   datapoints_to_alarm = 2
-  metric_name         = "notification.send.outcome.count"
+  metric_name         = "notification.send.outcome"
   namespace           = var.metric_namespace
   period              = 300
   statistic           = "Sum"
@@ -140,6 +140,7 @@ resource "aws_cloudwatch_metric_alarm" "push_failures" {
   tags                = local.tags
 
   dimensions = {
+    channel = "FCM"
     outcome = var.notification_failed_outcome
   }
 }
@@ -150,7 +151,7 @@ resource "aws_cloudwatch_metric_alarm" "generation_cost_hourly" {
   comparison_operator = "GreaterThanOrEqualToThreshold"
   evaluation_periods  = 1
   datapoints_to_alarm = 1
-  metric_name         = "generation.cost.attempt.sum"
+  metric_name         = "generation.cost.amount"
   namespace           = var.metric_namespace
   period              = 3600
   statistic           = "Sum"
@@ -167,7 +168,7 @@ resource "aws_cloudwatch_metric_alarm" "provider_credits_low" {
   comparison_operator = "LessThanOrEqualToThreshold"
   evaluation_periods  = 1
   datapoints_to_alarm = 1
-  metric_name         = "provider.credit_balance.value"
+  metric_name         = "provider.credit_balance"
   namespace           = var.metric_namespace
   period              = 300
   statistic           = "Minimum"

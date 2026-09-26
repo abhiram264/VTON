@@ -2,6 +2,7 @@ package com.aifashionvault.platform.persistence;
 
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
@@ -9,6 +10,7 @@ import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Comparator;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.TimeZone;
@@ -68,6 +70,31 @@ class FlywayFoundationTest {
 		ALTER TABLE avatar_profile
 		    ADD CONSTRAINT avatar_profile_primary_image_id_fkey
 		    FOREIGN KEY (primary_image_id) REFERENCES avatar_image (id);
+		""";
+	private static final String PUBLISHED_MIGRATION_SHA256 = """
+		V001__create_users.sql=3f104b2a87221bec37427fcb942b3d89999578db47b43b0ce0afe7f4815f521c
+		V002__create_avatar_profiles.sql=8ba3de136cf7a23b18c7a307a5ce06a709a94e080b6dcbf6ba8a7618d06f451e
+		V003__create_share_imports.sql=b3c3c674aee77baaf6fcef571dc0b02c1e46a429cbf392f6c8302607a69fc278
+		V004__create_vault.sql=f51dbe5a02ec04bb8a0bea00e4fbb9d1e26a70dbf6eeee1a146b397c6b909e11
+		V005__create_collections.sql=a3f928f936327bc113b8ae1432d35f69ac9ad1b17bfeb067c322f50fe4e93df7
+		V006__create_studio.sql=7a7861ea683862ef0147e74c25155c6b9c42306d08ccdef11de5e7d9ff55c684
+		V007__create_generations.sql=cd0024fab59aa19be1bd5ea47d722e81211eee5d530b66e11d761cd75477a301
+		V008__create_looks.sql=9b4d59fcb3758e8274de942f4b225065b0aae139c33eb96bcdd157dbee184c7d
+		V009__create_notifications.sql=0b7668549e510951458099c4e421f403a70479ad261a2cb06e4a714f02a4824a
+		V010__create_consents.sql=da043b51c9d1bac93c9f69cebfee1cbc033e7554772a4f65295fda98e6ae636a
+		V011__avatar_image_preflight_policy_version.sql=0528d89afbdd5c2db129b0110f3e557b52d227e8d6b9e71511b55a816b6a9aec
+		V012__generation_orchestration_state.sql=005ef286539566c16380421465a909c02793581cf217b6f94cb26806e61d2f8d
+		V013__generation_job_system.sql=7d83748ff3ffebcb64e13cdda7d955ea9d3fae26d827b24e05d4fbbab9a416a6
+		V014__generation_data_provenance.sql=d68d2e87251b43746306bf366f6ac6332bb2970f2316815a5441ed35bb55780b
+		V015__generation_retry_state.sql=ae2d98346d2745c23254c3f5f62d49e2aa8e6b388b3be5e7e05a276d2a37b5ac
+		V016__generation_retry_strategy.sql=ef9baaf018abf7f23408a928a44047e90bd2c79dcd56fcc17b8fb46c93597152
+		V017__notification_event_reason.sql=818332e1df7c77fa00769b8e3bafe4d08e1b36593b6c184374b47b0b3f6e819d
+		V018__single_item_manual_product.sql=f0174239a6673a9c44d8f03810d28943beb87b6bb0d913e73c944e7f1ecd5bf3
+		V019__share_import_resolver.sql=582462e25e133b9708459c564931d64866e07bda74d6c02c016830a74906256e
+		V020__product_normalization.sql=5a29a7732a20e03efa4bc9d9fbace76f042862f358c08fec18331dc1b88e36e6
+		V021__privacy_deletion_workflow.sql=7cb62a9947ef49d1e82e1f8cc772ca1ecc8b3d36bd1463a1cef7968a78e64be3
+		V022__generation_admission.sql=05a07824dda629879d27a9120f8e22f5443c3ec486c7b881291efbfc1677e007
+		V023__provider_performance.sql=841ad458b652a20aaedd902ac6a238404ca0283a67afedebd3dfdc03e3469f50
 		""";
 	static {
 		TimeZone.setDefault(TimeZone.getTimeZone("UTC"));
@@ -141,14 +168,32 @@ class FlywayFoundationTest {
 	}
 
 	@Test
-    void flywayAppliesV001ThroughV023OnEmptyDatabase() {
+    void flywayAppliesV001ThroughV024OnEmptyDatabase() {
         List<Map<String, Object>> history = jdbc.queryForList(
             "SELECT version, success FROM flyway_schema_history WHERE version IS NOT NULL ORDER BY installed_rank");
-        assertThat(history).hasSize(23);
+        assertThat(history).hasSize(24);
         assertThat(history).extracting(row -> Integer.parseInt(row.get("version").toString()))
-            .containsExactly(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23);
+            .containsExactly(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24);
         assertThat(history).extracting(row -> row.get("success")).containsOnly(true);
+		assertThat(jdbc.queryForObject(
+			"SELECT description FROM flyway_schema_history WHERE version = '024'",
+			String.class)).isEqualTo("notification fencing and provider constraints__contract");
     }
+
+	@Test
+	void publishedV001ThroughV023MatchFrozenSourceChecksums() throws Exception {
+		int verified = 0;
+		for (String line : PUBLISHED_MIGRATION_SHA256.lines().toList()) {
+			String[] entry = line.split("=", 2);
+			String normalized = new String(migrationBytes(entry[0]), StandardCharsets.UTF_8)
+				.replace("\r\n", "\n");
+			String checksum = HexFormat.of().formatHex(
+				MessageDigest.getInstance("SHA-256").digest(normalized.getBytes(StandardCharsets.UTF_8)));
+			assertThat(checksum).as(entry[0]).isEqualTo(entry[1]);
+			verified++;
+		}
+		assertThat(verified).isEqualTo(23);
+	}
 
 	@Test
 	void domainTablePrimaryKeysAreUuidNotIdentity() {
@@ -284,7 +329,7 @@ class FlywayFoundationTest {
 		List<Map<String, Object>> original = jdbc.queryForList(
 			"SELECT version, checksum FROM flyway_schema_history "
 				+ "WHERE version IS NOT NULL ORDER BY installed_rank");
-            assertThat(original).hasSize(23);
+            assertThat(original).hasSize(24);
 
 		try (PostgreSQLContainer second = newPostgres()) {
 			second.start();
@@ -302,7 +347,7 @@ class FlywayFoundationTest {
 				"SELECT version, checksum FROM flyway_schema_history "
 					+ "WHERE version IS NOT NULL ORDER BY installed_rank");
 
-            assertThat(replayed).hasSize(23);
+            assertThat(replayed).hasSize(24);
 			assertThat(replayed)
 				.usingRecursiveFieldByFieldElementComparator()
 				.containsExactlyElementsOf(original);
@@ -310,7 +355,7 @@ class FlywayFoundationTest {
 	}
 
 	@Test
-    void publishedV002ValidatesAndUpgradesToV023WithoutChecksumRepair() throws Exception {
+    void publishedV002ValidatesAndUpgradesToV024WithoutChecksumRepair() throws Exception {
 		Path publishedMigrations = Files.createTempDirectory("flyway-published-v002-");
 		try (PostgreSQLContainer legacy = newPostgres()) {
 			byte[] currentV002 = migrationBytes("V002__create_avatar_profiles.sql");
@@ -374,7 +419,7 @@ class FlywayFoundationTest {
 				"SELECT version FROM flyway_schema_history "
 					+ "WHERE version IS NOT NULL ORDER BY installed_rank",
 				String.class))
-                .containsExactly("001", "002", "003", "004", "005", "006", "007", "008", "009", "010", "011", "012", "013", "014", "015", "016", "017", "018", "019", "020", "021", "022", "023");
+                .containsExactly("001", "002", "003", "004", "005", "006", "007", "008", "009", "010", "011", "012", "013", "014", "015", "016", "017", "018", "019", "020", "021", "022", "023", "024");
 			assertThat(upgraded.queryForMap(
 				"SELECT revision, lifecycle_state, warnings::text AS warnings, "
 					+ "source_upload_id, preflight_policy_version "
@@ -693,7 +738,7 @@ class FlywayFoundationTest {
 	}
 
 	@Test
-    void v012BaselineMigratesToV023WithoutDataLoss() {
+    void v012BaselineMigratesToV024WithoutDataLoss() {
 		try (PostgreSQLContainer legacy = newPostgres()) {
 			legacy.start();
 			Flyway.configure()
@@ -830,7 +875,7 @@ class FlywayFoundationTest {
 				"SELECT version, success FROM flyway_schema_history "
 					+ "WHERE version IS NOT NULL ORDER BY installed_rank"))
 				.extracting(row -> Integer.parseInt(row.get("version").toString()))
-                .containsExactly(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23);
+                .containsExactly(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24);
 			assertThat(upgraded.queryForObject(
 				"SELECT COUNT(*) FROM generation_job",
 				Integer.class)).isEqualTo(4);

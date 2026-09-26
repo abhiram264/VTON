@@ -57,10 +57,11 @@ public class GenerationsController {
 		if (store == null) {
 			store = new JdbcGenerationStore(dataSource);
 		}
-        this.service = new GenerationCreationService(
-            store, new JdbcTemplate(dataSource), properties, Clock.systemUTC(),
-            resolveMediaStore(mediaStores, objectStores), new JdbcGenerationRateLimiter(dataSource, Clock.systemUTC()),
-            generationMetrics.getIfAvailable());
+		GenerationMediaStore mediaStore = resolveMediaStore(mediaStores, objectStores);
+		this.service = new GenerationCreationService(
+			store, new JdbcTemplate(dataSource), properties, Clock.systemUTC(),
+			mediaStore, new JdbcGenerationRateLimiter(dataSource, Clock.systemUTC()),
+			generationMetrics.getIfAvailable());
 	}
 
 	@PostMapping

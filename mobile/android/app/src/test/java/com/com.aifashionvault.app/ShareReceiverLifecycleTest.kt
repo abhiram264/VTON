@@ -7,25 +7,41 @@ import org.junit.Test
 /**
  * Lifecycle repair decisions, extracted as pure logic so they are JVM-testable without an
  * Activity harness.
- *
- * HIGH finding: a config-change recreation of an already-handled SEND intent must not
- * re-process it (no double store, no double handoff launch); only a fresh delivery may.
+ * HIGH finding: restored unfinished work must fail closed rather than duplicate staging, while
+ * restored completed work must finish without replaying the handoff.
  *
  * HIGH finding (orphaned-instance half): terminal UI steps on a destroyed/finishing
  * instance must be suppressed — no handoff launch, no toast, no finish crash.
  */
 class ShareReceiverLifecycleTest {
 
-  // --- shouldProcessIntent ---
+  // --- restored work ---
 
   @Test
-  fun `fresh delivery with null saved state processes the intent`() {
-    assertTrue(ShareReceiverLifecycle.shouldProcessIntent(hasSavedInstanceState = false))
+  fun `fresh delivery with no restored work processes the intent`() {
+    assertTrue(ShareReceiverLifecycle.shouldProcessIntent(restoredWork = null))
   }
 
   @Test
-  fun `recreation with saved state does not re-process the already-handled intent`() {
-    assertFalse(ShareReceiverLifecycle.shouldProcessIntent(hasSavedInstanceState = true))
+  fun `restored unfinished work is rejected with the safe failure`() {
+    val restoredWork = ShareReceiverLifecycle.WorkState.UNFINISHED
+
+    assertFalse(ShareReceiverLifecycle.shouldProcessIntent(restoredWork))
+    assertTrue(ShareReceiverLifecycle.shouldFailRestoredWork(restoredWork))
+  }
+
+  @Test
+  fun `restored completed work finishes without failure or replay`() {
+    val restoredWork = ShareReceiverLifecycle.WorkState.COMPLETED
+
+    assertFalse(ShareReceiverLifecycle.shouldProcessIntent(restoredWork))
+    assertFalse(ShareReceiverLifecycle.shouldFailRestoredWork(restoredWork))
+  }
+
+  @Test
+  fun `second intent is explicitly rejected while the first is staging`() {
+    assertFalse(ShareReceiverLifecycle.shouldAcceptNewIntent(isStaging = true))
+    assertTrue(ShareReceiverLifecycle.shouldAcceptNewIntent(isStaging = false))
   }
 
   // --- terminalStepSuppressed ---

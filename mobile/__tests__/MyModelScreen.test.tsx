@@ -6,6 +6,7 @@ import {
   waitFor,
 } from '@testing-library/react-native';
 import MyModelScreen from '../src/screens/MyModelScreen';
+import { Alert } from 'react-native';
 import { choosePhoto, takePhoto } from '../src/features/my-model/photoSource';
 
 jest.mock('../src/features/my-model/photoSource', () => ({
@@ -100,6 +101,10 @@ describe('MyModelScreen', () => {
     globalThis.fetch = fetchMock as typeof fetch;
   });
 
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
   test('empty guidance is visible', async () => {
     fetchMock.mockResolvedValue(await jsonResponse(200, []));
 
@@ -186,12 +191,27 @@ describe('MyModelScreen', () => {
       throw new Error(`unexpected fetch ${method} ${url}`);
     });
 
+    const alert = jest.spyOn(Alert, 'alert').mockImplementation((_title, _message, buttons) => {
+      buttons?.find(button => button.style === 'destructive')?.onPress?.();
+    });
     await render(<MyModelScreen />);
     await screen.findByLabelText('My Model preview');
 
     await act(async () => {
       fireEvent.press(screen.getByRole('button', { name: 'Delete' }));
     });
+    expect(alert).toHaveBeenCalledTimes(1);
+    expect(alert.mock.calls[0][0]).toBe('Delete My Model?');
+    expect(alert.mock.calls[0][1]).toBe(
+      'This permanently deletes your private My Model photo.',
+    );
+    expect(alert.mock.calls[0][2]).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ text: 'Cancel' }),
+        expect.objectContaining({ text: 'Delete', style: 'destructive' }),
+      ]),
+    );
+    alert.mockRestore();
 
     await waitFor(() => {
       expect(

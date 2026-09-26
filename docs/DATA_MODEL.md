@@ -4,7 +4,7 @@ Canonical home for the AI Fashion Vault persistence and domain data model. It st
 persistence that exists in this tree today.
 
 **Current migration truth: PostgreSQL 18 accessed through Spring JDBC (`spring-jdbc`, no
-JPA, no Redis), with Flyway migrations `V001`–`V023` in
+JPA, no Redis), with Flyway migrations `V001`–`V024` in
 `backend/src/main/resources/db/migration/` as the sole schema channel.** No runtime DDL.
 History is forward-only — undo, repeatable, and baseline migrations are forbidden.
 Migration standards, the file-name pattern, and the EXPAND/DEPLOY/MIGRATE/CONTRACT
@@ -31,11 +31,13 @@ delivered.
 `V016__generation_retry_strategy.sql`, `V017__notification_event_reason.sql`,
 `V018__single_item_manual_product.sql`, `V019__share_import_resolver.sql`,
 `V020__product_normalization.sql`, `V021__privacy_deletion_workflow.sql`,
-`V022__generation_admission.sql`, `V023__provider_performance.sql`.
+`V022__generation_admission.sql`, `V023__provider_performance.sql`,
+`V024__notification_fencing_and_provider_constraints__contract.sql`.
 
-`V023` is the highest published version; nothing above it exists in this tree. Existing
-migrations are never renumbered or reset — the ticket that adds a schema change selects
-the next unused version at execution time.
+`V024` is the highest migration present in this tree; `V025` is reserved under
+[docs/DATABASE_DEPLOYMENT_STRATEGY.md](DATABASE_DEPLOYMENT_STRATEGY.md) and must be
+claimed or renamed through the owning policy change before use. Existing migrations are
+never renumbered or reset.
 
 ## Tables confirmed by the inventory
 

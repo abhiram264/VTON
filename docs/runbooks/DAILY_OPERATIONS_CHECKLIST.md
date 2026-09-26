@@ -18,7 +18,7 @@ This checklist is the copy-per-day template for recording daily post-production 
 
 ## Standing Privacy Reminder
 
-> **CRITICAL PRIVACY RULE (ADR-015, §41, §54):**
+> **CRITICAL PRIVACY RULE (ADR-015):**
 > Never paste raw user photos, avatar images, signed S3 URLs, base64 payloads, storage keys, authentication tokens, or provider secrets into this checklist, incident tickets, or operational chat channels. Reference only opaque UUIDs (`job_id`, `attempt_id`, `import_id`).
 
 ---

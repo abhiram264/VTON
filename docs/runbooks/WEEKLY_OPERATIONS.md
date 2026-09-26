@@ -53,10 +53,10 @@ psql "$DATABASE_URL" \
 ```
 
 Alternatively, operators may substitute PostgreSQL dynamic date expressions:
-- Current ISO week window: `date_trunc('week', now()) - interval '1 week'` to `date_trunc('week', now())`
-- Previous ISO week window: `date_trunc('week', now()) - interval '2 weeks'` to `date_trunc('week', now()) - interval '1 week'`
+- Current ISO week window: `(date_trunc('week', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC') - interval '1 week'` to `date_trunc('week', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'`
+- Previous ISO week window: `(date_trunc('week', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC') - interval '2 weeks'` to `(date_trunc('week', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC') - interval '1 week'`
 
-*(Note: In PostgreSQL, `date_trunc('week', ...)` truncates to Monday 00:00:00 UTC, aligning with ISO week boundaries.)*
+*(Note: In PostgreSQL, `date_trunc('week', ...)` uses the session time zone; the `AT TIME ZONE 'UTC'` conversions above keep these ISO boundaries at Monday 00:00:00 UTC.)*
 
 ---
 
@@ -359,7 +359,7 @@ The source-import compatibility review monitors share ingestion reliability acro
   - `product.share.try_on` (share import conversion to try-on)
   - `share.import.resolver.outcome` (tags: `resolver` with values `SHARED_IMAGE`, `GENERIC_OPEN_GRAPH`, `GENERIC_URL`; `status` with values `RESOLVED`, `NEEDS_IMAGE`, `RETRYABLE_FAILURE`, `TERMINAL_FAILURE`, `UNSUPPORTED`, `EXCEPTION`; `reason` with values `URL_RESOLUTION_FAILED`, `DEPENDENCY_UNAVAILABLE`, `RESOLUTION_TIMEOUT`, `INVALID_SOURCE`, `NONE`)
   - `share.import.resolver.duration` (tags: `resolver`, `status`)
-- **CloudWatch Alarms:** `<prefix>-p2-import-resolver-degraded-<resolver>` (alarm set keyed by resolver id from `var.source_resolver_ids` with failure-ratio threshold `var.p2_resolver_failure_ratio`, default 0.25, status dimension default `FAILED`, 3-of-6-hours evaluation; per-source/per-retailer degradation is observed via the SQL fallback over `share_import.source_site_name`)
+- **CloudWatch Alarms:** `<prefix>-p2-import-resolver-degraded-<resolver>` (alarm set keyed by resolver id from `var.source_resolver_ids`; current Terraform selects `status = TERMINAL_FAILURE` via `var.resolver_failure_status` and also counts `EXCEPTION` in the failure numerator, with failure-ratio threshold `var.p2_resolver_failure_ratio`, default 0.25, over 3 of 6 hours; applied AWS state is not verified by this runbook)
 - **SQL Fallback (Read-Only PostgreSQL):**
 
 ```sql
@@ -400,7 +400,7 @@ ORDER BY failure_rate_pct DESC, total_shares DESC;
 
 ### 3.3 Threshold / Expected & Empty-Week Semantics
 - **Global Import Success Rate Target:** > 90.0% (tied to plan §65 beta exit gate: "Import success > 90%").
-- **P2 Resolver Alarm Threshold:** Landed CloudWatch alarm `<prefix>-p2-import-resolver-degraded-<resolver>` fires when failure ratio >= 0.25 (default `var.p2_resolver_failure_ratio`) for any resolver id across 3 of 6 hours (`status = FAILED`).
+- **P2 Resolver Alarm Threshold:** The landed CloudWatch alarm `<prefix>-p2-import-resolver-degraded-<resolver>` evaluates `TERMINAL_FAILURE` plus `EXCEPTION` outcome counts for each resolver id over 3 of 6 hours (failure ratio >= 0.25, default `var.p2_resolver_failure_ratio`); applied alarm state remains unverified.
 - **Per-Source Degraded Review Rule (Runbook Review Rule):** As a runbook review rule (evaluated via SQL fallback over `share_import.source_site_name`, not an automated alarm condition), any major source domain with volume >= 20 exhibiting failure rate > 30.0% (success rate < 70.0%) requires investigation.
 - **Week-over-Week Delta:** Relative change in per-source success rate must not drop by > 10.0% relative WoW.
 - **Empty-Week Semantics:** If `total_imports = 0`, mark `NO_DATA`; rates are **UNDEFINED** (`NULL`).
@@ -677,7 +677,23 @@ Unlike simple cost-per-request metrics, this indicator accounts for retries, fal
 WITH attempt_spend AS (
     SELECT
         COUNT(*) AS total_attempts,
-        SUM(COALESCE(ga.actual_cost, ga.estimated_cost, 0)) AS total_spend,
+        CASE
+            WHEN COUNT(*) FILTER (WHERE cost_status = 'UNKNOWN') > 0
+              OR COUNT(*) FILTER (WHERE cost_status IS NULL) > 0
+              OR COUNT(DISTINCT currency) FILTER (WHERE cost_status IN ('FINAL', 'ESTIMATED')) > 1
+              OR COUNT(*) FILTER (
+                  WHERE cost_status IN ('FINAL', 'ESTIMATED')
+                    AND ((cost_status = 'FINAL' AND (actual_cost IS NULL OR currency IS NULL))
+                      OR (cost_status = 'ESTIMATED' AND (estimated_cost IS NULL OR currency IS NULL)))
+              ) > 0
+            THEN NULL
+            ELSE SUM(
+                CASE
+                    WHEN cost_status = 'FINAL' AND actual_cost IS NOT NULL AND currency IS NOT NULL THEN actual_cost
+                    WHEN cost_status = 'ESTIMATED' AND estimated_cost IS NOT NULL AND currency IS NOT NULL THEN estimated_cost
+                END
+            )
+        END AS total_spend,
         COUNT(*) FILTER (WHERE cost_status = 'FINAL') AS final_cost_attempts,
         COUNT(*) FILTER (WHERE cost_status = 'ESTIMATED') AS estimated_cost_attempts,
         COUNT(*) FILTER (WHERE cost_status = 'UNKNOWN') AS unknown_cost_attempts
@@ -685,12 +701,18 @@ WITH attempt_spend AS (
     WHERE ga.started_at >= :week_start AND ga.started_at < :week_end
 ),
 approved_looks AS (
-    SELECT
-        COUNT(DISTINCT l.id) AS quality_approved_looks_count
+    SELECT COUNT(DISTINCT l.id) AS quality_approved_looks_count
     FROM look l
-    JOIN generation_attempt ga ON ga.generation_job_id = l.generation_job_id
+    JOIN generation_job gj ON gj.id = l.generation_job_id AND gj.user_id = l.user_id
+    JOIN generation_attempt ga
+      ON ga.generation_job_id = gj.id
+     AND split_part(l.storage_key, '/', 4) LIKE ga.id::text || '.%'
     JOIN quality_result qr ON qr.generation_attempt_id = ga.id
     WHERE l.created_at >= :week_start AND l.created_at < :week_end
+      AND l.deleted_at IS NULL
+      AND l.quality_status = 'PASS'
+      AND gj.status = 'COMPLETED'
+      AND ga.technical_outcome = 'SUCCESS'
       AND qr.decision = 'PASS'
 )
 SELECT
@@ -712,15 +734,26 @@ SELECT
     currency,
     cost_status,
     COUNT(*) AS attempts_count,
-    ROUND(SUM(COALESCE(actual_cost, estimated_cost, 0))::NUMERIC, 2) AS total_spend,
-    ROUND(AVG(COALESCE(actual_cost, estimated_cost, 0))::NUMERIC, 4) AS avg_cost_per_attempt
+    ROUND(SUM(
+        CASE
+            WHEN cost_status = 'FINAL' AND actual_cost IS NOT NULL AND currency IS NOT NULL THEN actual_cost
+            WHEN cost_status = 'ESTIMATED' AND estimated_cost IS NOT NULL AND currency IS NOT NULL THEN estimated_cost
+        END
+    )::NUMERIC, 2) AS total_spend,
+    ROUND(AVG(
+        CASE
+            WHEN cost_status = 'FINAL' AND actual_cost IS NOT NULL AND currency IS NOT NULL THEN actual_cost
+            WHEN cost_status = 'ESTIMATED' AND estimated_cost IS NOT NULL AND currency IS NOT NULL THEN estimated_cost
+        END
+    )::NUMERIC, 4) AS avg_cost_per_attempt
 FROM generation_attempt
 WHERE started_at >= :week_start AND started_at < :week_end
 GROUP BY provider, model, currency, cost_status
 ORDER BY total_spend DESC;
 ```
 
-*Vocabulary note:* Valid `cost_status` values in `generation_attempt` are `ESTIMATED`, `FINAL`, and `UNKNOWN`.
+Vocabulary note: Valid `cost_status` values in `generation_attempt` are `ESTIMATED`, `FINAL`, and `UNKNOWN`; a NULL `cost_status` is malformed accounting state and fails closed.
+The Look storage key is generated from the publishing attempt UUID, so the join above accepts only the publishing attempt's PASS result; an unrelated retry cannot approve the Look. UNKNOWN or NULL costs remain `NULL`, never zero.
 
 ### 7.3 Threshold / Expected & Empty-Week Semantics
 - **Cost per Quality-Approved Look WoW Delta:** Relative increase must not exceed ±20% relative tolerance compared to the prior week.

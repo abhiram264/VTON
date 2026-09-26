@@ -39,11 +39,12 @@ test('each workspace exposes its required accessible surface', async () => {
     'All', 'Tops', 'Bottoms', 'One Pieces', 'Ethnic', 'Footwear',
     'Headwear', 'Accessories', 'Collections',
   ]) {
-    expect(screen.getByRole('button', { name: label })).toBeTruthy();
+    expect(screen.getByRole('radio', { name: label })).toBeTruthy();
   }
-  expect(screen.getByRole('button', { name: 'All' }).props.accessibilityState).toMatchObject({ selected: true });
-  fireEvent.press(screen.getByRole('button', { name: 'Tops' }));
-  await waitFor(() => expect(screen.getByRole('button', { name: 'Tops' }).props.accessibilityState).toMatchObject({ selected: true }));
+  expect(screen.getByRole('radio', { name: 'All' }).props.accessibilityState).toMatchObject({ checked: true });
+  fireEvent.press(screen.getByRole('radio', { name: 'Tops' }));
+  await waitFor(() => expect(screen.getByRole('radio', { name: 'Tops' }).props.accessibilityState).toMatchObject({ checked: true }));
+  expect(screen.getByRole('radio', { name: 'All' }).props.accessibilityState).toMatchObject({ checked: false });
 
   fireEvent.press(screen.getByRole('tab', { name: /STUDIO/ }));
   await screen.findByRole('header', { name: 'Studio' });

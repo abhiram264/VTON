@@ -6,8 +6,13 @@ public record ProviderVerification(AppIntegrityVerdictStatus status, AppIntegrit
         AppIntegrityPlatform platform, AppIntegrityOperation operation, String requestNonce,
         String appId, Instant expiresAt, String assertionId) {
     public static ProviderVerification verified(AppIntegrityEvidence e, Instant expiresAt, String assertionId) {
+        return verified(e, expiresAt, assertionId, "app");
+    }
+
+    public static ProviderVerification verified(AppIntegrityEvidence e, Instant expiresAt, String assertionId, String appId) {
+        if (e == null || appId == null || appId.isBlank()) return unavailable();
         return new ProviderVerification(AppIntegrityVerdictStatus.VERIFIED, AppIntegrityFailureReason.NONE,
-                e.platform(), e.operation(), e.requestNonce(), "app", expiresAt, assertionId);
+                e.platform(), e.operation(), e.requestNonce(), appId, expiresAt, assertionId);
     }
     public static ProviderVerification denied(AppIntegrityFailureReason reason) {
         return new ProviderVerification(AppIntegrityVerdictStatus.DENIED, reason, null, null, null, null, null, null);

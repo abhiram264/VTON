@@ -113,17 +113,21 @@ class JdbcGenerationRateLimiterTest {
     }
 
     @Test
-    void blankOrMissingDeviceAndIpAreSafelyRejectedWithoutDatabaseAccess() {
+    void nullEmptyAndBlankDeviceAndIpAreSafelyRejectedWithoutDatabaseAccess() {
         DataSource source = mock(DataSource.class);
         var limiter = new JdbcGenerationRateLimiter(source, Clock.fixed(REQUESTED_AT, ZoneOffset.UTC));
 
-		var missingDevice = limiter.reserve(request(null, "198.51.100.1")).decision();
-		var blankIp = limiter.reserve(request("device-1", "  ")).decision();
+		for (String device : new String[] { null, "", " \t " }) {
+			var decision = limiter.reserve(request(device, "198.51.100.1")).decision();
+			assertThat(decision.allowed()).as("device %s", device).isFalse();
+			assertThat(decision.reason()).as("device %s", device).isEqualTo("DEVICE_DAILY_LIMIT");
+		}
+		for (String ip : new String[] { null, "", " \t " }) {
+			var decision = limiter.reserve(request("device-1", ip)).decision();
+			assertThat(decision.allowed()).as("ip %s", ip).isFalse();
+			assertThat(decision.reason()).as("ip %s", ip).isEqualTo("IP_DAILY_LIMIT");
+		}
 
-        assertThat(missingDevice.allowed()).isFalse();
-        assertThat(missingDevice.reason()).isEqualTo("DEVICE_DAILY_LIMIT");
-        assertThat(blankIp.allowed()).isFalse();
-        assertThat(blankIp.reason()).isEqualTo("IP_DAILY_LIMIT");
         verifyNoInteractions(source);
     }
 

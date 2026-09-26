@@ -116,8 +116,15 @@ public final class ObjectStoreGenerationOutputStore implements GenerationOutputS
 	}
 
 	public void discard() {
-		objects.delete(new ObjectRef(StorageDomain.TEMP, tempKey().value()));
-		written = null;
+		try {
+			objects.delete(new ObjectRef(StorageDomain.TEMP, tempKey().value()));
+		}
+		catch (RuntimeException ignored) {
+			// cleanup is best-effort; preserve the caller's terminalization path
+		}
+		finally {
+			written = null;
+		}
 	}
 
 	public ClaimResult promote(String sourceVersion) {

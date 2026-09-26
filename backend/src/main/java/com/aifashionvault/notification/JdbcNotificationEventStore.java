@@ -77,6 +77,22 @@ public class JdbcNotificationEventStore implements NotificationEventStore {
 	}
 
 	@Override
+	public Optional<NotificationEvent> findByGenerationAndType(GenerationJobId generationId, String type) {
+		if (generationId == null) {
+			throw new IllegalArgumentException("generationId is required");
+		}
+		if (type == null || type.isBlank()) {
+			throw new IllegalArgumentException("type is required");
+		}
+		return one(jdbc.query(
+			"SELECT id, user_id, generation_job_id, type, look_id, created_at, deadline_at, reason "
+				+ "FROM generation_notification_event WHERE generation_job_id = ? AND type = ?",
+			EVENT_MAPPER,
+			generationId.value(),
+			type));
+	}
+
+	@Override
 	public boolean ensureDelivery(UUID eventId, String deviceIdentity) {
 		if (eventId == null) {
 			throw new IllegalArgumentException("eventId is required");
@@ -129,11 +145,12 @@ public class JdbcNotificationEventStore implements NotificationEventStore {
 			throw new IllegalArgumentException("now is required");
 		}
 		return transactions.execute(status -> {
+			UUID claimToken = UUID.randomUUID();
 			List<DueDelivery> rows = jdbc.query(
 				"SELECT e.id AS event_id, e.user_id, e.generation_job_id, e.type, e.look_id, "
 					+ "e.created_at, e.deadline_at, e.reason, d.id AS delivery_id, "
 					+ "d.device_identity, d.status, d.attempt_count, d.next_attempt_at, "
-					+ "d.provider_message_id, d.terminal_result "
+					+ "d.provider_message_id, d.terminal_result, d.claim_epoch "
 					+ "FROM generation_notification_delivery d "
 					+ "JOIN generation_notification_event e ON e.id = d.event_id "
 					+ "WHERE d.status = ? "
@@ -159,78 +176,115 @@ public class JdbcNotificationEventStore implements NotificationEventStore {
 						rs.getInt("attempt_count"),
 						rs.getTimestamp("next_attempt_at"),
 						rs.getString("provider_message_id"),
-						rs.getString("terminal_result"))),
+						rs.getString("terminal_result")),
+					claimToken,
+					rs.getLong("claim_epoch") + 1),
 				DeviceDelivery.PENDING,
 				Timestamp.from(now));
 			if (rows.isEmpty()) {
 				return Optional.empty();
 			}
 			DueDelivery due = rows.getFirst();
-			jdbc.update(
-				"UPDATE generation_notification_delivery SET next_attempt_at = ? WHERE id = ?",
+			int updated = jdbc.update(
+				"UPDATE generation_notification_delivery "
+					+ "SET next_attempt_at = ?, claim_token = ?, claim_epoch = ? "
+					+ "WHERE id = ? AND status = ?",
 				Timestamp.from(now.plus(CLAIM_LEASE)),
-				due.delivery().id());
-			return Optional.of(due);
+				claimToken,
+				due.claimEpoch(),
+				due.delivery().id(),
+				DeviceDelivery.PENDING);
+			return updated == 1 ? Optional.of(due) : Optional.empty();
 		});
 	}
 
 	@Override
-	public void markAccepted(UUID deliveryId, int attemptCount, String providerMessageId, Instant now) {
+	public void markAccepted(UUID deliveryId, UUID claimToken, long claimEpoch, int attemptCount, String providerMessageId, Instant now) {
 		if (deliveryId == null) {
 			throw new IllegalArgumentException("deliveryId is required");
 		}
+		validateClaim(claimToken, claimEpoch);
 		if (now == null) {
 			throw new IllegalArgumentException("now is required");
 		}
-		jdbc.update(
+		int updated = jdbc.update(
 			"UPDATE generation_notification_delivery "
 				+ "SET status = ?, attempt_count = ?, next_attempt_at = NULL, "
-				+ "provider_message_id = ?, terminal_result = ? "
-				+ "WHERE id = ?",
+				+ "provider_message_id = ?, terminal_result = ?, claim_token = NULL "
+				+ "WHERE id = ? AND claim_token = ? AND claim_epoch = ? AND status = ?",
 			DeviceDelivery.ACCEPTED,
 			attemptCount,
 			providerMessageId,
 			DeviceDelivery.ACCEPTED_FOR_DELIVERY,
-			deliveryId);
+			deliveryId,
+			claimToken,
+			claimEpoch,
+			DeviceDelivery.PENDING);
+		if (updated == 0) {
+			return;
+		}
 	}
 
 	@Override
-	public void scheduleRetry(UUID deliveryId, int attemptCount, Instant nextAttemptAt) {
+	public void scheduleRetry(UUID deliveryId, UUID claimToken, long claimEpoch, int attemptCount, Instant nextAttemptAt) {
 		if (deliveryId == null) {
 			throw new IllegalArgumentException("deliveryId is required");
 		}
+		validateClaim(claimToken, claimEpoch);
 		if (nextAttemptAt == null) {
 			throw new IllegalArgumentException("nextAttemptAt is required");
 		}
-		jdbc.update(
+		int updated = jdbc.update(
 			"UPDATE generation_notification_delivery "
-				+ "SET status = ?, attempt_count = ?, next_attempt_at = ?, terminal_result = NULL "
-				+ "WHERE id = ?",
+				+ "SET status = ?, attempt_count = ?, next_attempt_at = ?, terminal_result = NULL, claim_token = NULL "
+				+ "WHERE id = ? AND claim_token = ? AND claim_epoch = ? AND status = ?",
 			DeviceDelivery.PENDING,
 			attemptCount,
 			Timestamp.from(nextAttemptAt),
-			deliveryId);
+			deliveryId,
+			claimToken,
+			claimEpoch,
+			DeviceDelivery.PENDING);
+		if (updated == 0) {
+			return;
+		}
 	}
 
 	@Override
-	public void markTerminal(UUID deliveryId, int attemptCount, String terminalResult, Instant now) {
+	public void markTerminal(UUID deliveryId, UUID claimToken, long claimEpoch, int attemptCount, String terminalResult, Instant now) {
 		if (deliveryId == null) {
 			throw new IllegalArgumentException("deliveryId is required");
 		}
+		validateClaim(claimToken, claimEpoch);
 		if (terminalResult == null || terminalResult.isBlank()) {
 			throw new IllegalArgumentException("terminalResult is required");
 		}
 		if (now == null) {
 			throw new IllegalArgumentException("now is required");
 		}
-		jdbc.update(
+		int updated = jdbc.update(
 			"UPDATE generation_notification_delivery "
-				+ "SET status = ?, attempt_count = ?, next_attempt_at = NULL, terminal_result = ? "
-				+ "WHERE id = ?",
+				+ "SET status = ?, attempt_count = ?, next_attempt_at = NULL, terminal_result = ?, claim_token = NULL "
+				+ "WHERE id = ? AND claim_token = ? AND claim_epoch = ? AND status = ?",
 			DeviceDelivery.FAILED,
 			attemptCount,
 			terminalResult,
-			deliveryId);
+			deliveryId,
+			claimToken,
+			claimEpoch,
+			DeviceDelivery.PENDING);
+		if (updated == 0) {
+			return;
+		}
+	}
+
+	private static void validateClaim(UUID claimToken, long claimEpoch) {
+		if (claimToken == null) {
+			throw new IllegalArgumentException("claimToken is required");
+		}
+		if (claimEpoch < 0) {
+			throw new IllegalArgumentException("claimEpoch must be >= 0");
+		}
 	}
 
 	private static DeviceDelivery mapDelivery(

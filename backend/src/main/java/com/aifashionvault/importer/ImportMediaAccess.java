@@ -25,7 +25,10 @@ public interface ImportMediaAccess {
 	 */
 	boolean publishFetchedImage(InputStream content, long contentLength, StorageKey destination, String contentType);
 
-	/** Best-effort removal of one owned private object. */
+	/**
+	 * Removes one owned private object. Implementations return normally only
+	 * after deletion or already-absent confirmation and propagate retryable failures.
+	 */
 	void deleteObject(StorageKey key);
 
 	enum ClaimOutcome { CLAIMED, REPLAYED, CONFLICT }
@@ -34,8 +37,8 @@ public interface ImportMediaAccess {
 
 		public VerifiedImage {
 			Objects.requireNonNull(id, "id");
-			if (mediaType == null || mediaType.isBlank()) {
-				throw new IllegalArgumentException("mediaType is required");
+			if (!"image/jpeg".equals(mediaType) && !"image/png".equals(mediaType)) {
+				throw new IllegalArgumentException("mediaType must be image/jpeg or image/png");
 			}
 			if (contentLength <= 0) {
 				throw new IllegalArgumentException("contentLength must be positive");

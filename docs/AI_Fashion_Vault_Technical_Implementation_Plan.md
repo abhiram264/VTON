@@ -1,5 +1,7 @@
 # AI Fashion Vault — Technical Implementation Plan
 
+> **Status:** Historical design input, not the current implementation or execution plan. Current scope and source contracts are in `docs/AI_Fashion_Vault_MVP_Production_Readiness_PR_Plan.md`, `docs/ARCHITECTURE.md`, and `docs/CONTRACT_INVENTORY.md`; where this document disagrees, those sources win. Do not execute this plan automatically.
+
 > **Product direction:** A share-first consumer mobile app that lets users share a fashion item from anywhere, try it on using a persistent “My Model” avatar, save the item to a personal Vault, combine saved items in a Studio, generate complete Looks, and reuse those Looks over time.
 
 ---

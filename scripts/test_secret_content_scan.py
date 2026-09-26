@@ -68,6 +68,25 @@ class SecretContentScanTests(unittest.TestCase):
         self.assertIn("google-service-account", combined)
         self.assertNotIn(SA_BODY, combined)
 
+    def test_repository_mode_scans_untracked_and_ignored_files_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            subprocess.run(["git", "init", "--quiet", str(root)], check=True)
+            (root / ".gitignore").write_text("credentials/\n", encoding="utf-8")
+            (root / "untracked.txt").write_text(_pem(), encoding="utf-8")
+            credentials = root / "credentials"
+            credentials.mkdir()
+            (credentials / "local.pem").write_text(_sa_json(), encoding="utf-8")
+            generated = root / "node_modules" / "generated"
+            generated.mkdir(parents=True)
+            (generated / "fixture.txt").write_text(_pem(), encoding="utf-8")
+            proc = _scan("--root", str(root))
+        combined = proc.stdout + proc.stderr
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("untracked.txt: private-key", combined)
+        self.assertIn("credentials/local.pem: google-service-account", combined)
+        self.assertNotIn("generated/fixture.txt", combined)
+
     def test_detection_is_content_based_not_filename_based(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

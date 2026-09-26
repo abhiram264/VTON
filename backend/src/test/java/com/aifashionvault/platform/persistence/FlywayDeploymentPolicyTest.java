@@ -20,11 +20,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 class FlywayDeploymentPolicyTest {
 
 	private static final Pattern MIGRATION_FILE_PATTERN = Pattern.compile("^V(\\d{3})__[a-z0-9_]+\\.sql$");
-	private static final int PUBLISHED_CEILING_VERSION = 22;
-	private static final int RESERVED_NEXT_VERSION = 24;
+	private static final int PUBLISHED_CEILING_VERSION = 23;
+	private static final int RESERVED_NEXT_VERSION = 25;
+	private static final String CLAIMED_V024 = "V024__notification_fencing_and_provider_constraints__contract.sql";
 	private static final List<String> FORBIDDEN_FILE_PREFIXES = List.of("U", "R__", "B__");
 	private static final Pattern DESTRUCTIVE_PATTERN = Pattern.compile(
-		"(?i)\\b(DROP\\s+TABLE|DROP\\s+COLUMN|DROP\\s+CONSTRAINT|TRUNCATE|ALTER\\s+COLUMN)");
+		"(?is)\\b(?:DROP\\s+(?!INDEX(?:\\s+UNIQUE)?\\s+CONCURRENTLY\\b)[A-Z][A-Z0-9_ ]*|TRUNCATE\\b|ALTER\\s+TABLE\\b[^;]*?\\b(?:DROP|RENAME|ALTER\\s+COLUMN|SET\\s+DATA\\s+TYPE)\\b)");
 	private static final Pattern CONCURRENT_INDEX_PATTERN = Pattern.compile(
 		"(?i)(CREATE|DROP)(\\s+UNIQUE)?\\s+INDEX\\s+CONCURRENTLY");
 	private static final Pattern ADD_COLUMN_NOT_NULL_PATTERN = Pattern.compile(
@@ -35,7 +36,10 @@ class FlywayDeploymentPolicyTest {
 
 	private static final Pattern BLOCK_COMMENT = Pattern.compile("/\\*.*?\\*/", Pattern.DOTALL);
 	private static final Pattern CREATE_TABLE_STATEMENT = Pattern.compile("(?is)^\\s*CREATE\\s+TABLE\\b");
-	private static final Pattern DEFAULT_KEYWORD_PATTERN = Pattern.compile("(?i)\\bDEFAULT\\b");
+	private static final Pattern CONSTANT_DEFAULT_PATTERN = Pattern.compile(
+		"(?is)\\bDEFAULT\\s+('(?:[^']|'')*'|[-+]?\\d+(?:\\.\\d+)?|TRUE|FALSE|NULL)"
+			+ "(?:\\s*::\\s*[A-Z_][A-Z0-9_]*(?:\\s*\\[[^\\]]*\\])?)*"
+			+ "(?=\\s+(?:NOT\\s+NULL|NULL|REFERENCES|CHECK|UNIQUE|PRIMARY\\s+KEY|COLLATE|GENERATED)\\b|[,)]|$)");
 
 	@Test
 	void migrationFilesFollowVersionedNamingOnly() throws IOException {
@@ -104,8 +108,10 @@ class FlywayDeploymentPolicyTest {
 	}
 
 	@Test
-	void v024StaysReservedUntilClaimed() throws IOException {
+	void v024IsClaimedAndV025StaysReserved() throws IOException {
 		Path migrations = migrationRoot();
+		assertThat(migrations.resolve(CLAIMED_V024)).isRegularFile();
+
 		List<String> violations = new ArrayList<>();
 		try (Stream<Path> stream = Files.list(migrations)) {
 			List<Path> files = stream.filter(Files::isRegularFile).sorted().toList();
@@ -180,17 +186,24 @@ class FlywayDeploymentPolicyTest {
 					if (CREATE_TABLE_STATEMENT.matcher(trimmed).find()) {
 						continue;
 					}
-					if (ADD_COLUMN_NOT_NULL_PATTERN.matcher(trimmed).find()) {
-						if (!DEFAULT_KEYWORD_PATTERN.matcher(trimmed).find()) {
-							violations.add(file.getFileName() + " adds NOT NULL column without DEFAULT in statement: '" + trimmed + "' (rule 5)");
-						}
+					if (ADD_COLUMN_NOT_NULL_PATTERN.matcher(trimmed).find()
+						&& !CONSTANT_DEFAULT_PATTERN.matcher(trimmed).find()) {
+						violations.add(file.getFileName() + " adds NOT NULL column without a constant DEFAULT in statement: '" + trimmed + "' (rule 5)");
 					}
 				}
 			}
 		}
 		assertThat(violations)
-			.as("Statements adding NOT NULL columns must specify DEFAULT outside CREATE TABLE (rule 5)")
+			.as("Statements adding NOT NULL columns must specify a constant DEFAULT outside CREATE TABLE (rule 5)")
 			.isEmpty();
+	}
+
+	@Test
+	void notNullDefaultPolicyAllowsOnlyConstants() {
+		assertThat(CONSTANT_DEFAULT_PATTERN.matcher("ALTER TABLE t ADD COLUMN n bigint NOT NULL DEFAULT 0").find()).isTrue();
+		assertThat(CONSTANT_DEFAULT_PATTERN.matcher("ALTER TABLE t ADD COLUMN s text DEFAULT 'pending' NOT NULL").find()).isTrue();
+		assertThat(CONSTANT_DEFAULT_PATTERN.matcher("ALTER TABLE t ADD COLUMN n bigint NOT NULL DEFAULT now()").find()).isFalse();
+		assertThat(CONSTANT_DEFAULT_PATTERN.matcher("ALTER TABLE t ADD COLUMN id uuid NOT NULL DEFAULT gen_random_uuid()").find()).isFalse();
 	}
 
 	@Test
@@ -207,17 +220,52 @@ class FlywayDeploymentPolicyTest {
 				}
 				String content = Files.readString(file, StandardCharsets.UTF_8);
 				String stripped = stripSqlComments(content);
-				if (DESTRUCTIVE_PATTERN.matcher(stripped).find()) {
-					if (!CONTRACT_FILENAME_PATTERN.matcher(filename).matches()) {
+				if (DESTRUCTIVE_PATTERN.matcher(stripped).find()
+					&& !CONTRACT_FILENAME_PATTERN.matcher(filename).matches()) {
 						violations.add(filename + " contains destructive statement matching " + DESTRUCTIVE_PATTERN.pattern()
 							+ " but filename does not end with " + CONTRACT_DESCRIPTION_SUFFIX + ".sql (rule 6)");
 					}
-				}
 			}
 		}
 		assertThat(violations)
-			.as("Future migrations with destructive statements must end in __contract.sql (rule 6)")
+			.as("Future migrations with destructive statements must end in " + CONTRACT_DESCRIPTION_SUFFIX + ".sql (rule 6)")
 			.isEmpty();
+	}
+
+	@Test
+	void destructivePatternCoversPostgresForms() {
+		List<String> forms = List.of(
+			"DROP TABLE t",
+			"DROP INDEX i",
+			"DROP MATERIALIZED VIEW m",
+			"DROP VIEW v",
+			"DROP SEQUENCE s",
+			"DROP SCHEMA s",
+			"DROP DATABASE d",
+			"DROP EXTENSION e",
+			"DROP FUNCTION f()",
+			"DROP PROCEDURE p()",
+			"DROP ROUTINE r()",
+			"DROP TRIGGER tr ON t",
+			"DROP TYPE ty",
+			"DROP DOMAIN dom",
+			"DROP POLICY pol ON t",
+			"DROP RULE rule ON t",
+			"DROP STATISTICS stat",
+			"DROP PUBLICATION pub",
+			"DROP SUBSCRIPTION sub",
+			"DROP ROLE role",
+			"DROP USER user",
+			"DROP OWNED BY role",
+			"ALTER TABLE t DROP COLUMN c",
+			"ALTER TABLE t DROP CONSTRAINT c",
+			"ALTER TABLE t ALTER COLUMN c TYPE bigint",
+			"ALTER TABLE t RENAME COLUMN c TO d",
+			"TRUNCATE TABLE t");
+		for (String form : forms) {
+			assertThat(DESTRUCTIVE_PATTERN.matcher(form).find()).as(form).isTrue();
+		}
+		assertThat(DESTRUCTIVE_PATTERN.matcher("DROP INDEX CONCURRENTLY i").find()).isFalse();
 	}
 
 	@Test

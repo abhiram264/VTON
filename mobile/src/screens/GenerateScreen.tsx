@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { choosePhoto } from '../features/my-model/photoSource';
 import { createLook, isNetworkError } from '../features/generation/createLook';
@@ -64,40 +64,107 @@ export default function GenerateScreen({
   const [outageState, setOutageState] = useState<
     'pending' | 'saved' | 'save_failed' | null
   >(null);
+  const mountedRef = useRef(true);
+  const operationRef = useRef(0);
+  const busyRef = useRef(false);
+  const operationAbortRef = useRef<AbortController | null>(null);
+  const [retryBlocked, setRetryBlocked] = useState(false);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      operationRef.current += 1;
+      operationAbortRef.current?.abort();
+      operationAbortRef.current = null;
+    };
+  }, []);
 
-  async function start(retryPhoto?: LocalPhoto) {
-    if (busy) {
+  async function start(retryPhoto?: LocalPhoto, saveOnly = false) {
+    if (busyRef.current) {
       return;
     }
+    const operation = ++operationRef.current;
+    const isCurrent = () =>
+      mountedRef.current && operationRef.current === operation;
+    busyRef.current = true;
     setBusy(true);
     setNotice(null);
     setPhase(null);
     setIsQualityFailure(false);
     setOutageState(null);
+    setRetryBlocked(false);
+    const controller = new AbortController();
+    operationAbortRef.current = controller;
     try {
       let pickedPhoto: LocalPhoto | null = retryPhoto ?? null;
+      const savePhoto = async (photo: LocalPhoto) => {
+        const effectiveImporter: ShareImportResolver =
+          importer ??
+          (async (payload: SharePayload) => {
+            if (payload.kind === 'image') {
+              const item = await vault.createFromPhoto({
+                uri: payload.localImageUri,
+              });
+              return { status: 'READY', importId: item.id };
+            }
+            return {
+              status: 'FAILED_TERMINAL',
+              importId: '',
+              reason: 'INVALID_SOURCE',
+            };
+          });
+        const outcome = await saveToVaultFallback({
+          photo,
+          importer: effectiveImporter,
+        });
+        if (isCurrent()) {
+          setOutageState(outcome.outcome === 'saved' ? 'saved' : 'save_failed');
+        }
+      };
+      if (saveOnly) {
+        const photo = retryPhoto ?? retainedPhoto;
+        if (!photo) {
+          setOutageState('save_failed');
+          return;
+        }
+        await savePhoto(photo);
+        return;
+      }
       let result: CreateLookOutcome;
       try {
         result = await createLook({
-          picker: async () => {
-            const photo = await picker();
-            if (photo) {
-              pickedPhoto = photo;
-            }
-            return photo;
-          },
+          picker: retryPhoto
+            ? async () => retryPhoto
+            : async () => {
+                const photo = await picker();
+                if (photo) {
+                  pickedPhoto = photo;
+                }
+                return photo;
+              },
           upload: productUploader,
           api,
-          onUpdate: generation => setPhase(generation.phase),
           photo: retryPhoto,
+          signal: controller.signal,
+          deadlineMs: 60_000,
+          maxAttempts: 15,
+          onUpdate: generation => {
+            if (isCurrent()) setPhase(generation.phase);
+          },
         });
       } catch (error) {
+        if (!isCurrent()) return;
+        if (!pickedPhoto && retryPhoto === undefined) {
+          setNotice('Could not select an item. Try again.');
+          return;
+        }
         result = {
           outcome: 'failed',
           reason: 'error',
           ...(isNetworkError(error) ? { networkLevel: true } : {}),
         };
       }
+      if (!isCurrent()) return;
       if (pickedPhoto) {
         setRetainedPhoto(pickedPhoto);
       }
@@ -124,6 +191,11 @@ export default function GenerateScreen({
         setIsQualityFailure(true);
         return;
       }
+      if (result.retryable === false) {
+        setRetryBlocked(true);
+        setNotice('We could not confirm whether this Look was created.');
+        return;
+      }
       const isOutage = isProviderOutage(
         result.code,
         result.reason === 'error' && Boolean(result.networkLevel),
@@ -132,31 +204,7 @@ export default function GenerateScreen({
         setOutageState('pending');
         const photoToSave = pickedPhoto ?? retainedPhoto;
         if (photoToSave) {
-          const effectiveImporter: ShareImportResolver =
-            importer ??
-            (async (payload: SharePayload) => {
-              if (payload.kind === 'image') {
-                const item = await vault.createFromPhoto({
-                  uri: payload.localImageUri,
-                });
-                return { status: 'READY', importId: item.id };
-              }
-              return {
-                status: 'FAILED_TERMINAL',
-                importId: '',
-                reason: 'INVALID_SOURCE',
-              };
-            });
-
-          const outcome = await saveToVaultFallback({
-            photo: photoToSave,
-            importer: effectiveImporter,
-          });
-          if (outcome.outcome === 'saved') {
-            setOutageState('saved');
-          } else {
-            setOutageState('save_failed');
-          }
+          await savePhoto(photoToSave);
         } else {
           setOutageState('save_failed');
         }
@@ -164,7 +212,10 @@ export default function GenerateScreen({
       }
       setNotice('Could not create the look. Try again.');
     } finally {
-      setBusy(false);
+      if (isCurrent()) {
+        busyRef.current = false;
+        setBusy(false);
+      }
     }
   }
 
@@ -175,7 +226,14 @@ export default function GenerateScreen({
         Choose one product photo (JPEG or PNG). Your current My Model will wear
         it.
       </Text>
-      {phase ? <Text style={styles.phase}>{PHASE_LABELS[phase]}</Text> : null}
+      {phase ? (
+        <Text
+          accessibilityLiveRegion="polite"
+          style={styles.phase}
+        >
+          {PHASE_LABELS[phase]}
+        </Text>
+      ) : null}
       {outageState ? (
         <View style={styles.outageBlock}>
           <Text accessibilityLiveRegion="polite" style={styles.outageTitle}>
@@ -184,6 +242,10 @@ export default function GenerateScreen({
           {outageState === 'saved' ? (
             <Text accessibilityLiveRegion="polite" style={styles.outageBody}>
               {OUTAGE_BODY}
+            </Text>
+          ) : outageState === 'save_failed' ? (
+            <Text accessibilityLiveRegion="polite" style={styles.outageBody}>
+              We could not save this item to the Vault. Try again.
             </Text>
           ) : null}
         </View>
@@ -201,6 +263,7 @@ export default function GenerateScreen({
           <>
             <Pressable
               accessibilityRole="button"
+              accessibilityState={{ disabled: busy, busy }}
               disabled={busy}
               onPress={() => start(retainedPhoto ?? undefined)}
               style={[styles.button, styles.primary, busy && styles.disabled]}
@@ -209,6 +272,7 @@ export default function GenerateScreen({
             </Pressable>
             <Pressable
               accessibilityRole="button"
+              accessibilityState={{ disabled: busy, busy }}
               disabled={busy}
               onPress={() => start()}
               style={[styles.button, styles.secondary, busy && styles.disabled]}
@@ -221,18 +285,19 @@ export default function GenerateScreen({
         ) : outageState === 'save_failed' ? (
           <Pressable
             accessibilityRole="button"
+            accessibilityState={{ disabled: busy, busy }}
             disabled={busy}
-            onPress={() => start(retainedPhoto ?? undefined)}
-            style={[styles.button, styles.primary, busy && styles.disabled]}
+            onPress={() => start(retainedPhoto ?? undefined, true)}
           >
             <Text style={styles.primaryLabel}>{ACTION_TRY_AGAIN}</Text>
           </Pressable>
         ) : (
           <Pressable
             accessibilityRole="button"
-            disabled={busy}
+            accessibilityState={{ disabled: busy || retryBlocked, busy }}
+            disabled={busy || retryBlocked}
             onPress={() => start()}
-            style={[styles.button, styles.primary, busy && styles.disabled]}
+            style={[styles.button, styles.primary, (busy || retryBlocked) && styles.disabled]}
           >
             <Text style={styles.primaryLabel}>
               {busy ? 'Working…' : 'Choose product photo'}

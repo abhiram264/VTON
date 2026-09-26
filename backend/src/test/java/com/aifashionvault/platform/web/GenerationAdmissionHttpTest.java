@@ -1,6 +1,9 @@
 package com.aifashionvault.platform.web;
 
 import java.io.InputStream;
+import java.time.Clock;
+import java.util.HashSet;
+import java.util.Set;
 
 import java.sql.Timestamp;
 import java.time.Duration;
@@ -23,6 +26,11 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 import org.testcontainers.postgresql.PostgreSQLContainer;
+import com.aifashionvault.admission.GenerationRateLimiter;
+import com.aifashionvault.admission.GenerationAdmissionRequest;
+import com.aifashionvault.admission.JdbcGenerationRateLimiter;
+import com.aifashionvault.generation.JdbcGenerationStore;
+import org.springframework.http.HttpStatus;
 
 import com.aifashionvault.platform.objectstore.ClaimResult;
 import com.aifashionvault.platform.objectstore.GenerationMediaStore;
@@ -66,8 +74,14 @@ class GenerationAdmissionHttpTest {
 	@BeforeEach
 	void reset() {
 		properties.setAdmissionPaused(false);
-		((ControlledGenerationMediaStore) mediaStore).failRelease = false;
-		jdbc.update("TRUNCATE TABLE look_item, look, quality_result, generation_callback_inbox, generation_work_outbox, "
+		ControlledGenerationMediaStore controlledStore = controlledMediaStore();
+		controlledStore.failRelease = false;
+		controlledStore.preflightCalls = 0;
+		controlledStore.claimCalls = 0;
+		controlledStore.releaseCalls = 0;
+		controlledStore.retainedProductInputs.clear();
+		jdbc.update("TRUNCATE TABLE generation_admission_counter, generation_admission_reservation, "
+			+ "look_item, look, quality_result, generation_callback_inbox, generation_work_outbox, "
 			+ "generation_quota_reservation, generation_notification_delivery, generation_notification_event, "
 			+ "generation_provider_capacity_slot, generation_attempt, generation_render_step_item, generation_render_step, "
 			+ "generation_job_product, generation_job, vault_item, studio_item, studio_session, avatar_image, "
@@ -76,7 +90,8 @@ class GenerationAdmissionHttpTest {
 	@Test
 	void mediaReleaseFailureStillRefundsReservationAndPreservesOriginalFailure() throws Exception {
 		Owner owner = seedOwner(true);
-		((ControlledGenerationMediaStore) mediaStore).failRelease = true;
+		ControlledGenerationMediaStore controlledStore = controlledMediaStore();
+		controlledStore.failRelease = true;
 		jdbc.update("ALTER TABLE generation_job ADD CONSTRAINT force_creation_failure CHECK (false) NOT VALID");
 
 
@@ -89,11 +104,49 @@ class GenerationAdmissionHttpTest {
 			assertThat(thrown.getCause()).isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
 			assertThat(thrown).hasMessageNotContaining("sensitive-media-release-detail");
 			assertThat(jdbc.queryForObject("SELECT COALESCE(SUM(count), 0) FROM generation_admission_counter", Long.class)).isZero();
+			assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM generation_quota_reservation", Integer.class)).isZero();
+			assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM generation_admission_reservation WHERE released_at IS NOT NULL", Integer.class)).isEqualTo(3);
+			assertThat(controlledStore.preflightCalls).isEqualTo(1);
+			assertThat(controlledStore.claimCalls).isEqualTo(1);
+			assertThat(controlledStore.releaseCalls).isEqualTo(1);
 		} finally {
 			jdbc.update("ALTER TABLE generation_job DROP CONSTRAINT force_creation_failure");
 		}
 	}
 
+
+	@Test
+	void commitDelegateThenThrowReturnsUnknownOutcomeWithoutReleasingDurableInputs() throws Exception {
+		Owner owner = seedOwner(true);
+		ControlledGenerationMediaStore controlledStore = controlledMediaStore();
+		GenerationRateLimiter delegate = new JdbcGenerationRateLimiter(jdbc.getDataSource(), Clock.systemUTC());
+		GenerationRateLimiter commitThenThrow = new GenerationRateLimiter() {
+			@Override public GenerationRateLimiter.Reservation reserve(GenerationAdmissionRequest request) { return delegate.reserve(request); }
+			@Override public void commit(GenerationRateLimiter.Reservation reservation) {
+				delegate.commit(reservation);
+				throw new IllegalStateException("commit response lost");
+			}
+			@Override public void release(GenerationRateLimiter.Reservation reservation) { delegate.release(reservation); }
+		};
+		GenerationCreationService service = new GenerationCreationService(
+			new JdbcGenerationStore(jdbc.getDataSource()), jdbc, properties, Clock.systemUTC(), controlledStore, commitThenThrow);
+
+		GenerationCreationService.Problem problem = org.junit.jupiter.api.Assertions.assertThrows(
+			GenerationCreationService.Problem.class,
+			() -> service.create(owner.userId(), "commit-delegate-throw", new GenerationRequest(owner.uploadId())));
+
+		assertThat(problem.status()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+		assertThat(problem.code()).isEqualTo(GenerationCreationService.CREATE_OUTCOME_UNKNOWN);
+		assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM generation_job WHERE client_request_id = ?", Integer.class,
+			"commit-delegate-throw")).isEqualTo(1);
+		assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM generation_quota_reservation WHERE released_at IS NULL", Integer.class)).isEqualTo(1);
+		assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM generation_admission_reservation WHERE committed_at IS NOT NULL AND released_at IS NULL", Integer.class)).isEqualTo(3);
+		assertThat(jdbc.queryForList("SELECT count FROM generation_admission_counter", Long.class))
+			.containsExactlyInAnyOrder(1L, 1L, 1L);
+		assertThat(controlledStore.retainedProductInputs).containsExactly(owner.uploadId());
+		assertThat(controlledStore.claimCalls).isEqualTo(1);
+		assertThat(controlledStore.releaseCalls).isZero();
+	}
 
 	@Test
 	void authenticationPrecedesRequestAndAdmissionChecks() throws Exception {
@@ -160,6 +213,12 @@ class GenerationAdmissionHttpTest {
 				.andExpect(content().string("{\"code\":\"PRODUCT_UPLOAD_MISSING\"}"));
 		}
 		assertThat(jdbc.queryForObject("SELECT COALESCE(SUM(count), 0) FROM generation_admission_counter", Long.class)).isZero();
+		assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM generation_quota_reservation", Integer.class)).isZero();
+		assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM generation_admission_reservation", Integer.class)).isZero();
+		ControlledGenerationMediaStore controlledStore = controlledMediaStore();
+		assertThat(controlledStore.preflightCalls).isEqualTo(6);
+		assertThat(controlledStore.claimCalls).isZero();
+		assertThat(controlledStore.releaseCalls).isZero();
 
 		mockMvc.perform(post("/generations").header(HttpHeaders.AUTHORIZATION, bearer(owner.token()))
 				.header("Idempotency-Key", "accepted-upload")
@@ -167,6 +226,11 @@ class GenerationAdmissionHttpTest {
 			.andExpect(status().isAccepted());
 		assertThat(jdbc.queryForList("SELECT count FROM generation_admission_counter WHERE count <> 0", Long.class))
 			.containsExactlyInAnyOrder(1L, 1L, 1L);
+		assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM generation_quota_reservation", Integer.class)).isEqualTo(1);
+		assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM generation_admission_reservation WHERE committed_at IS NOT NULL AND released_at IS NULL", Integer.class)).isEqualTo(3);
+		assertThat(controlledStore.preflightCalls).isEqualTo(7);
+		assertThat(controlledStore.claimCalls).isEqualTo(1);
+		assertThat(controlledStore.releaseCalls).isZero();
 	}
 
 	private Owner seedOwner(boolean model) throws Exception {
@@ -175,7 +239,7 @@ class GenerationAdmissionHttpTest {
 		UserId userId = new UserId(jdbc.queryForObject(
 			"SELECT user_id FROM identity_mapping WHERE subject = ?", UUID.class, InProcessJwtFixture.subject()));
 		if (model) insertModel(userId);
-		return new Owner(token, UUID.randomUUID());
+		return new Owner(token, userId, UUID.randomUUID());
 	}
 
 	private void insertModel(UserId userId) {
@@ -188,14 +252,25 @@ class GenerationAdmissionHttpTest {
 	}
 
 	private void assertNoEffects() {
+		ControlledGenerationMediaStore controlledStore = controlledMediaStore();
+		assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM generation_quota_reservation", Integer.class)).isZero();
+		assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM generation_admission_reservation", Integer.class)).isZero();
+		assertThat(jdbc.queryForObject("SELECT COALESCE(SUM(count), 0) FROM generation_admission_counter", Long.class)).isZero();
+		assertThat(controlledStore.preflightCalls).isZero();
+		assertThat(controlledStore.claimCalls).isZero();
+		assertThat(controlledStore.releaseCalls).isZero();
 		assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM generation_job", Integer.class)).isZero();
 		assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM generation_work_outbox", Integer.class)).isZero();
 		assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM generation_attempt", Integer.class)).isZero();
 	}
 
+	private ControlledGenerationMediaStore controlledMediaStore() {
+		return (ControlledGenerationMediaStore) mediaStore;
+	}
+
 	private static String body(UUID uploadId) { return "{\"productUploadId\":\"" + uploadId + "\"}"; }
 	private static String bearer(String token) { return "Bearer " + token; }
-	private record Owner(String token, UUID uploadId) {}
+	private record Owner(String token, UserId userId, UUID uploadId) {}
 
     @TestConfiguration
     static class Configuration {
@@ -205,14 +280,25 @@ class GenerationAdmissionHttpTest {
 
 	static final class ControlledGenerationMediaStore implements GenerationMediaStore {
 		boolean failRelease;
+		int preflightCalls;
+		int claimCalls;
+		int releaseCalls;
+		final Set<UUID> retainedProductInputs = new HashSet<>();
 		@Override public void putBounded(StorageKey dest, InputStream source, long maxBytes, String mediaType) { }
 		@Override public ClaimResult claim(com.aifashionvault.platform.objectstore.GenerationClaimCommand command) { throw new UnsupportedOperationException(); }
 		@Override public void preflightProductInput(ProductInputClaimCommand command) {
+			preflightCalls++;
 			if (command.productUploadId().value().equals(new UUID(0, 0)))
 				throw new com.aifashionvault.platform.objectstore.ObjectStoreExceptions.StagedObjectMissingException("missing staged object");
 		}
-		@Override public ClaimResult claimProductInput(ProductInputClaimCommand command) { return new ClaimResult.Copied(); }
+		@Override public ClaimResult claimProductInput(ProductInputClaimCommand command) {
+			claimCalls++;
+			retainedProductInputs.add(command.productUploadId().value());
+			return new ClaimResult.Copied();
+		}
 		@Override public void releaseProductInput(ProductInputClaimCommand command) {
+			releaseCalls++;
+			retainedProductInputs.remove(command.productUploadId().value());
 			if (failRelease) throw new IllegalStateException("sensitive-media-release-detail");
 		}
 	}

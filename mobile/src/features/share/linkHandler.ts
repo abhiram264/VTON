@@ -17,7 +17,13 @@ type Navigate = (
 const handledShareIds = new Set<string>();
 const inFlightShareIds = new Set<string>();
 
-let started = false;
+let activeRegistration: {
+  generation: number;
+  navigate: Navigate;
+  lookNavigate: LookNavigate;
+  subscription: {remove: () => void} | null;
+} | null = null;
+let registrationGeneration = 0;
 
 async function handleShareLink(uri: string, navigate: Navigate) {
   // Decline before consuming when the platform's share-import flag is off:
@@ -65,30 +71,61 @@ function handleUrlEvent(
   void handleShareLink(uri, navigate);
 }
 
-// Idempotent: registers the warm-start url listener FIRST (so a link arriving
-// during cold start is not lost), then resolves the initial URL. Returns a
-// disposer; subsequent calls are no-ops.
+// Registers the warm-start url listener FIRST (so a link arriving during cold
+// start is not lost), then resolves the initial URL. A remount updates the
+// callbacks on the single live subscription; stale initial-URL callbacks and
+// stale disposers cannot affect the current AppShell.
 export function startShareLinkHandling(
   navigate: Navigate,
   lookNavigate: LookNavigate,
 ): () => void {
-  if (started) return () => undefined;
-  started = true;
-  const subscription = Linking.addEventListener('url', event => {
-    handleUrlEvent(event.url, navigate, lookNavigate);
+  const generation = ++registrationGeneration;
+  if (activeRegistration !== null) {
+    activeRegistration.generation = generation;
+    activeRegistration.navigate = navigate;
+    activeRegistration.lookNavigate = lookNavigate;
+    return () => {
+      if (activeRegistration?.generation !== generation) {
+        return;
+      }
+      activeRegistration.subscription?.remove();
+      activeRegistration = null;
+    };
+  }
+
+  const registration = {
+    generation,
+    navigate,
+    lookNavigate,
+    subscription: null as {remove: () => void} | null,
+  };
+  activeRegistration = registration;
+  registration.subscription = Linking.addEventListener('url', event => {
+    if (activeRegistration !== registration) return;
+    handleUrlEvent(event.url, registration.navigate, registration.lookNavigate);
   });
   void (async () => {
     try {
       const initialUri = await Linking.getInitialURL();
-      if (typeof initialUri === 'string') {
-        handleUrlEvent(initialUri, navigate, lookNavigate);
+      if (
+        activeRegistration === registration &&
+        typeof initialUri === 'string'
+      ) {
+        handleUrlEvent(
+          initialUri,
+          registration.navigate,
+          registration.lookNavigate,
+        );
       }
     } catch {
       // Same silence policy as above.
     }
   })();
   return () => {
-    subscription.remove();
-    started = false;
+    if (activeRegistration?.generation !== generation) {
+      return;
+    }
+    registration.subscription?.remove();
+    activeRegistration = null;
   };
 }

@@ -148,16 +148,58 @@ export async function pollGeneration(options: {
   delay?: (ms: number) => Promise<void>;
   onUpdate?: (generation: GenerationResource) => void;
   hint?: { current: boolean };
+  signal?: AbortSignal;
+  deadlineMs?: number;
+  maxAttempts?: number;
 }): Promise<GenerationResource> {
+  if (options.signal?.aborted) {
+    throw new Error('Aborted');
+  }
   const delay =
     options.delay ??
-    ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)));
+    ((ms: number) =>
+      new Promise<void>((resolve, reject) => {
+        let timer: number;
+        const onAbort = () => {
+          clearTimeout(timer);
+          options.signal?.removeEventListener('abort', onAbort);
+          reject(new Error('Aborted'));
+        };
+        timer = setTimeout(() => {
+          options.signal?.removeEventListener('abort', onAbort);
+          resolve();
+        }, ms);
+        options.signal?.addEventListener('abort', onAbort, {once: true});
+        if (options.signal?.aborted) {
+          clearTimeout(timer);
+          options.signal.removeEventListener('abort', onAbort);
+          reject(new Error('Aborted'));
+        }
+      }));
   const intervalMs = options.intervalMs ?? 2000;
+  const startedAt = Date.now();
+  let attempts = 0;
   for (;;) {
+    if (options.signal?.aborted) {
+      throw new Error('Aborted');
+    }
+    if (
+      options.deadlineMs !== undefined &&
+      Date.now() - startedAt >= options.deadlineMs
+    ) {
+      throw new Error('Generation polling deadline exceeded');
+    }
+    if (options.maxAttempts !== undefined && attempts >= options.maxAttempts) {
+      throw new Error('Generation polling maximum attempts exceeded');
+    }
+    attempts += 1;
     const generation = await options.get(options.id);
     options.onUpdate?.(generation);
     if (isTerminalGeneration(generation)) {
       return generation;
+    }
+    if (options.signal?.aborted) {
+      throw new Error('Aborted');
     }
     if (options.hint?.current === true) {
       options.hint.current = false;

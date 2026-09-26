@@ -18,9 +18,19 @@ public class AppIntegrityConfiguration {
     ) {
         IntegrityEvidenceProvider provider = providers.getIfAvailable(() -> ignored -> ProviderVerification.unavailable());
         return new DefaultAppIntegrityVerifier(
-            properties.required(), new AndroidIntegrityAdapter(provider), new IosIntegrityAdapter(provider), Clock.systemUTC());
+            properties.required(),
+            new AndroidIntegrityAdapter(provider, properties.androidAppId()),
+            new IosIntegrityAdapter(provider, properties.iosAppId()),
+            Clock.systemUTC());
     }
 
     @ConfigurationProperties(prefix = "vault.integrity")
-    public record Properties(boolean required) {}
+    public record Properties(boolean required, String androidAppId, String iosAppId) {
+        public Properties() {
+            this(false, null, null);
+        }
+        public Properties(boolean required) {
+            this(required, null, null);
+        }
+    }
 }

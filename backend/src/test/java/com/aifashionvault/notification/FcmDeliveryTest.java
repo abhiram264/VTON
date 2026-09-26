@@ -10,13 +10,14 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
-import java.util.ArrayList;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Random;
 import java.util.TimeZone;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
 import javax.sql.DataSource;
@@ -431,12 +432,14 @@ class FcmDeliveryTest {
 	@Test
 	void onErrorHandlerFailureDoesNotEscapeAndOriginalErrorStillPropagatesUnchanged() {
 		Seed seed = seedLookReady();
-		FcmDeliveryWorker instrumented = workerWith(FailingHandlers.onError(), blankTokenClient());
+		AtomicInteger errorCallbacks = new AtomicInteger();
+		FcmDeliveryWorker instrumented = workerWith(FailingHandlers.onError(errorCallbacks), blankTokenClient());
 
 		assertThatThrownBy(() -> instrumented.processNext(clock.instant()))
 			.isInstanceOf(IllegalStateException.class)
 			.hasMessage("access token is required");
 
+		assertThat(errorCallbacks).hasValue(1);
 		assertThat(fcm.requests).isEmpty();
 		DeviceDelivery unchanged = store.findDelivery(seed.eventId(), DEVICE).orElseThrow();
 		assertThat(unchanged.status()).isEqualTo(DeviceDelivery.PENDING);
@@ -661,8 +664,12 @@ class FcmDeliveryTest {
 			return throwing(FailingStage.ON_START);
 		}
 
+		private static ObservationHandler<Observation.Context> onError(AtomicInteger callbacks) {
+			return throwing(FailingStage.ON_ERROR, callbacks);
+		}
+
 		private static ObservationHandler<Observation.Context> onError() {
-			return throwing(FailingStage.ON_ERROR);
+			return onError(new AtomicInteger());
 		}
 
 		private static ObservationHandler<Observation.Context> onStop() {
@@ -670,6 +677,10 @@ class FcmDeliveryTest {
 		}
 
 		private static ObservationHandler<Observation.Context> throwing(FailingStage stage) {
+			return throwing(stage, null);
+		}
+
+		private static ObservationHandler<Observation.Context> throwing(FailingStage stage, AtomicInteger callbacks) {
 			return new ObservationHandler<Observation.Context>() {
 
 				@Override
@@ -687,6 +698,9 @@ class FcmDeliveryTest {
 				@Override
 				public void onEvent(Observation.Event event, Observation.Context context) {
 					if (stage == FailingStage.ON_ERROR) {
+						if (callbacks != null) {
+							callbacks.incrementAndGet();
+						}
 						throw new IllegalStateException("canary onError handler failure");
 					}
 				}
@@ -739,7 +753,7 @@ class FcmDeliveryTest {
 
 		private final HttpServer server;
 		private final ConcurrentLinkedQueue<ScriptedResponse> script = new ConcurrentLinkedQueue<>();
-		private final List<CapturedSend> requests = new ArrayList<>();
+		private final List<CapturedSend> requests = new CopyOnWriteArrayList<>();
 
 		private FakeFcmServer(HttpServer server) {
 			this.server = server;

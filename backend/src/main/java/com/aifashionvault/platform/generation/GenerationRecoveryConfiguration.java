@@ -2,10 +2,7 @@ package com.aifashionvault.platform.generation;
 
 import java.time.Clock;
 
-import javax.sql.DataSource;
-
 import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -24,23 +21,25 @@ import com.aifashionvault.platform.queue.WorkOutboxStore;
  * enable it alongside the relay it depends on for SQS publication.</p>
  */
 @Configuration(proxyBeanMethods = false)
-@ConditionalOnBean(DataSource.class)
 public class GenerationRecoveryConfiguration {
 
 	/** Opt-in property for the lost-wakeup recovery scanner; defaults to off. */
 	static final String RECOVERY_ENABLED_PROPERTY = "vault.generation.recovery.enabled";
 
 	@Bean
-	@ConditionalOnBean({ GenerationStore.class, WorkOutboxStore.class })
-	@ConditionalOnProperty(name = RECOVERY_ENABLED_PROPERTY, havingValue = "true", matchIfMissing = false)
+	@ConditionalOnProperty(name = RECOVERY_ENABLED_PROPERTY, havingValue = "true")
 	GenerationDueJobScanner generationDueJobScanner(
-		GenerationStore generationStore,
-		WorkOutboxStore workOutboxStore,
+		ObjectProvider<GenerationStore> generationStores,
+		ObjectProvider<WorkOutboxStore> workOutboxStores,
 		ObjectProvider<Clock> clocks
 	) {
-		return new GenerationDueJobScanner(
-			generationStore,
-			workOutboxStore,
-			clocks.getIfAvailable(Clock::systemUTC));
+		GenerationStore generationStore = generationStores.getIfAvailable();
+		WorkOutboxStore workOutboxStore = workOutboxStores.getIfAvailable();
+		return generationStore == null || workOutboxStore == null
+			? null
+			: new GenerationDueJobScanner(
+				generationStore,
+				workOutboxStore,
+				clocks.getIfAvailable(Clock::systemUTC));
 	}
 }

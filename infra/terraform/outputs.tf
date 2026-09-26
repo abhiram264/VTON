@@ -115,7 +115,32 @@ output "api_target_group_arn" {
   value       = aws_lb_target_group.api.arn
 }
 
-output "cache_endpoint_address" {
-  description = "Endpoint address of the ElastiCache serverless cache."
-  value       = aws_elasticache_serverless_cache.vault.endpoint[0].address
+output "alerts_p0_topic_arn" {
+  description = "ARN of the SNS topic receiving P0 critical alerts."
+  value       = module.alerts.alerts_p0_topic_arn
+}
+
+output "alerts_p1_topic_arn" {
+  description = "ARN of the SNS topic receiving P1 warning alerts."
+  value       = module.alerts.alerts_p1_topic_arn
+}
+
+output "alerts_p2_topic_arn" {
+  description = "ARN of the SNS topic receiving P2 informational alerts."
+  value       = module.alerts.alerts_p2_topic_arn
+}
+
+output "p0_alarm_names" {
+  description = "List of all P0 CloudWatch metric alarm names in order."
+  value       = module.alerts.p0_alarm_names
+}
+
+output "p1_alarm_names" {
+  description = "List of all P1 CloudWatch metric alarm names in order."
+  value       = module.alerts.p1_alarm_names
+}
+
+output "p2_alarm_names" {
+  description = "List of all P2 CloudWatch metric alarm names across resolver and category families."
+  value       = module.alerts.p2_alarm_names
 }

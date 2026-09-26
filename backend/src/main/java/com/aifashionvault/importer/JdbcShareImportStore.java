@@ -70,7 +70,8 @@ public class JdbcShareImportStore {
 	public record Deleted(StorageKey storageKey) implements DeleteResult {
 	}
 
-	public record AlreadyDeleted() implements DeleteResult {
+	/** The retained key lets later delete calls retry physical cleanup. */
+	public record AlreadyDeleted(StorageKey storageKey) implements DeleteResult {
 	}
 
 	public record Missing() implements DeleteResult {
@@ -133,13 +134,27 @@ public class JdbcShareImportStore {
 			if (!isUniqueViolation(ex)) {
 				throw ex;
 			}
-			ShareImport existing = rowByOwnerAndKey(command.ownerId(), command.idempotencyKey()).orElseThrow(() -> ex);
-			if (fingerprint.equals(existing.requestFingerprint())) {
-				return new Replayed(existing);
-			}
-			return new FingerprintConflict(existing.id());
+			return arbitrateCreate(command).orElseThrow(() -> ex);
 		}
 		return new Created(rowById(command.ownerId(), id).orElseThrow());
+	}
+
+	/**
+	 * Resolves an existing create request without touching staging media.
+	 * Empty means the caller may validate media and proceed to {@link #create}.
+	 */
+	public Optional<CreateResult> arbitrateCreate(ImportCommand command) {
+		Objects.requireNonNull(command, "command");
+		String fingerprint = fingerprint(command);
+		Optional<ShareImport> existing = rowByOwnerAndKey(command.ownerId(), command.idempotencyKey());
+		if (existing.isEmpty()) {
+			return Optional.empty();
+		}
+		ShareImport row = existing.get();
+		CreateResult result = fingerprint.equals(row.requestFingerprint())
+			? new Replayed(row)
+			: new FingerprintConflict(row.id());
+		return Optional.of(result);
 	}
 
 	public Optional<ShareImport> find(UserId ownerId, ShareImportId id) {
@@ -207,7 +222,7 @@ public class JdbcShareImportStore {
 		int updated = jdbc.update(
 			"UPDATE share_import SET resolver_state = 'RESOLVING', attempt_count = attempt_count + 1, "
 				+ "attempt_leased_at = ?, attempt_token = ?, terminal_reason_code = NULL, updated_at = ? "
-				+ "WHERE id = ? AND user_id = ? AND resolver_state = 'NEEDS_IMAGE'",
+				+ "WHERE id = ? AND user_id = ? AND resolver_state IN ('NEEDS_IMAGE', 'FAILED_RETRYABLE')",
 			Timestamp.from(now), attemptToken, Timestamp.from(now), id.value(), ownerId.value());
 		ShareImport current = rowById(ownerId, id).orElse(null);
 		if (updated == 1) {
@@ -265,19 +280,24 @@ public class JdbcShareImportStore {
 	public DeleteResult delete(UserId ownerId, ShareImportId id) {
 		Objects.requireNonNull(ownerId, "ownerId");
 		Objects.requireNonNull(id, "id");
+		Instant now = clock.instant();
+		List<StorageKey> deleted = jdbc.query(
+			"UPDATE share_import SET resolver_state = 'DELETED', attempt_token = NULL, attempt_leased_at = NULL, "
+				+ "terminal_reason_code = NULL, updated_at = ? "
+				+ "WHERE id = ? AND user_id = ? AND resolver_state <> 'DELETED' RETURNING storage_key",
+			(rs, rowNum) -> storageKey(rs),
+			Timestamp.from(now), id.value(), ownerId.value());
+		if (!deleted.isEmpty()) {
+			return new Deleted(deleted.getFirst());
+		}
 		ShareImport current = rowById(ownerId, id).orElse(null);
 		if (current == null) {
 			return new Missing();
 		}
 		if (current.state() == ShareImportState.DELETED) {
-			return new AlreadyDeleted();
+			return new AlreadyDeleted(current.storageKey());
 		}
-		Instant now = clock.instant();
-		jdbc.update(
-			"UPDATE share_import SET resolver_state = 'DELETED', attempt_token = NULL, attempt_leased_at = NULL, "
-				+ "terminal_reason_code = NULL, updated_at = ? WHERE id = ? AND user_id = ? AND resolver_state <> 'DELETED'",
-			Timestamp.from(now), id.value(), ownerId.value());
-		return new Deleted(current.storageKey());
+		throw new IllegalStateException("share import delete was not applied: " + id.value());
 	}
 
 	public List<StorageKey> storageKeysFor(UserId ownerId) {

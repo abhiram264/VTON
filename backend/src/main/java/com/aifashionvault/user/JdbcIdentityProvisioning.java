@@ -32,7 +32,6 @@ public final class JdbcIdentityProvisioning implements IdentityProvisioning {
 	private final JdbcTemplate jdbc;
 	private final TransactionTemplate transactions;
 	private final Clock clock;
-	private final List<AccountMediaPurge> mediaPurges;
 
 	public JdbcIdentityProvisioning(DataSource dataSource) {
 		this(dataSource, Clock.systemUTC());
@@ -62,7 +61,6 @@ public final class JdbcIdentityProvisioning implements IdentityProvisioning {
 		this.jdbc = new JdbcTemplate(dataSource);
 		this.transactions = new TransactionTemplate(new DataSourceTransactionManager(dataSource));
 		this.clock = clock;
-		this.mediaPurges = List.copyOf(mediaPurges);
 	}
 
 	@Override
@@ -103,8 +101,8 @@ public final class JdbcIdentityProvisioning implements IdentityProvisioning {
 		if (user == null) {
 			throw new IllegalArgumentException("user is required");
 		}
-		for (AccountMediaPurge mediaPurge : mediaPurges) {
-			mediaPurge.purgeForUser(userId);
+		if (user.deletedAt() != null) {
+			return user;
 		}
 		User deleted = UserDeletion.markDeleted(user, deletedAt);
 		jdbc.update(

@@ -16,7 +16,7 @@ Before executing any daily, weekly, or monthly runbook, the on-call operator mus
 
 1. **PostgreSQL Read-Only Access:**
    - Active database connection to production replica (preferred) or primary with a read-only role (`SELECT` privilege only).
-   - Privileges required on tables: `share_import`, `generation_job`, `generation_attempt`, `quality_result`, `generation_render_step`, `generation_render_step_item`, `vault_item`, `look`.
+   - Privileges required on tables accessed by the runbooks: `share_import`, `generation_job`, `generation_attempt`, `quality_result`, `generation_render_step`, `generation_render_step_item`, `vault_item`, `look`, `look_item`, `source_reference`, `studio_session`, `studio_item`, `users`, `generation_provider_performance_daily`.
    - Client: `psql` CLI v15+ or compatible PostgreSQL client.
 
 2. **AWS CLI and CloudWatch Telemetry:**
@@ -35,8 +35,8 @@ Before executing any daily, weekly, or monthly runbook, the on-call operator mus
 ## Privacy Standing Rule
 
 In accordance with ADR-015, §41, and §54:
-- All runbook queries select **only aggregates and opaque identifiers** (`generation_job.id`, `generation_attempt.id`, `share_import.id`).
-- `user_id` may appear **only** within `COUNT(DISTINCT ...)`.
+- Reporting queries select only aggregates, opaque identifiers, and non-user operational dimensions (such as provider, category, source site, and reason codes); `user_id` may appear only within `COUNT(DISTINCT ...)` in those queries.
+- The monthly local deletion test is the narrow exception: use a dedicated synthetic test-account ID only for that test's verification queries, and never copy it into runbooks or incident channels.
 - **Never** select, log, copy, or paste raw image bytes, base64 data, signed S3 URLs, storage keys, authentication tokens, or provider secrets into incident channels or runbook records.
 
 ## Daily Routine

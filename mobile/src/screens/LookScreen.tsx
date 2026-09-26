@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Image, StyleSheet, Text, View } from 'react-native';
+import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { generationApi } from '../features/generation/generationApi';
 import type { LookResource } from '../features/generation/types';
 
@@ -7,46 +7,80 @@ import type { LookResource } from '../features/generation/types';
 // persisted as identity.
 export default function LookScreen({ lookId }: { lookId: string }) {
   const [look, setLook] = useState<LookResource | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNotice] = useState<{ lookId: string; text: string } | null>(null);
+  const [attempt, setAttempt] = useState(0);
+  const [imageUnavailable, setImageUnavailable] = useState(false);
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
+    setLook(null);
+    setNotice(null);
+    setImageUnavailable(false);
+    setLoading(true);
     let cancelled = false;
     (async () => {
       try {
         const resource = await generationApi.getLook(lookId);
         if (!cancelled) {
           setLook(resource);
+          setLoading(false);
         }
       } catch {
         if (!cancelled) {
-          setNotice('Could not open the look.');
+          setNotice({ lookId, text: 'Could not open the look.' });
+          setLoading(false);
         }
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [lookId]);
-
+  }, [lookId, attempt]);
+  const visibleLook = look?.id === lookId ? look : null;
+  const visibleNotice = notice?.lookId === lookId ? notice.text : null;
   return (
-    <View style={styles.page}>
-      <Text style={styles.title}>Look</Text>
-      {notice ? <Text style={styles.notice}>{notice}</Text> : null}
-      {look ? (
+    <ScrollView contentContainerStyle={styles.page}>
+      <Text accessibilityRole="header" style={styles.title}>Look</Text>
+      {loading ? (
+        <Text accessibilityLiveRegion="polite" style={styles.notice}>
+          Loading preview…
+        </Text>
+      ) : visibleNotice ? (
+        <Text accessibilityLiveRegion="polite" style={styles.notice}>
+          {visibleNotice}
+        </Text>
+      ) : null}
+      {visibleLook ? (
         <View style={styles.stack}>
-          <Image
-            accessible
-            accessibilityRole="image"
-            accessibilityLabel="Look preview"
-            source={{ uri: look.image.url }}
-            style={styles.preview}
-          />
+          {!imageUnavailable ? (
+            <Image
+              accessible
+              accessibilityRole="image"
+              accessibilityLabel="Look preview"
+              onError={() => setImageUnavailable(true)}
+              source={{ uri: visibleLook.image.url }}
+              style={styles.preview}
+            />
+          ) : (
+            <View style={styles.stack}>
+              <Text accessibilityLiveRegion="polite" style={styles.notice}>
+                Signed preview unavailable.
+              </Text>
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => setAttempt((value) => value + 1)}
+                style={styles.retry}
+              >
+                <Text style={styles.retryLabel}>Retry preview</Text>
+              </Pressable>
+            </View>
+          )}
           <Text style={styles.body}>
-            Private preview link expires at {look.image.expiresAt}.
+            Private preview link expires at {visibleLook.image.expiresAt}.
           </Text>
         </View>
       ) : null}
-    </View>
+    </ScrollView>
   );
 }
 
@@ -84,5 +118,18 @@ const styles = StyleSheet.create({
     color: '#8a2f2b',
     fontSize: 14,
     lineHeight: 20,
+  },
+  retry: {
+    minHeight: 44,
+    alignSelf: 'flex-start',
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    backgroundColor: ink,
+  },
+  retryLabel: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
   },
 });

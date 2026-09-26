@@ -1,12 +1,13 @@
 /*
- * classification: integration/orchestration
+ * classification: mock-integration/orchestration
  *
- * Integration/orchestration coverage, NOT device end-to-end coverage. This
+ * Mock integration/orchestration coverage, NOT device end-to-end coverage. This
  * suite is mock-based: it replaces globalThis.fetch with a fake and injects
  * the picker, token (getAccessToken) and delay seams. It exercises the
  * createLook -> upload -> generation -> Look orchestration only; no device,
- * camera, network or backend participates. Reclassified by PR-01 from a title
- * that overstated its coverage as a device test (plan finding F13).
+ * camera, network or backend participates. Reclassified from mobile/e2e to
+ * mobile/integration to prevent overstating mock coverage as device end-to-end
+ * (finding F13 / P3).
  *
  * Retained assertions, unchanged in behavior: exact request call order, the
  * POST /generations Authorization + Idempotency-Key headers, the direct
@@ -36,7 +37,7 @@
  * relative URL fails before any backend contract is exercised.
  * takePhoto/choosePhoto (mobile/src/features/my-model/photoSource.ts:24-30)
  * unconditionally return null, and createLook
- * (mobile/src/features/generation/createLook.ts:51-54) maps a null photo to
+ * (mobile/src/features/generation/createLook.ts:155-157) maps a null photo to
  * { outcome: 'cancelled' }, so the real picker path can never start an upload.
  */
 import {
@@ -91,7 +92,7 @@ function url(input: RequestInfo | URL): string {
     : input.url;
 }
 
-describe('first vertical slice integration/orchestration coverage', () => {
+describe('first vertical slice mock integration/orchestration coverage', () => {
   const fetchMock = jest.fn();
   const config = { baseUrl: BASE, getAccessToken: () => 'access-token' };
 
@@ -207,6 +208,6 @@ describe('first vertical slice integration/orchestration coverage', () => {
     expect(fetchMock.mock.calls[2][1]).toEqual(
       expect.objectContaining({ method: 'PUT', body: bytes }),
     );
-    expect(getActiveGeneration()).toBe(GENERATION);
+    expect(getActiveGeneration()).toBeNull();
   });
 });

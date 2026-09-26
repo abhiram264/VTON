@@ -18,6 +18,7 @@ import com.aifashionvault.importer.ShareImportState;
 import com.aifashionvault.importer.SourceReference;
 import com.aifashionvault.importer.SourceUrls;
 import com.aifashionvault.platform.importer.ImporterRetryableException;
+import com.aifashionvault.platform.objectstore.ObjectStoreExceptions;
 import com.aifashionvault.shared.ShareImportId;
 import com.aifashionvault.shared.UploadId;
 import com.aifashionvault.shared.UserId;
@@ -50,11 +51,20 @@ public final class ShareImportService {
 	public CreateOutcome create(UserId owner, String rawKey, ShareImportRequest request) {
 		String key = requireKey(rawKey);
 		Parsed parsed = parse(request);
-		requireClaimableUpload(owner, parsed.uploadId);
 		ImportCommand command = new ImportCommand(owner, key, parsed.kind, parsed.sourceUrl, parsed.uploadId);
-		return switch (store.create(command)) {
-			case JdbcShareImportStore.Created created -> runAttempt(created.shareImport(), parsed.uploadId, true);
-			case JdbcShareImportStore.Replayed replayed -> replayCreate(replayed.shareImport(), parsed.uploadId);
+		Optional<JdbcShareImportStore.CreateResult> replay = store.arbitrateCreate(command);
+		if (replay.isPresent()) {
+			return handleCreateResult(replay.get(), parsed.uploadId, false);
+		}
+		requireClaimableUpload(owner, parsed.uploadId);
+		return handleCreateResult(store.create(command), parsed.uploadId, true);
+	}
+
+	private CreateOutcome handleCreateResult(
+			JdbcShareImportStore.CreateResult result, UploadId uploadId, boolean newlyCreated) {
+		return switch (result) {
+			case JdbcShareImportStore.Created created -> runAttempt(created.shareImport(), uploadId, newlyCreated);
+			case JdbcShareImportStore.Replayed replayed -> replayCreate(replayed.shareImport(), uploadId);
 			case JdbcShareImportStore.FingerprintConflict ignored -> throw ShareImportProblem.keyReused();
 		};
 	}
@@ -84,7 +94,7 @@ public final class ShareImportService {
 			return new AttachOutcome(ShareImportResponse.ready(current.id().value().toString()), 200);
 		}
 		return switch (current.state()) {
-			case NEEDS_IMAGE -> {
+			case NEEDS_IMAGE, FAILED_RETRYABLE -> {
 				requireClaimableUpload(owner, uploadId);
 				yield switch (store.beginRecovery(owner, id)) {
 					case JdbcShareImportStore.RecoveryClaimed claimed ->
@@ -94,17 +104,17 @@ public final class ShareImportService {
 				};
 			}
 		// PUT never re-runs URL resolution: recovery is permitted only from
-		// NEEDS_IMAGE (spec). While the import is RESOLVING — fresh or expired
-		// lease — invalid request data is rejected without mutation and the
-		// current state is reported; an expired lease is reclaimed through
-		// create replay, which owns the attempt lease.
+		// NEEDS_IMAGE or FAILED_RETRYABLE (spec). While the import is RESOLVING
+		// — fresh or expired lease — invalid request data is rejected without
+		// mutation and the current state is reported; an expired lease is
+		// reclaimed through create replay, which owns the attempt lease.
 		case RESOLVING -> {
 			requireClaimableUpload(owner, uploadId);
 			yield attachState(current);
 		}
-		// Recovery already completed: replay the same result without mutating.
-		case READY -> new AttachOutcome(ShareImportResponse.ready(current.id().value().toString()), 200);
-		case FAILED_RETRYABLE, FAILED_TERMINAL -> throw ShareImportProblem.stateConflict();
+		// A completed recovery replay returned above; any other READY row has no recovery binding.
+		case READY -> throw ShareImportProblem.stateConflict();
+		case FAILED_TERMINAL -> throw ShareImportProblem.stateConflict();
 		case DELETED -> throw ShareImportProblem.notFound();
 		};
 	}
@@ -113,14 +123,27 @@ public final class ShareImportService {
 		ShareImportId id = parseImportId(importId);
 		return switch (store.delete(owner, id)) {
 			case JdbcShareImportStore.Deleted deleted -> {
-				if (deleted.storageKey() != null) {
-					media.deleteObject(deleted.storageKey());
-				}
+				deleteObject(deleted.storageKey());
 				yield true;
 			}
-			case JdbcShareImportStore.AlreadyDeleted ignored -> true;
+			case JdbcShareImportStore.AlreadyDeleted alreadyDeleted -> {
+				deleteObject(alreadyDeleted.storageKey());
+				yield true;
+			}
 			case JdbcShareImportStore.Missing ignored -> false;
 		};
+	}
+
+	private void deleteObject(com.aifashionvault.shared.StorageKey key) {
+		if (key == null) {
+			return;
+		}
+		try {
+			media.deleteObject(key);
+		}
+		catch (ObjectStoreExceptions.ObjectStoreUnavailableException ex) {
+			throw ShareImportProblem.dependencyUnavailable();
+		}
 	}
 
 	private CreateOutcome replayCreate(ShareImport existing, UploadId uploadId) {

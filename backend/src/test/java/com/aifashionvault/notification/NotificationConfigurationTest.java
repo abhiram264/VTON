@@ -208,9 +208,9 @@ class NotificationConfigurationTest {
 	}
 
 	private DeviceDelivery waitForSingleDeliveryRow() {
-		List<DeviceDelivery> deliveries = deliveryRows();
 		waitUntil("exactly one persisted delivery row", WAIT_TIMEOUT,
 			() -> deliveryRows().size() == 1);
+		List<DeviceDelivery> deliveries = deliveryRows();
 		assertThat(deliveries).hasSize(1);
 		return deliveries.getFirst();
 	}

@@ -1,6 +1,7 @@
 package com.aifashionvault.privacy;
 
 import java.time.Clock;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
@@ -13,8 +14,11 @@ import com.aifashionvault.shared.VaultItemId;
 
 public final class DefaultPrivacyService implements PrivacyService {
 
-	private static final Set<String> FORBIDDEN_EXPORT_KEY_PARTS = Set.of("base64", "bytes", "credential", "lease",
-			"media", "objectkey", "payload", "provider", "pushtoken", "token", "url");
+	private static final Set<String> FORBIDDEN_EXPORT_KEY_PARTS = Set.of("apikey", "authorization", "base64", "bytes",
+			"credential", "lease", "media", "objectkey", "password", "payload", "provider", "pushtoken", "secret",
+			"token", "url");
+	private static final Set<String> FORBIDDEN_EXPORT_VALUE_PARTS = Set.of("http://", "https://", "data:image",
+			"x-amz-", "signature=", "/9j/", "ivborw0kggo");
 
 	private final PrivacyResourcePort resources;
 	private final AccountDeletionWorkflow workflow;
@@ -60,7 +64,12 @@ public final class DefaultPrivacyService implements PrivacyService {
 
 	@Override
 	public AccountDeletionStatus deleteAccount(UserId userId) {
-		return workflow.request(required(userId, "userId"));
+		UserId owner = required(userId, "userId");
+		AccountDeletionStatus status = Objects.requireNonNull(workflow.request(owner), "deletion status is required");
+		if (!owner.equals(status.userId())) {
+			throw new IllegalStateException("deletion status owner mismatch");
+		}
+		return status;
 	}
 
 	private static void validateSafe(Map<?, ?> values) {
@@ -77,10 +86,17 @@ public final class DefaultPrivacyService implements PrivacyService {
 	}
 
 	private static void validateSafeValue(Object value) {
-		if (value instanceof Map<?, ?> nested) {
+		if (value == null || value instanceof String || value instanceof Boolean || value instanceof Number) {
+			if (value instanceof String text
+					&& FORBIDDEN_EXPORT_VALUE_PARTS.stream().anyMatch(text.toLowerCase(Locale.ROOT)::contains)) {
+				throw new IllegalStateException("export contains forbidden value");
+			}
+		} else if (value instanceof Map<?, ?> nested) {
 			validateSafe(nested);
-		} else if (value instanceof Iterable<?> nested) {
+		} else if (value instanceof List<?> nested) {
 			nested.forEach(DefaultPrivacyService::validateSafeValue);
+		} else {
+			throw new IllegalStateException("export contains unsupported value type");
 		}
 	}
 

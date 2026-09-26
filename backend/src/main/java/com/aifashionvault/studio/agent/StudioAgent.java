@@ -24,7 +24,12 @@ public final class StudioAgent {
         if (calls.size() > 10) return new AgentExecution(List.of(reject(0, null, AgentProblemCode.MALFORMED_CALL)), false);
         List<ToolCallResult> out = new ArrayList<>();
         for (int i=0; i<calls.size(); i++) {
-            RawToolCall c = calls.get(i); AgentProblemCode error = null; ToolValue value = null;
+            RawToolCall c = calls.get(i);
+            if (c == null) {
+                out.add(reject(i, null, AgentProblemCode.MALFORMED_CALL));
+                return new AgentExecution(out, false);
+            }
+            AgentProblemCode error = null; ToolValue value = null;
             if (!ALLOWED.contains(c.tool())) error = AgentProblemCode.DISALLOWED_TOOL;
             else try { value = dispatch(actor, session, c); if (value == null) error = AgentProblemCode.MALFORMED_CALL; }
             catch (AgentApplicationException e) { error = e.code(); }

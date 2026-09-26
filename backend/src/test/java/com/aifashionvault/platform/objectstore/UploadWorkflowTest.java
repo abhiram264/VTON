@@ -280,17 +280,18 @@ class UploadWorkflowTest {
 		}
 
 		@Test
-		void abortDeletesAvatarStagingWithoutRequiringGeneric() {
+		void abortDeletesAvatarAndGenericStaging() {
 			FakeObjectStore store = new FakeObjectStore();
 			store.stage(UploadPurpose.AVATAR, new ObjectMetadata(8L, "image/jpeg", VERSION), new byte[] {1, 2, 3, 4, 5, 6, 7, 8});
 
 			workflow(store).abort(USER_ID, UPLOAD_ID);
 
-			assertThat(store.deleteCount).isEqualTo(1);
-			assertThat(store.lastDelete.objectKey())
-				.isEqualTo(StorageKeys.stagingKey(USER_ID, UPLOAD_ID, UploadPurpose.AVATAR).value());
-			assertThat(store.lastDelete.objectKey()).contains("/avatars/");
-			assertThat(store.lastDelete.objectKey()).doesNotContain("/uploads/");
+			assertThat(store.deleteCount).isEqualTo(2);
+			assertThat(store.deleted).extracting(ObjectRef::objectKey).containsExactly(
+				StorageKeys.stagingKey(USER_ID, UPLOAD_ID, UploadPurpose.AVATAR).value(),
+				StorageKeys.stagingKey(USER_ID, UPLOAD_ID).value());
+			assertThat(store.deleted.get(0).objectKey()).contains("/avatars/");
+			assertThat(store.deleted.get(1).objectKey()).doesNotContain("/avatars/");
 		}
 
 		@Test

@@ -26,6 +26,7 @@ import com.aifashionvault.shared.StorageKey;
 import com.aifashionvault.shared.UserId;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @SpringBootTest(properties = "spring.autoconfigure.exclude=")
 class JdbcLookStoreTest {
@@ -108,6 +109,24 @@ class JdbcLookStoreTest {
 			"SELECT id FROM look WHERE generation_job_id = ?",
 			UUID.class,
 			jobId.value())).isEqualTo(firstId.value());
+	}
+	@Test
+	void compositeOwnerConstraintRejectsForeignAvatarProfile() {
+		UserId owner = insertUser();
+		UserId other = insertUser();
+		GenerationJobId jobId = insertJob(owner);
+		UUID profileId = UUID.randomUUID();
+		Timestamp now = Timestamp.from(NOW);
+		jdbc.update(
+			"INSERT INTO avatar_profile (id, user_id, primary_image_id, status, revision, created_at, updated_at) "
+				+ "VALUES (?, ?, NULL, 'ACTIVE', 1, ?, ?)",
+			profileId, other.value(), now, now);
+
+		assertThatThrownBy(() -> jdbc.update(
+			"INSERT INTO look (id, user_id, avatar_profile_id, generation_job_id, storage_key, quality_status, created_at) "
+				+ "VALUES (?, ?, ?, ?, ?, 'PASS', ?)",
+			UUID.randomUUID(), owner.value(), profileId, jobId.value(), "private/foreign-avatar", now))
+			.isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
 	}
 
 	@Test

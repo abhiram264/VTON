@@ -68,8 +68,8 @@ function spyGetLook(): jest.Mock {
 }
 
 beforeEach(() => {
-  // Keep any in-flight import request pending forever so routing tests stay
-  // on the "Preparing shared item" surface instead of rejecting into a failure view.
+  // Routing tests use the mounted fail-closed API config; assert the honest
+  // unavailable state instead of fabricating configured auth.
   globalThis.fetch = (() => new Promise<Response>(() => {})) as typeof fetch;
   linkHandlerListeners.length = 0;
   addEventListenerMock.mockImplementation(
@@ -162,7 +162,7 @@ describe('Android share-import flag-on consumption and navigation', () => {
 
     expect(consumeShareMock()).toHaveBeenCalledTimes(1);
     expect(consumeShareMock()).toHaveBeenCalledWith(shareId);
-    expect(await screen.findByText('Preparing shared item')).toBeTruthy();
+    expect(await screen.findByText('Could not prepare the shared item')).toBeTruthy();
   });
 
   test('cold-start initial URL with SHARE_IMPORT_ANDROID on consumes and navigates identically', async () => {
@@ -183,7 +183,7 @@ describe('Android share-import flag-on consumption and navigation', () => {
 
     expect(consumeShareMock()).toHaveBeenCalledTimes(1);
     expect(consumeShareMock()).toHaveBeenCalledWith(shareId);
-    expect(await screen.findByText('Preparing shared item')).toBeTruthy();
+    expect(await screen.findByText('Could not prepare the shared item')).toBeTruthy();
   });
 
   test('concurrent duplicate delivery and later replay of the same share id consumes at most once', async () => {
@@ -214,7 +214,7 @@ describe('Android share-import flag-on consumption and navigation', () => {
 
     expect(consumeShareMock()).toHaveBeenCalledTimes(1);
     expect(consumeShareMock()).toHaveBeenCalledWith(shareId);
-    expect(await screen.findByText('Preparing shared item')).toBeTruthy();
+    expect(await screen.findByText('Could not prepare the shared item')).toBeTruthy();
   });
 
   test('typed consume failure codes never navigate and mark the id final (no replay)', async () => {

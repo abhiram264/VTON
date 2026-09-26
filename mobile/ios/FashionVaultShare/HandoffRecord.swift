@@ -47,9 +47,26 @@ struct HandoffRecord: Equatable {
 		self.action = action
 		self.kind = kind
 		self.createdAt = createdAt
-		self.expiresAt = expiresAt ?? (createdAt + Int(HandoffRecord.recordTTLSeconds))
+		self.expiresAt = createdAt + Int(HandoffRecord.recordTTLSeconds)
 		self.url = url
 		self.stagedFile = stagedFile
+	}
+
+	func encode() throws -> Data {
+		guard isValidClock, stagedFile == nil || stagedFile == "\(shareId).img" else {
+			throw HandoffError.invalidRecord
+		}
+		let dict = toDictionary()
+		guard JSONSerialization.isValidJSONObject(dict),
+			let data = try? JSONSerialization.data(withJSONObject: dict)
+		else {
+			throw HandoffError.invalidRecord
+		}
+		return data
+	}
+
+	private var isValidClock: Bool {
+		createdAt > 0 && expiresAt == createdAt + Int(HandoffRecord.recordTTLSeconds)
 	}
 
 	func toDictionary() -> [String: Any] {
@@ -66,15 +83,6 @@ struct HandoffRecord: Equatable {
 		return dict
 	}
 
-	func encode() throws -> Data {
-		let dict = toDictionary()
-		guard JSONSerialization.isValidJSONObject(dict),
-			let data = try? JSONSerialization.data(withJSONObject: dict)
-		else {
-			throw HandoffError.invalidRecord
-		}
-		return data
-	}
 
 	static func isValidStagedFile(_ fileName: String) -> Bool {
 		guard !fileName.isEmpty,
@@ -103,14 +111,15 @@ struct HandoffRecord: Equatable {
 			let actionRaw = dict["action"] as? String,
 			let action = HandoffAction(rawValue: actionRaw),
 			let createdAt = dict["createdAt"] as? Int,
-			let expiresAt = dict["expiresAt"] as? Int
+			createdAt > 0,
+			let expiresAt = dict["expiresAt"] as? Int,
+			expiresAt == createdAt + Int(HandoffRecord.recordTTLSeconds)
 		else { return nil }
 
 		let url = dict["url"] as? String
 		let stagedFile = dict["stagedFile"] as? String
-
 		if let stagedFile {
-			guard isValidStagedFile(stagedFile) else { return nil }
+			guard isValidStagedFile(stagedFile), stagedFile == "\(shareId).img" else { return nil }
 		}
 
 		switch kind {

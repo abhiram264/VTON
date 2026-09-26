@@ -45,6 +45,9 @@ public class NotificationDeliveryConfiguration {
 	}
 
 	public void setMaxAttempts(int maxAttempts) {
+		if (maxAttempts < 1) {
+			throw new IllegalArgumentException("maxAttempts must be >= 1");
+		}
 		this.maxAttempts = maxAttempts;
 	}
 
@@ -53,6 +56,9 @@ public class NotificationDeliveryConfiguration {
 	}
 
 	public void setMinRetrySeconds(int minRetrySeconds) {
+		if (minRetrySeconds < 1) {
+			throw new IllegalArgumentException("minRetrySeconds must be >= 1");
+		}
 		this.minRetrySeconds = minRetrySeconds;
 	}
 
@@ -61,6 +67,9 @@ public class NotificationDeliveryConfiguration {
 	}
 
 	public void setTtlHours(int ttlHours) {
+		if (ttlHours < 1) {
+			throw new IllegalArgumentException("ttlHours must be >= 1");
+		}
 		this.ttlHours = ttlHours;
 	}
 

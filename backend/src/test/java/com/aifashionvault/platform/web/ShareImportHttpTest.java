@@ -346,15 +346,19 @@ class ShareImportHttpTest {
 	}
 
 	@Test
-	void recoveryFromFailedStateConflicts() throws Exception {
+	void recoveryFromFailedStateRecoversReady() throws Exception {
 		fakeChain.retryable = ResolutionReason.DEPENDENCY_UNAVAILABLE;
 		postImport(token(), KEY, "{\"kind\":\"URL\",\"sourceUrl\":\"" + IMAGE_URL + "\"}", 503);
 		fakeChain.retryable = null;
 
 		String failedImportId = jdbc.queryForObject("SELECT id FROM share_import", java.util.UUID.class).toString();
 		String uploadId = fakeMedia.stageVerifiedUpload();
-		MvcResult conflict = attachImage(token(), failedImportId, uploadId, 409);
-		assertProblem(conflict, 409, "IMPORT_STATE_CONFLICT");
+		MvcResult recovered = attachImage(token(), failedImportId, uploadId, 200);
+
+		assertThat(MAPPER.readTree(recovered.getResponse().getContentAsString()).get("status").stringValue())
+			.isEqualTo("READY");
+		assertThat(rowCount()).isEqualTo(1);
+		assertThat(fakeMedia.publishedCount()).isEqualTo(1);
 	}
 
 	@Test

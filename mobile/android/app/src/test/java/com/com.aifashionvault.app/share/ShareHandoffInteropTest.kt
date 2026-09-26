@@ -18,9 +18,9 @@ import org.junit.rules.TemporaryFolder
 class ShareHandoffEnvelopeTest {
 
   private val payloadUrl = SharePayload.Url("https://example.com/a")
-  private val payloadImage = SharePayload.Image("file:///tmp/x/uuid")
+  private val payloadImage = SharePayload.Image("file:///files/share-staging/uuid")
   private val payloadImageUrl =
-      SharePayload.ImageUrl("https://example.com/a", "file:///tmp/x/uuid")
+      SharePayload.ImageUrl("https://example.com/a", "file:///files/share-staging/uuid")
 
   @Test
   fun `success yields ok true with url payload required fields`() {
@@ -39,7 +39,7 @@ class ShareHandoffEnvelopeTest {
     assertEquals(true, env["ok"])
     val payload = env["payload"] as Map<*, *>
     assertEquals("image", payload["kind"])
-    assertEquals("file:///tmp/x/uuid", payload["localImageUri"])
+    assertEquals("file:///files/share-staging/uuid", payload["localImageUri"])
     assertFalse(payload.containsKey("url"))
   }
 
@@ -50,7 +50,7 @@ class ShareHandoffEnvelopeTest {
     val payload = env["payload"] as Map<*, *>
     assertEquals("image_url", payload["kind"])
     assertEquals("https://example.com/a", payload["url"])
-    assertEquals("file:///tmp/x/uuid", payload["localImageUri"])
+    assertEquals("file:///files/share-staging/uuid", payload["localImageUri"])
   }
 
   @Test
@@ -98,7 +98,7 @@ class ShareHandoffEnvelopeTest {
 
 /**
  * MEDIUM: staged-file release seam path validation. Only a canonical file: URI whose
- * canonical path is a regular file directly under <cacheDir>/share-staging with a bare
+ * canonical path is a regular file directly under the app-private staging root with a bare
  * lowercase-canonical UUID filename is releasable; everything else returns null (silent
  * no-op at the bridge).
  */
@@ -109,8 +109,7 @@ class StagedImagePathsTest {
   private val uuid = "0fbf0a34-6f1e-4d2f-9bcd-2ee6c9a7e111"
 
   private fun staging(): File {
-    val dir = File(tmp.root, "cache/share-staging")
-    dir.mkdirs()
+    val dir = File(tmp.root, "files/share-staging").apply { mkdirs() }
     return dir
   }
 
@@ -153,6 +152,14 @@ class StagedImagePathsTest {
         "file://${dir.canonicalFile.parent}/${dir.name}/../${dir.name}/../${uuid}"
     assertNull(StagedImagePaths.stagedFile(dir, traversal))
     assertNull(StagedImagePaths.stagedFile(dir, "file://${dir.canonicalPath}/../outside-$uuid"))
+  }
+
+  @Test
+  fun `noncanonical in-root URI spelling is rejected`() {
+    val dir = staging()
+    val file = stagedFile(dir)
+    val alias = "${file.toURI().toString().trimEnd('/')}/../${dir.name}/$uuid"
+    assertNull(StagedImagePaths.stagedFile(dir, alias))
   }
 
   @Test

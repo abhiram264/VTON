@@ -44,7 +44,7 @@ public final class ObservationFacade {
 			}
 			return observation.start();
 		}
-		catch (RuntimeException observabilityFailure) {
+		catch (RuntimeException | Error observabilityFailure) {
 			// Observability must never fail a user request or worker turn.
 			return Observation.createNotStarted(name, ObservationRegistry.NOOP).start();
 		}

@@ -41,6 +41,54 @@ final class ShareHandoff: NSObject {
 	internal static let appGroupID = "group.com.aifashionvault.shared"
 	private static let stagingDirectoryName = "ShareStaging"
 	internal static let recordKeyPrefix = "aifashionvault.share.handoff."
+	private static let consumeLock = NSLock()
+	private static let recordTTLSeconds = 15 * 60
+	internal static func isValidRecord(
+		_ record: [String: Any], shareId: String, now: Int = Int(Date().timeIntervalSince1970)
+	) -> Bool {
+		guard (record["schemaVersion"] as? Int) == 1,
+			(record["shareId"] as? String) == shareId,
+			let kindRaw = record["kind"] as? String,
+			RecordKind(rawValue: kindRaw) != nil,
+			let actionRaw = record["action"] as? String,
+			HandoffAction(rawValue: actionRaw) != nil,
+			let createdAt = record["createdAt"] as? Int,
+			createdAt > 0,
+			createdAt <= now,
+			let expiresAt = record["expiresAt"] as? Int,
+			expiresAt == createdAt + recordTTLSeconds
+		else { return false }
+
+		let url = record["url"] as? String
+		let stagedFile = record["stagedFile"] as? String
+		if let stagedFile {
+			guard stagedFile == shareId + ".img",
+				stagedImageURI(stagedFile, shareId: shareId) != nil
+			else { return false }
+		}
+		switch RecordKind(rawValue: kindRaw)! {
+		case .url:
+			guard let url, !url.isEmpty, stagedFile == nil else { return false }
+		case .image:
+			guard url == nil, stagedFile != nil else { return false }
+		case .imageURL:
+			guard let url, !url.isEmpty, stagedFile != nil else { return false }
+		}
+		return true
+	}
+
+
+	/// Claims a record under the same lock used by every host bridge call.
+	/// UserDefaults has no compare-and-remove API, so the read/remove pair is
+	/// serialized to prevent duplicate in-process consumers.
+	private static func claimRecord(_ defaults: UserDefaults, key: String) -> Data? {
+		consumeLock.lock()
+		defer { consumeLock.unlock() }
+		guard let data = defaults.data(forKey: key) else { return nil }
+		defaults.removeObject(forKey: key)
+		defaults.synchronize()
+		return data
+	}
 
 	@objc static func requiresMainQueueSetup() -> Bool { false }
 
@@ -65,14 +113,10 @@ final class ShareHandoff: NSObject {
 			return
 		}
 		let key = ShareHandoff.recordKeyPrefix + shareId
-		guard let data = defaults.data(forKey: key) else {
+		guard let data = ShareHandoff.claimRecord(defaults, key: key) else {
 			resolve(ShareHandoff.failure("share_not_found"))
 			return
 		}
-		// Claim = delete-before-read: the record is removed before it is parsed
-		// or returned, so a concurrent consumer or replayed id sees
-		// share_not_found and at most one consumer receives the payload.
-		defaults.removeObject(forKey: key)
 
 		guard let decoded = try? JSONSerialization.jsonObject(with: data),
 			let record = decoded as? [String: Any]
@@ -82,26 +126,23 @@ final class ShareHandoff: NSObject {
 		}
 
 		func finishInvalid() {
-			// Shape failure also cleans up whatever the record referenced.
-			ShareHandoff.cleanup(record: record)
+			// Shape failure also cleans up only this share's canonical file.
+			ShareHandoff.cleanup(shareId: shareId)
 			resolve(ShareHandoff.failure("invalid_payload"))
 		}
 
-		guard (record["schemaVersion"] as? Int) == 1,
-			(record["shareId"] as? String) == shareId,
+		let now = Int(Date().timeIntervalSince1970)
+		guard ShareHandoff.isValidRecord(record, shareId: shareId, now: now),
 			let kindRaw = record["kind"] as? String,
 			let kind = RecordKind(rawValue: kindRaw),
-			let actionRaw = record["action"] as? String,
-			HandoffAction(rawValue: actionRaw) != nil,
-			record["createdAt"] is Int,
 			let expiresAt = record["expiresAt"] as? Int
 		else {
 			return finishInvalid()
 		}
 
-		guard Date().timeIntervalSince1970 < Double(expiresAt) else {
+		guard now < expiresAt else {
 			// Expired: bounded retention covers both the record and staged media.
-			ShareHandoff.cleanup(record: record)
+			ShareHandoff.cleanup(shareId: shareId)
 			resolve(ShareHandoff.failure("share_expired"))
 			return
 		}
@@ -118,13 +159,13 @@ final class ShareHandoff: NSObject {
 			guard let url, !url.isEmpty else { return finishInvalid() }
 			payload = ["kind": "url", "url": url]
 		case .image:
-			guard let stagedImageURI = ShareHandoff.stagedImageURI(stagedFile) else {
+			guard let stagedImageURI = ShareHandoff.stagedImageURI(stagedFile, shareId: shareId) else {
 				return finishInvalid()
 			}
 			payload = ["kind": "image", "localImageUri": stagedImageURI]
 		case .imageURL:
 			guard let url, !url.isEmpty,
-				let stagedImageURI = ShareHandoff.stagedImageURI(stagedFile)
+				let stagedImageURI = ShareHandoff.stagedImageURI(stagedFile, shareId: shareId)
 			else { return finishInvalid() }
 			payload = ["kind": "image_url", "url": url, "localImageUri": stagedImageURI]
 		}
@@ -170,16 +211,16 @@ final class ShareHandoff: NSObject {
 	}
 
 	/// Absolute file URL string of <container>/ShareStaging/<stagedFile>, or nil
-	/// unless the reference is a plain direct child of the staging directory
-	/// whose symlink-resolved path stays inside it (rejects traversal and
-	/// symlink escapes via resolve-and-prefix-check).
-	private static func stagedImageURI(_ stagedFile: String?) -> String? {
+	/// unless the reference is the canonical file for `shareId`, a plain direct
+	/// child of the staging directory, and an existing regular file.
+	private static func stagedImageURI(_ stagedFile: String?, shareId: String? = nil) -> String? {
 		guard let stagedFile,
 			!stagedFile.isEmpty,
 			!stagedFile.contains("/"),
 			!stagedFile.contains("\\"),
 			stagedFile != ".",
 			stagedFile != "..",
+			shareId.map({ stagedFile == $0 + ".img" }) ?? true,
 			let staging = stagingDirectory(),
 			let confined = confinedStagedFileURL(
 				path: staging.appendingPathComponent(stagedFile).path)
@@ -187,8 +228,8 @@ final class ShareHandoff: NSObject {
 		return confined.absoluteString
 	}
 
-	/// Resolves `path` and returns it only when it is a direct child of the
-	/// symlink-resolved staging directory.
+	/// Resolves `path` and returns it only when it is an existing regular file
+	/// directly inside the symlink-resolved staging directory.
 	private static func confinedStagedFileURL(path: String) -> URL? {
 		guard let staging = stagingDirectory() else { return nil }
 		let resolvedStaging = staging.resolvingSymlinksInPath()
@@ -196,14 +237,20 @@ final class ShareHandoff: NSObject {
 		guard resolved.path.hasPrefix(resolvedStaging.path + "/"),
 			resolved.deletingLastPathComponent().path == resolvedStaging.path
 		else { return nil }
+		var isDirectory: ObjCBool = false
+		guard FileManager.default.fileExists(atPath: resolved.path, isDirectory: &isDirectory),
+			!isDirectory.boolValue,
+			let attributes = try? FileManager.default.attributesOfItem(atPath: resolved.path),
+			(attributes[.type] as? FileAttributeType) == .typeRegular
+		else { return nil }
 		return resolved
 	}
 
-	/// Deletes the staged file referenced by a claimed record (confinement
-	/// re-checked; untrusted names can never delete outside the staging dir).
-	private static func cleanup(record: [String: Any]) {
-		guard let stagedImageURI = stagedImageURI(record["stagedFile"] as? String),
-			let url = URL(string: stagedImageURI)
+	/// Deletes the canonical file for a claimed share ID. Never trusts the
+	/// record's filename, so a malformed record cannot delete another share.
+	internal static func cleanup(shareId: String) {
+		guard let uri = stagedImageURI("\(shareId).img", shareId: shareId),
+			let url = URL(string: uri)
 		else { return }
 		try? FileManager.default.removeItem(at: url)
 	}

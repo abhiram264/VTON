@@ -3,6 +3,7 @@ package com.aifashionvault.platform.retention;
 import java.util.List;
 import com.aifashionvault.platform.objectstore.ObjectRef;
 import com.aifashionvault.platform.objectstore.ObjectStore;
+import com.aifashionvault.platform.objectstore.ObjectStoreExceptions;
 import com.aifashionvault.retention.DeleteOutcome;
 import com.aifashionvault.retention.RetentionCandidate;
 import com.aifashionvault.retention.RetentionClass;
@@ -30,9 +31,8 @@ public final class PlatformRetentionInventory implements RetentionInventory {
         try {
             store.delete(new ObjectRef(StorageDomain.TEMP, candidate.candidateId()));
             return DeleteOutcome.DELETED;
-        } catch (RuntimeException ex) {
-            if (ex.getMessage() != null && ex.getMessage().contains("404")) return DeleteOutcome.ALREADY_ABSENT;
-            throw ex;
+        } catch (ObjectStoreExceptions.StagedObjectMissingException ex) {
+            return DeleteOutcome.ALREADY_ABSENT;
         }
     }
     static boolean matches(RetentionClass kind, String key) {

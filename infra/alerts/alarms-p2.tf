@@ -16,7 +16,7 @@ resource "aws_cloudwatch_metric_alarm" "import_resolver_degraded" {
 
   metric_query {
     id          = "e1"
-    expression  = "m1/m2"
+    expression  = "IF(m2>0, (m1+m3)/m2, 0)"
     label       = "Resolver ${each.key} Failure Ratio"
     return_data = true
   }
@@ -26,7 +26,7 @@ resource "aws_cloudwatch_metric_alarm" "import_resolver_degraded" {
     return_data = false
 
     metric {
-      metric_name = "share.import.resolver.outcome.count"
+      metric_name = "share.import.resolver.outcome"
       namespace   = var.metric_namespace
       period      = 3600
       stat        = "Sum"
@@ -39,11 +39,28 @@ resource "aws_cloudwatch_metric_alarm" "import_resolver_degraded" {
   }
 
   metric_query {
+    id          = "m3"
+    return_data = false
+
+    metric {
+      metric_name = "share.import.resolver.outcome"
+      namespace   = var.metric_namespace
+      period      = 3600
+      stat        = "Sum"
+
+      dimensions = {
+        resolver = each.key
+        status   = "EXCEPTION"
+      }
+    }
+  }
+
+  metric_query {
     id          = "m2"
     return_data = false
 
     metric {
-      metric_name = "share.import.resolver.outcome.count"
+      metric_name = "share.import.resolver.outcome"
       namespace   = var.metric_namespace
       period      = 3600
       stat        = "Sum"
@@ -81,7 +98,7 @@ resource "aws_cloudwatch_metric_alarm" "category_quality_degraded" {
     return_data = false
 
     metric {
-      metric_name = "generation.quality.count"
+      metric_name = "generation.quality"
       namespace   = var.metric_namespace
       period      = 3600
       stat        = "Sum"
@@ -98,7 +115,7 @@ resource "aws_cloudwatch_metric_alarm" "category_quality_degraded" {
     return_data = false
 
     metric {
-      metric_name = "generation.quality.count"
+      metric_name = "generation.quality"
       namespace   = var.metric_namespace
       period      = 3600
       stat        = "Sum"
@@ -115,7 +132,7 @@ resource "aws_cloudwatch_metric_alarm" "category_quality_degraded" {
     return_data = false
 
     metric {
-      metric_name = "generation.quality.count"
+      metric_name = "generation.quality"
       namespace   = var.metric_namespace
       period      = 3600
       stat        = "Sum"

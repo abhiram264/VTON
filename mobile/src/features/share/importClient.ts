@@ -1,4 +1,5 @@
 import {
+  ApiProblemError,
   apiRequest,
   rejectDataUri,
   requireOk,
@@ -27,12 +28,18 @@ function toImportRequest(
     case 'url':
       return {kind: 'URL', sourceUrl: payload.url};
     case 'image':
-      return {kind: 'IMAGE', uploadId: uploadId ?? ''};
+      if (uploadId === null) {
+        throw new Error('Upload ID required for image import');
+      }
+      return {kind: 'IMAGE', uploadId};
     case 'image_url':
+      if (uploadId === null) {
+        throw new Error('Upload ID required for image import');
+      }
       return {
         kind: 'IMAGE_URL',
         sourceUrl: payload.url,
-        uploadId: uploadId ?? '',
+        uploadId,
       };
   }
 }
@@ -54,17 +61,18 @@ function createIdempotencyKey(): string {
 
 function sleep(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(resolve, ms);
-    signal.addEventListener(
-      'abort',
-      () => {
-        clearTimeout(timer);
-        reject(new Error('Aborted'));
-      },
-      {once: true},
-    );
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new Error('Aborted'));
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    signal.addEventListener('abort', onAbort, {once: true});
     if (signal.aborted) {
       clearTimeout(timer);
+      signal.removeEventListener('abort', onAbort);
       reject(new Error('Aborted'));
     }
   });
@@ -102,6 +110,25 @@ function isShareImportResponse(value: unknown): value is ShareImportResponse {
   }
 }
 
+function isTerminalUploadError(error: unknown): boolean {
+  if (error instanceof ApiProblemError) {
+    const match = /^HTTP_(\d{3})$/.exec(error.code);
+    if (match) {
+      const status = Number(match[1]);
+      return status >= 400 && status < 500 && status !== 408 && status !== 429;
+    }
+    return error.code === 'UNSUPPORTED_STAGED_IMAGE_TYPE';
+  }
+  if (error instanceof Error) {
+    const message = error.message.toLowerCase();
+    return (
+      message.includes('unsupported staged image type') ||
+      message.includes('data uri')
+    );
+  }
+  return false;
+}
+
 async function readStagedImage(
   localImageUri: string,
   signal: AbortSignal,
@@ -117,7 +144,7 @@ async function readStagedImage(
     response.headers.get('content-type'),
   );
   if (contentType === null) {
-    throw new Error('Unsupported staged image type');
+    throw new ApiProblemError('UNSUPPORTED_STAGED_IMAGE_TYPE');
   }
   return {body, contentType, contentLength: body.byteLength};
 }
@@ -150,6 +177,9 @@ export function createShareImportResolver(
     signal: AbortSignal,
   ): Promise<ShareImportResponse> {
     const isImageBearing = payload.kind !== 'url';
+    if (isImageBearing && stagedUri === null) {
+      stagedUri = payload.localImageUri;
+    }
     if (signal.aborted) {
       releaseOnce();
       throw new Error('Aborted');
@@ -157,20 +187,23 @@ export function createShareImportResolver(
 
     let uploadId = retainedUploadId;
     if (isImageBearing && uploadId === null) {
-      stagedUri = payload.localImageUri;
-      // Cancellation or any pre-completion failure must still release the
-      // native staged file exactly once per resolver instance.
+      // Releasing on abort guarantees the staged file never leaks if the user
+      // cancels, unmounts, or navigates away.
       signal.addEventListener('abort', releaseOnce, {once: true});
       try {
         const media = await readStagedImage(payload.localImageUri, signal);
         uploadId = await uploadMedia(config, media);
       } catch (error) {
-        releaseOnce();
+        // Release on abort or terminal failure; preserve staged media on
+        // recoverable failures so UI retry can succeed without losing source.
+        if (signal.aborted || isTerminalUploadError(error)) {
+          releaseOnce();
+        }
         throw error;
       }
       retainedUploadId = uploadId;
       // Verified server-side ownership transfer: release the native staged
-      // file exactly once, even if resolution later fails or needs recovery.
+      // file exactly once upon upload completion.
       releaseOnce();
       if (signal.aborted) {
         throw new Error('Aborted');

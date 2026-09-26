@@ -38,9 +38,8 @@ public class NotificationConfiguration {
 	/**
 	 * Default production {@link FcmClient} built from the frozen delivery properties.
 	 * The delivery configuration supplies the default FCM URL when no
-	 * {@code vault.notification.fcm-base-url} override is set; the client resolves to
-	 * nothing only when the delivery configuration itself is absent or carries no
-	 * project id, so slim contexts and unconfigured deployments stay valid.
+	 * {@code vault.notification.fcm-base-url} override is set. A nonblank project id also requires
+	 * a nonblank access token, so an incomplete production credential pair cannot construct a worker.
 	 */
 	@Bean
 	FactoryBean<FcmClient> fcmClient(ObjectProvider<NotificationDeliveryConfiguration> configs) {
@@ -51,6 +50,9 @@ public class NotificationConfiguration {
 				NotificationDeliveryConfiguration config = configs.getIfAvailable();
 				if (config == null || config.getProjectId() == null || config.getProjectId().isBlank()) {
 					return null;
+				}
+				if (config.getAccessToken() == null || config.getAccessToken().isBlank()) {
+					throw new IllegalStateException("vault.notification.access-token is required when project-id is configured");
 				}
 				return new FcmClient(
 					config.getFcmBaseUrl(),
@@ -174,7 +176,8 @@ public class NotificationConfiguration {
 				return;
 			}
 			try {
-				worker.processNext(Instant.now(clock));
+				Instant now = Instant.now(clock);
+				worker.processNext(Instant.now(clock), () -> Instant.now(clock));
 			}
 			catch (RuntimeException | Error failure) {
 				log.warn("notification delivery tick failed", failure);

@@ -18,6 +18,7 @@ import com.aifashionvault.shared.UserId;
 import com.aifashionvault.shared.VaultItemId;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class JdbcCollectionStoreTest {
 	static { TimeZone.setDefault(TimeZone.getTimeZone("UTC")); }
@@ -63,6 +64,16 @@ class JdbcCollectionStoreTest {
 		assertThat(store.removeItem(OWNER, first, high, T0.plusSeconds(10)).outcome()).isEqualTo(MembershipOutcome.CHANGED);
 		MembershipResult absent = store.removeItem(OWNER, first, high, T0.plusSeconds(11));
 		assertThat(absent.outcome()).isEqualTo(MembershipOutcome.UNCHANGED); assertThat(absent.collection().updatedAt()).isEqualTo(T0.plusSeconds(10));
+	}
+	@Test void compositeOwnerConstraintRejectsCrossOwnerMembership() {
+		CollectionId collection = collectionId("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
+		VaultItemId foreign = insertItem("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee", OTHER);
+		store.create(OWNER, collection, "One", T0);
+
+		assertThatThrownBy(() -> jdbc.update(
+			"INSERT INTO collection_item(collection_id, vault_item_id, user_id, created_at) VALUES (?, ?, ?, ?)",
+			collection.value(), foreign.value(), OWNER.value(), Timestamp.from(T0)))
+			.isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
 	}
 
 	@Test void deletingCollectionCascadesMembershipButNotVaultItem() {

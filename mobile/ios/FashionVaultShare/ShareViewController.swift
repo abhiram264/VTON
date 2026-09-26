@@ -24,6 +24,7 @@ final class ShareViewController: UIViewController {
 	private static let maxAttachments = 8
 	private static let maxURLLength = 2048
 	private static let maxTextLength = 10_000
+	private static let maxTextBytes = maxTextLength * 4
 	private static let maxImageBytes = 25 * 1024 * 1024
 	private static let processingDeadline: TimeInterval = 20
 	private static let recordTTLSeconds: TimeInterval = 15 * 60
@@ -33,8 +34,13 @@ final class ShareViewController: UIViewController {
 	private static let recordKeyPrefix = "aifashionvault.share.handoff."
 	private static let shareEnabledKey = "aifashionvault.share.enabled"
 
-	private let deadline = Date().addingTimeInterval(ShareViewController.processingDeadline)
-	private var finished = false
+	private let stateLock = NSLock()
+	private var processingStarted = false
+	private var terminal = false
+	private var activeShareId: String?
+	private var stagedFile: String?
+	private var pendingStagedFile: String?
+	private var timeoutWorkItem: DispatchWorkItem?
 
 	// MARK: UI (plain UIKit, monochrome; exactly two actions + cancel)
 
@@ -99,9 +105,7 @@ final class ShareViewController: UIViewController {
 	@objc private func addToVaultTapped() { performAction(.addToVault) }
 
 	@objc private func cancelTapped() {
-		guard !finished else { return }
-		finished = true
-		extensionContext?.cancelRequest(withError: ShareViewController.neutralError)
+		reject()
 	}
 
 	private func setUI(enabled: Bool) {
@@ -146,57 +150,87 @@ final class ShareViewController: UIViewController {
 	}
 
 	private func performAction(_ action: HandoffAction) {
-		guard !finished else { return }
-		finished = true // one share creates at most one handoff; duplicate callbacks are no-ops
+		let shareId = UUID().uuidString.lowercased()
+		guard beginAction(shareId: shareId) else { return }
 		setUI(enabled: false)
+		scheduleTimeout()
 
 		// Kill switch (SHARE_IMPORT_IOS): default-on, host-owned. The host app writes
 		// this App Group key from its single flag source; the extension only reads it.
 		// false => decline with the neutral message; nothing staged, recorded, or written.
 		let shareEnabled = (UserDefaults(suiteName: ShareViewController.appGroupID)?
 			.object(forKey: ShareViewController.shareEnabledKey) as? Bool) ?? true
-		guard shareEnabled else { return reject(stagedFile: nil) }
+		guard shareEnabled else { return reject() }
 
-		let shareId = UUID().uuidString.lowercased()
 		let pending = collectPendingProviders()
-		guard !pending.isEmpty else { return reject(stagedFile: nil) }
+		guard !pending.isEmpty else { return reject() }
 
 		let group = DispatchGroup()
 		var urlValue: String?
 		var textValue: String?
 		var stagedFile: String?
 		var imageCopyFailed = false
+		var providerInputRejected = false
 
 		if let provider = pending.urlProvider {
 			group.enter()
 			provider.loadItem(forTypeIdentifier: UTType.url.identifier, options: nil) { item, _ in
 				defer { group.leave() }
+				guard let self, !self.isTerminal else { return }
+				let candidate: String
 				if let url = item as? URL {
-					urlValue = ShareViewController.boundedURL(url.absoluteString)
+					candidate = url.absoluteString
 				} else if let string = item as? String {
-					urlValue = ShareViewController.boundedURL(string)
+					candidate = string
+				} else {
+					providerInputRejected = true
+					return
+				}
+				guard !self.isTerminal else { return }
+				if let value = ShareViewController.boundedURL(candidate) {
+					urlValue = value
+				} else {
+					providerInputRejected = true
 				}
 			}
 		}
 		if let provider = pending.textProvider {
 			group.enter()
-			provider.loadItem(forTypeIdentifier: UTType.plainText.identifier, options: nil) { item, _ in
+			provider.loadDataRepresentation(forTypeIdentifier: UTType.plainText.identifier) { data, _ in
 				defer { group.leave() }
-				if let string = item as? String {
-					textValue = ShareViewController.boundedText(string)
+				guard let self, !self.isTerminal else { return }
+				guard let data,
+					data.count <= ShareViewController.maxTextBytes,
+					let string = String(data: data, encoding: .utf8),
+					!self.isTerminal
+				else {
+					providerInputRejected = true
+					return
 				}
+				textValue = ShareViewController.boundedText(string)
 			}
 		}
 		if let provider = pending.imageProvider {
+			let fileName = shareId + ".img"
+			guard setPendingStagedFile(fileName) else { return }
 			group.enter()
-			provider.loadFileRepresentation(forTypeIdentifier: UTType.image.identifier) { fileURL, _ in
+			provider.loadFileRepresentation(forTypeIdentifier: UTType.image.identifier) { fileURL, error in
 				defer { group.leave() }
-				// Copy BEFORE this completion returns: the temporary file is deleted on return.
-				guard let fileURL, Date() < self.deadline else { return }
+				guard let self, !self.isTerminal else { return }
+				guard error == nil, let fileURL, !self.isTerminal else {
+					imageCopyFailed = true
+					self.clearPendingStagedFile(fileName)
+					return
+				}
 				do {
-					stagedFile = try ShareViewController.stageImage(shareId: shareId, at: fileURL)
+					let copiedFile = try ShareViewController.stageImage(shareId: shareId, at: fileURL)
+					self.clearPendingStagedFile(fileName)
+					if self.installStagedFile(copiedFile) {
+						stagedFile = copiedFile
+					}
 				} catch {
-					imageCopyFailed = true // failed copy => reject; never a partial handoff
+					imageCopyFailed = true
+					self.clearPendingStagedFile(fileName)
 				}
 			}
 		}
@@ -206,48 +240,202 @@ final class ShareViewController: UIViewController {
 				ShareViewController.removeStagedFile(stagedFile)
 				return
 			}
+			let stagedFileSnapshot = self.stagedFileSnapshot ?? stagedFile
+			guard !self.isTerminal else {
+				self.reject(stagedFile: stagedFileSnapshot)
+				return
+			}
 
 			// Normalization precedence (frozen): image+URL => image_url; image => image;
 			// URL or text-containing-URL => url; text without URL => unsupported.
 			let url = urlValue ?? ShareViewController.firstURL(inText: textValue)
 			let kind: RecordKind
-			switch (stagedFile != nil, url != nil) {
+			switch (stagedFileSnapshot != nil, url != nil) {
 			case (true, true): kind = .imageURL
 			case (true, false): kind = .image
 			case (false, true): kind = .url
-			case (false, false): return self.reject(stagedFile: nil)
+			case (false, false): return self.reject(stagedFile: stagedFileSnapshot)
 			}
 
-			if imageCopyFailed || Date() >= self.deadline {
-				return self.reject(stagedFile: stagedFile)
+			guard !imageCopyFailed, !providerInputRejected else {
+				return self.reject(stagedFile: stagedFileSnapshot)
 			}
-			do {
-				try ShareViewController.writeHandoffRecord(
-					shareId: shareId, action: action, kind: kind, url: url, stagedFile: stagedFile)
-				self.complete()
-			} catch {
-				self.reject(stagedFile: stagedFile, shareId: shareId)
-			}
+			self.writeRecordAndComplete(
+				shareId: shareId, action: action, kind: kind, url: url, stagedFile: stagedFileSnapshot
+			)
 		}
 	}
 
-	// MARK: Terminal outcomes (idempotent; `finished` guards duplicates)
+	// MARK: Terminal outcomes (idempotent; one terminal state)
 
-	private func complete() {
-		DispatchQueue.main.async { [extensionContext] in
-			extensionContext?.completeRequest(returningItems: nil, completionHandler: nil)
-		}
+	private enum TerminalOutcome {
+		case completed
+		case rejected
 	}
 
-	private func reject(stagedFile: String?, shareId: String? = nil) {
-		ShareViewController.removeStagedFile(stagedFile)
-		if let shareId {
+	private func beginAction(shareId: String) -> Bool {
+		stateLock.lock()
+		defer { stateLock.unlock() }
+		guard !processingStarted, !terminal else { return false }
+		processingStarted = true
+		activeShareId = shareId
+		return true
+	}
+
+	private func scheduleTimeout() {
+		let work = DispatchWorkItem { [weak self] in
+			self?.reject()
+		}
+		stateLock.lock()
+		guard !terminal else {
+			stateLock.unlock()
+			return
+		}
+		timeoutWorkItem = work
+		stateLock.unlock()
+		DispatchQueue.global(qos: .userInitiated).asyncAfter(
+			deadline: .now() + .seconds(Int(ShareViewController.processingDeadline)),
+			execute: work
+		)
+	}
+
+	private var isTerminal: Bool {
+		stateLock.lock()
+		defer { stateLock.unlock() }
+		return terminal
+	}
+
+	private var stagedFileSnapshot: String? {
+		stateLock.lock()
+		defer { stateLock.unlock() }
+		return stagedFile
+	}
+
+	@discardableResult
+	private func setPendingStagedFile(_ fileName: String) -> Bool {
+		stateLock.lock()
+		guard !terminal else {
+			stateLock.unlock()
+			ShareViewController.removeStagedFile(fileName)
+			return false
+		}
+		pendingStagedFile = fileName
+		stateLock.unlock()
+		return true
+	}
+
+	private func clearPendingStagedFile(_ fileName: String) {
+		stateLock.lock()
+		if pendingStagedFile == fileName {
+			pendingStagedFile = nil
+		}
+		stateLock.unlock()
+	}
+
+	private func installStagedFile(_ fileName: String) -> Bool {
+		stateLock.lock()
+		guard !terminal, stagedFile == nil else {
+			stateLock.unlock()
+			ShareViewController.removeStagedFile(fileName)
+			return false
+		}
+		stagedFile = fileName
+		pendingStagedFile = nil
+		stateLock.unlock()
+		return true
+	}
+
+	private func finish(_ outcome: TerminalOutcome, stagedFile: String? = nil, shareId: String? = nil) {
+		var fileToRemove: String?
+		var pendingToRemove: String?
+		var recordId: String?
+		stateLock.lock()
+		guard !terminal else {
+			stateLock.unlock()
+			if case .rejected = outcome, let stagedFile {
+				ShareViewController.removeStagedFile(stagedFile)
+			}
+			return
+		}
+		terminal = true
+		timeoutWorkItem?.cancel()
+		timeoutWorkItem = nil
+		recordId = shareId ?? activeShareId
+		if case .rejected = outcome {
+			fileToRemove = stagedFile ?? self.stagedFile
+			pendingToRemove = pendingStagedFile
+		}
+		self.stagedFile = nil
+		pendingStagedFile = nil
+		activeShareId = nil
+		stateLock.unlock()
+
+		if case .rejected = outcome {
+			ShareViewController.removeStagedFile(fileToRemove)
+			ShareViewController.removeStagedFile(pendingToRemove)
+			if let recordId {
+				UserDefaults(suiteName: ShareViewController.appGroupID)?
+					.removeObject(forKey: ShareViewController.recordKeyPrefix + recordId)
+			}
+		}
+		notifyTerminal(outcome)
+	}
+
+	private func writeRecordAndComplete(
+		shareId: String, action: HandoffAction, kind: RecordKind, url: String?, stagedFile: String?
+	) {
+		stateLock.lock()
+		guard !terminal else {
+			stateLock.unlock()
+			ShareViewController.removeStagedFile(stagedFile)
+			return
+		}
+		stateLock.unlock()
+
+		do {
+			try ShareViewController.writeHandoffRecord(
+				shareId: shareId, action: action, kind: kind, url: url, stagedFile: stagedFile
+			)
+		} catch {
 			UserDefaults(suiteName: ShareViewController.appGroupID)?
 				.removeObject(forKey: ShareViewController.recordKeyPrefix + shareId)
+			ShareViewController.removeStagedFile(stagedFile)
+			reject(stagedFile: stagedFile, shareId: shareId)
+			return
 		}
-		DispatchQueue.main.async { [extensionContext] in
-			extensionContext?.cancelRequest(withError: ShareViewController.neutralError)
+
+		stateLock.lock()
+		guard !terminal else {
+			stateLock.unlock()
+			UserDefaults(suiteName: ShareViewController.appGroupID)?
+				.removeObject(forKey: ShareViewController.recordKeyPrefix + shareId)
+			ShareViewController.removeStagedFile(stagedFile)
+			return
 		}
+		terminal = true
+		timeoutWorkItem?.cancel()
+		timeoutWorkItem = nil
+		self.stagedFile = nil
+		pendingStagedFile = nil
+		activeShareId = nil
+		stateLock.unlock()
+		notifyTerminal(.completed)
+	}
+
+	private func notifyTerminal(_ outcome: TerminalOutcome) {
+		DispatchQueue.main.async { [weak self, extensionContext] in
+			self?.setUI(enabled: false)
+			switch outcome {
+			case .completed:
+				extensionContext?.completeRequest(returningItems: nil, completionHandler: nil)
+			case .rejected:
+				extensionContext?.cancelRequest(withError: ShareViewController.neutralError)
+			}
+		}
+	}
+
+	private func reject(stagedFile: String? = nil, shareId: String? = nil) {
+		finish(.rejected, stagedFile: stagedFile, shareId: shareId)
 	}
 
 	private static var neutralError: NSError {
@@ -300,7 +488,12 @@ final class ShareViewController: UIViewController {
 		let fileName = shareId + ".img"
 		let destination = directory.appendingPathComponent(fileName)
 		try? FileManager.default.removeItem(at: destination)
-		try FileManager.default.copyItem(at: sourceURL, to: destination)
+		do {
+			try FileManager.default.copyItem(at: sourceURL, to: destination)
+		} catch {
+			try? FileManager.default.removeItem(at: destination)
+			throw error
+		}
 		return fileName
 	}
 

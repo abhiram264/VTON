@@ -212,35 +212,3 @@ resource "aws_security_group" "rds" {
 
   tags = local.tags
 }
-
-resource "aws_security_group" "cache" {
-  name        = "${local.name_prefix}-cache"
-  description = "Security group for ElastiCache Valkey cluster."
-  vpc_id      = aws_vpc.vault.id
-
-  ingress {
-    description     = "Allow Redis/Valkey inbound from API tasks"
-    from_port       = 6379
-    to_port         = 6379
-    protocol        = "tcp"
-    security_groups = [aws_security_group.api.id]
-  }
-
-  ingress {
-    description     = "Allow Redis/Valkey inbound from worker tasks"
-    from_port       = 6379
-    to_port         = 6379
-    protocol        = "tcp"
-    security_groups = [aws_security_group.worker.id]
-  }
-
-  egress {
-    description = "Allow all outbound traffic"
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  tags = local.tags
-}

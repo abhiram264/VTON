@@ -209,10 +209,21 @@ public final class S3ObjectStore implements ObjectStore, GenerationMediaStore {
 	@Override
 	public void delete(ObjectRef object) {
 		requireObject(object);
-		s3.deleteObject(DeleteObjectRequest.builder()
-			.bucket(bucket(object.boundary()))
-			.key(object.objectKey())
-			.build());
+		try {
+			s3.deleteObject(DeleteObjectRequest.builder()
+				.bucket(bucket(object.boundary()))
+				.key(object.objectKey())
+				.build());
+		}
+		catch (S3Exception ex) {
+			if (isMissing(ex)) {
+				return;
+			}
+			throw translate(ex);
+		}
+		catch (SdkClientException ex) {
+			throw unavailable();
+		}
 	}
 
 	@Override
@@ -631,9 +642,6 @@ public final class S3ObjectStore implements ObjectStore, GenerationMediaStore {
 
 	private static boolean isMissing(SdkServiceException ex) {
 		if (ex instanceof NoSuchKeyException) {
-			return true;
-		}
-		if (ex.statusCode() == 404) {
 			return true;
 		}
 		String code = errorCode(ex);

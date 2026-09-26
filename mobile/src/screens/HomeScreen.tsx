@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { useCallback, useState } from 'react';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { choosePhoto } from '../features/my-model/photoSource';
 import { looksApi } from '../features/looks/looksApi';
 import type { LookResource } from '../features/generation/types';
+import { useFocusEffect } from '@react-navigation/native';
 import type { SharePayload } from '../features/share/types';
 
 type Props = {
@@ -18,11 +19,13 @@ export default function HomeScreen({ onImport, onOpenLook, onProfile, onQuickTry
   const [looks, setLooks] = useState<LookResource[]>([]);
   const [looksStatus, setLooksStatus] = useState<'loading' | 'ready' | 'failed'>('loading');
 
-  useEffect(() => {
+  useFocusEffect(useCallback(() => {
     let active = true;
-    void looksApi.list().then(value => { if (active) { setLooks(value); setLooksStatus('ready'); } }, () => { if (active) setLooksStatus('failed'); });
+    setLooksStatus('loading');
+    setLooks([]);
+    void looksApi.list().then(value => { if (active) { setLooks(value); setLooksStatus('ready'); } }, () => { if (active) { setLooks([]); setLooksStatus('failed'); } });
     return () => { active = false; };
-  }, []);
+  }, []));
   async function importItem() {
     if (busy) return;
     setBusy(true);
@@ -30,6 +33,7 @@ export default function HomeScreen({ onImport, onOpenLook, onProfile, onQuickTry
     try {
       const photo = await choosePhoto();
       if (photo) onImport({ kind: 'image', localImageUri: photo.uri });
+      else setNotice('No photo was selected. Photo selection may be unavailable. Try again.');
     } catch {
       setNotice('Could not select an item. Try again.');
     } finally {
@@ -38,7 +42,7 @@ export default function HomeScreen({ onImport, onOpenLook, onProfile, onQuickTry
   }
 
   return (
-    <View style={styles.page}>
+    <ScrollView style={styles.page} contentContainerStyle={styles.content}>
       <View style={styles.headingRow}>
         <Text accessibilityRole="header" style={styles.title}>Home</Text>
         <Action label="Profile and settings" onPress={onProfile} />
@@ -53,7 +57,7 @@ export default function HomeScreen({ onImport, onOpenLook, onProfile, onQuickTry
       {looksStatus === 'ready' && looks.length === 0 ? <Text>No recent Looks yet.</Text> : null}
       {looks.map(look => <Action key={look.id} label={`Recent Look ${look.id}`} onPress={() => onOpenLook(look.id)} />)}
       <Action label="Quick Try" onPress={onQuickTry} />
-    </View>
+    </ScrollView>
   );
 }
 
@@ -66,7 +70,8 @@ function Action({ label, onPress, busy = false }: { label: string; onPress: () =
 }
 
 const styles = StyleSheet.create({
-  page: { flex: 1, padding: 20, gap: 14, backgroundColor: '#f4f4f2' },
+  page: { flex: 1, backgroundColor: '#f4f4f2' },
+  content: { padding: 20, gap: 14 },
   headingRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
   title: { fontSize: 28, fontWeight: '700', color: '#1a1a1a' },
   heading: { fontSize: 20, fontWeight: '700', color: '#1a1a1a' },

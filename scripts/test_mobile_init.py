@@ -212,6 +212,12 @@ class IsolatedTempRoot(unittest.TestCase):
             pass
 
 
+    def _symlink(self, link: Path, target: Path, *, directory: bool = False) -> None:
+        try:
+            link.symlink_to(target, target_is_directory=directory)
+        except (OSError, NotImplementedError) as exc:
+            self.skipTest(f"symlinks unavailable: {exc}")
+
 class TestMobileInit(IsolatedTempRoot):
     def _assert_stdout_state(self, proc: subprocess.CompletedProcess[str], state: str) -> None:
         payload = _stdout_payload(proc.stdout)
@@ -346,6 +352,20 @@ class TestMobileInit(IsolatedTempRoot):
         self._assert_stdout_state(proc, "INITIALIZED")
         self.assertEqual(_snapshot(self.root / "mobile"), before)
 
+    def test_missing_app_json_repairs_to_partial(self) -> None:
+        src = _ensure_greenfield_cache()
+        self.assertTrue(src.is_dir(), getattr(_ABSENT_PROC, "stderr", ""))
+        _copy_mobile(src, self.root)
+        (self.root / "mobile" / "app.json").unlink()
+        proc = _run_init(self.root)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self._assert_stdout_state(proc, "PARTIAL")
+        app_json = json.loads(
+            (self.root / "mobile" / "app.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(app_json["name"], "AIFashionVault")
+        self.assertEqual(app_json["displayName"], "AI Fashion Vault")
+
     def test_empty_shell_then_generate(self) -> None:
         marker = self.root / "outside.txt"
         marker.write_text("keep\n", encoding="utf-8")
@@ -395,6 +415,40 @@ class TestMobileInit(IsolatedTempRoot):
         self.assertIn("mobile/src/app/AppShell.tsx", _collision_paths(proc.stdout))
         self.assertEqual(target.read_bytes(), edited)
         self.assertEqual(_snapshot(self.root / "mobile"), before)
+
+    def test_mobile_root_symlink_is_collision(self) -> None:
+        with tempfile.TemporaryDirectory() as outside_name:
+            outside = Path(outside_name)
+            marker = outside / "keep.txt"
+            marker.write_text("untouched\n", encoding="utf-8")
+            self._symlink(self.root / "mobile", outside, directory=True)
+            proc = _run_init(self.root)
+            self.assertEqual(proc.returncode, 2, proc.stderr)
+            self._assert_stdout_state(proc, "COLLISION")
+            self.assertIn("mobile", _collision_paths(proc.stdout))
+            self.assertEqual(marker.read_text(encoding="utf-8"), "untouched\n")
+
+    def test_managed_parent_symlink_is_collision_before_reconcile(self) -> None:
+        with tempfile.TemporaryDirectory() as outside_name:
+            outside = Path(outside_name)
+            mobile = self.root / "mobile"
+            (mobile / "android").mkdir(parents=True)
+            (mobile / "ios").mkdir()
+            (mobile / "package.json").write_text(
+                json.dumps(
+                    {"name": "legacy", "dependencies": {"react-native": "0.86.2"}},
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            self._symlink(mobile / "src", outside, directory=True)
+            proc = _run_init(self.root)
+            self.assertEqual(proc.returncode, 2, proc.stderr)
+            self._assert_stdout_state(proc, "COLLISION")
+            self.assertIn("mobile/src/app/AppShell.tsx", _collision_paths(proc.stdout))
+            self.assertEqual(list(outside.iterdir()), [])
+            self.assertFalse((mobile / "App.tsx").exists())
 
     def test_unrelated_mobile_content_is_collision(self) -> None:
         notes = self.root / "mobile" / "notes.txt"

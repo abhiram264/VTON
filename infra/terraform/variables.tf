@@ -11,11 +11,35 @@ variable "aws_region" {
   type        = string
   default     = "us-east-1"
 }
+variable "metric_namespace" {
+  description = "CloudWatch namespace used by application metrics and alarms."
+  type        = string
+  default     = "AI-Fashion-Vault"
+}
+
 
 variable "vpc_cidr" {
   description = "CIDR block of the dedicated production VPC."
   type        = string
   default     = "10.42.0.0/16"
+}
+
+variable "operator_emails_p0" {
+  description = "Operator email addresses subscribed to P0 critical alert notifications."
+  type        = list(string)
+  default     = []
+}
+
+variable "operator_emails_p1" {
+  description = "Operator email addresses subscribed to P1 warning alert notifications."
+  type        = list(string)
+  default     = []
+}
+
+variable "operator_emails_p2" {
+  description = "Operator email addresses subscribed to P2 informational alert notifications."
+  type        = list(string)
+  default     = []
 }
 
 variable "availability_zones" {
@@ -35,9 +59,8 @@ variable "firebase_project_id" {
 }
 
 variable "acm_certificate_arn" {
-  description = "ACM certificate ARN; the HTTPS 443 listener is created only when this is set."
+  description = "Regional ACM certificate ARN used by the required HTTPS 443 listener."
   type        = string
-  default     = ""
 }
 
 variable "api_desired_count" {

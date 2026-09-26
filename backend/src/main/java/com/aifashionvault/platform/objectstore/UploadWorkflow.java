@@ -127,16 +127,16 @@ public final class UploadWorkflow {
 		if (userId == null || uploadId == null) {
 			throw new IllegalArgumentException("userId and uploadId are required");
 		}
+		deleteStagingQuietly(stagingRef(userId, uploadId, UploadPurpose.AVATAR));
+		deleteStagingQuietly(stagingRef(userId, uploadId, UploadPurpose.GENERIC));
+	}
+
+	private void deleteStagingQuietly(ObjectRef ref) {
 		try {
-			store.delete(stagingRef(userId, uploadId, UploadPurpose.AVATAR));
+			store.delete(ref);
 		}
 		catch (ObjectStoreExceptions.StagedObjectMissingException ignored) {
-			try {
-				store.delete(stagingRef(userId, uploadId, UploadPurpose.GENERIC));
-			}
-			catch (ObjectStoreExceptions.StagedObjectMissingException ignoredAgain) {
-				// missing TEMP object is a successful abort
-			}
+			// missing TEMP object is a successful abort
 		}
 	}
 

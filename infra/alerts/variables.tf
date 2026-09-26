@@ -85,13 +85,13 @@ variable "garment_categories" {
 variable "notification_failed_outcome" {
   description = "Outcome dimension value indicating a push notification failure."
   type        = string
-  default     = "FAILED"
+  default     = "PERMANENT_FAILURE"
 }
 
 variable "resolver_failure_status" {
   description = "Status dimension value indicating a source resolver import failure."
   type        = string
-  default     = "FAILED"
+  default     = "TERMINAL_FAILURE"
 }
 
 variable "p0_alb_5xx_count" {

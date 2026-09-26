@@ -71,6 +71,32 @@ def enableProguardInReleaseBuilds = false
  * this variant is about 6MiB larger per architecture than default.
  */
 def jscFlavor = 'io.github.react-native-community:jsc-android:2026004.+'
+def releaseSigningInput = { propertyName, environmentName ->
+    providers.gradleProperty(propertyName).orNull ?: System.getenv(environmentName)
+}
+def releaseSigningValues = [
+        releaseSigningInput("VTON_RELEASE_STORE_FILE", "VTON_RELEASE_STORE_FILE"),
+        releaseSigningInput("VTON_RELEASE_STORE_PASSWORD", "VTON_RELEASE_STORE_PASSWORD"),
+        releaseSigningInput("VTON_RELEASE_KEY_ALIAS", "VTON_RELEASE_KEY_ALIAS"),
+        releaseSigningInput("VTON_RELEASE_KEY_PASSWORD", "VTON_RELEASE_KEY_PASSWORD"),
+]
+def releaseSigningConfigured = releaseSigningValues.every { it != null && !it.trim().isEmpty() }
+
+gradle.taskGraph.whenReady { graph ->
+    def releaseRequested = graph.allTasks.any {
+        it.project == project && it.name.toLowerCase().contains("release")
+    }
+    if (releaseRequested && !releaseSigningConfigured) {
+        throw new GradleException(
+                "Release signing is not configured. Set VTON_RELEASE_STORE_FILE, " +
+                        "VTON_RELEASE_STORE_PASSWORD, VTON_RELEASE_KEY_ALIAS, and " +
+                        "VTON_RELEASE_KEY_PASSWORD as Gradle properties or environment variables.")
+    }
+    if (releaseRequested && !file(releaseSigningValues[0]).isFile()) {
+        throw new GradleException("VTON_RELEASE_STORE_FILE does not point to a file.")
+    }
+}
+
 
 android {
     ndkVersion rootProject.ext.ndkVersion
@@ -78,6 +104,16 @@ android {
     compileSdk rootProject.ext.compileSdkVersion
 
     namespace "com.aifashionvault.app"
+    signingConfigs {
+        if (releaseSigningConfigured) {
+            release {
+                storeFile file(releaseSigningValues[0])
+                storePassword releaseSigningValues[1]
+                keyAlias releaseSigningValues[2]
+                keyPassword releaseSigningValues[3]
+            }
+        }
+    }
     defaultConfig {
         applicationId "com.aifashionvault.app"
         minSdkVersion rootProject.ext.minSdkVersion
@@ -90,9 +126,9 @@ android {
             signingConfig signingConfigs.debug
         }
         release {
-            // Caution! In production, you need to generate your own keystore file.
-            // see https://reactnative.dev/docs/signed-apk-android.
-            signingConfig signingConfigs.debug
+            if (releaseSigningConfigured) {
+                signingConfig signingConfigs.release
+            }
             minifyEnabled enableProguardInReleaseBuilds
             proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
         }

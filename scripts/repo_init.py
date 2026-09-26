@@ -110,10 +110,22 @@ def _has_later_scaffolds(root: Path) -> bool:
     return False
 
 
+def _has_symlink_component(root: Path, rel: str) -> bool:
+    current = root
+    for part in rel.split("/"):
+        current /= part
+        if current.is_symlink():
+            return True
+    return False
+
+
 def _inventory(root: Path) -> tuple[list[str], list[str]]:
     missing: list[str] = []
     collisions: list[str] = []
     for rel in OWNED:
+        if _has_symlink_component(root, rel):
+            collisions.append(rel)
+            continue
         dest = root / rel
         src = _template_for(rel, root)
         if not dest.exists():
@@ -165,13 +177,13 @@ def main(argv: list[str] | None = None) -> int:
         root = Path.cwd() / root
     root = root.resolve()
 
-    top = _git_toplevel(root) if root.is_dir() else None
+    if not root.exists():
+        root.mkdir(parents=True)
+
+    top = _git_toplevel(root)
     if top is not None and not _same_dir(top, root):
         print(f"STATE: {STATE_WRONG_ROOT}")
         return EXIT_WRONG_ROOT
-
-    if not root.exists():
-        root.mkdir(parents=True)
 
     try:
         missing, collisions = _inventory(root)

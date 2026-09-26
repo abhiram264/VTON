@@ -148,6 +148,19 @@ class JdbcNotificationStoreTest {
 		assertThat(eventStore.claimDue(NOW).orElseThrow().event().reason())
 			.isEqualTo(com.aifashionvault.shared.TerminalReason.QUALITY_REJECTED.name());
 	}
+	@Test
+	void v024RejectsNegativeClaimEpoch() {
+		UserId userId = insertUser();
+		GenerationJobId generationId = insertJob(userId);
+		JdbcNotificationEventStore eventStore = new JdbcNotificationEventStore(dataSource);
+		UUID eventId = UUID.randomUUID();
+		assertThat(eventStore.insert(NotificationEvent.generationFailed(
+			eventId, userId, generationId, NOW, NOW.plus(Duration.ofDays(1))))).isTrue();
+		assertThat(eventStore.ensureDelivery(eventId, "device-epoch-test")).isTrue();
+
+		assertThatThrownBy(() -> jdbc.update("UPDATE generation_notification_delivery SET claim_epoch = -1"))
+			.isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+	}
 
 	@Test
 	void generationFailedEventWithoutReasonRoundTripsNull() {

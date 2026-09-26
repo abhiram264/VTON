@@ -218,11 +218,13 @@ class UploadsApiTest {
 
 		assertReadyWithoutStorageKeys(complete(token, id), id);
 
-		MvcResult aborted = mockMvc.perform(delete("/uploads/" + UUID.randomUUID())
+		MvcResult aborted = mockMvc.perform(delete("/uploads/" + id)
 				.header(HttpHeaders.AUTHORIZATION, bearer(token)))
 			.andExpect(status().isNoContent())
 			.andReturn();
 		assertThat(aborted.getResponse().getContentAsString()).isEmpty();
+		assertThat(this.fakeUploadStore.lastAbortedId).isEqualTo(new UploadId(UUID.fromString(id)));
+		assertThat(this.fakeUploadStore.staged).doesNotContainKey(this.fakeUploadStore.lastStagedKey);
 	}
 
 	@Test

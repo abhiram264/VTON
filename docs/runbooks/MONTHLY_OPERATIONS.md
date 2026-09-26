@@ -132,32 +132,73 @@ Per technical implementation plan §43:
 
 Every monthly cost audit must center on `costPerQualityApprovedLook`. A low cost per provider request is meaningless if quality rejections force repeated regenerations.
 
-### 2.2 CostAggregate Seam Audit
-The operator inspects the monthly billing window against all 13 fields of the `CostAggregate` record:
+### 2.2 Durable Persisted Cost Audit
+`CostAggregate` is backed by a process-local `HashMap`; it is a diagnostic seam only and is unavailable as a full-month source of truth across restarts, deployment replacement, or the API/worker process split. Use persisted attempt, Look, job, and quality facts for the monthly operational audit, then reconcile provider invoices separately.
 
-1. `totalCost` — Total monetary spend across all providers for the monthly billing window.
-2. `costPerRequest` — Gross cost per inbound generation request received.
-3. `costPerProviderSuccess` — Cost per generation returning HTTP 200 / successful provider response.
-4. `costPerQualityApprovedLook` — **PRIMARY METRIC:** Total cost divided by quality-approved Looks delivered to users.
-5. `costPerActiveUser` — Cost per monthly active user (MAU).
-6. `costPerRetainedUser` — Cost per retained user across D30 retention cohorts.
-7. `requestCount` — Total volume of generation requests in the month.
-8. `providerSuccessCount` — Total count of technically successful provider calls.
-9. `qualityApprovedLookCount` — Total count of Looks passing all quality gate checks.
-10. `activeUserCount` — Distinct active users during the monthly billing window.
-11. `retainedUserCount` — Distinct retained users during the monthly billing window.
-12. `knownCostCount` — Total generation records with a known cost (`costStatus` ESTIMATED or FINAL; i.e. not UNKNOWN).
-13. `currency` — Reporting currency ISO code (`USD`).
+```sql
+WITH month_attempts AS (
+    SELECT
+        cost_status,
+        currency,
+        CASE
+            WHEN cost_status = 'FINAL' AND actual_cost IS NOT NULL AND currency IS NOT NULL THEN actual_cost
+            WHEN cost_status = 'ESTIMATED' AND estimated_cost IS NOT NULL AND currency IS NOT NULL THEN estimated_cost
+            ELSE NULL
+        END AS cost
+    FROM generation_attempt
+    WHERE started_at >= :month_start AND started_at < :month_end
+),
+month_cost AS (
+    SELECT
+        COUNT(*) AS total_attempts,
+        CASE
+            WHEN COUNT(*) FILTER (WHERE cost_status = 'UNKNOWN') > 0
+              OR COUNT(*) FILTER (WHERE cost_status IS NULL) > 0
+              OR COUNT(DISTINCT currency) FILTER (WHERE cost_status IN ('FINAL', 'ESTIMATED')) > 1
+              OR COUNT(cost) <> COUNT(*) FILTER (WHERE cost_status IN ('FINAL', 'ESTIMATED'))
+            ELSE SUM(cost)
+        END AS total_spend,
+        CASE
+            WHEN COUNT(*) FILTER (WHERE cost_status = 'UNKNOWN') > 0
+              OR COUNT(*) FILTER (WHERE cost_status IS NULL) > 0
+              OR COUNT(DISTINCT currency) FILTER (WHERE cost_status IN ('FINAL', 'ESTIMATED')) > 1
+            THEN NULL
+            ELSE MIN(currency)
+        END AS reporting_currency,
+        COUNT(*) FILTER (WHERE cost_status = 'UNKNOWN') AS unknown_cost_attempts
+    FROM month_attempts
+),
+approved_looks AS (
+    SELECT COUNT(DISTINCT l.id) AS quality_approved_looks_count
+    FROM look l
+    JOIN generation_job gj ON gj.id = l.generation_job_id AND gj.user_id = l.user_id
+    JOIN generation_attempt ga
+      ON ga.generation_job_id = gj.id
+     AND split_part(l.storage_key, '/', 4) LIKE ga.id::text || '.%'
+    JOIN quality_result qr ON qr.generation_attempt_id = ga.id
+    WHERE l.created_at >= :month_start AND l.created_at < :month_end
+      AND l.deleted_at IS NULL
+      AND l.quality_status = 'PASS'
+      AND gj.status = 'COMPLETED'
+      AND ga.technical_outcome = 'SUCCESS'
+      AND qr.decision = 'PASS'
+)
+SELECT
+    m.total_attempts,
+    ROUND(m.total_spend::NUMERIC, 4) AS total_monthly_spend,
+    m.reporting_currency,
+    a.quality_approved_looks_count,
+    ROUND((m.total_spend / NULLIF(a.quality_approved_looks_count, 0))::NUMERIC, 4)
+        AS cost_per_quality_approved_look,
+    ROUND(100.0 * m.unknown_cost_attempts / NULLIF(m.total_attempts, 0), 2)
+        AS unknown_cost_status_pct
+FROM month_cost m CROSS JOIN approved_looks a;
+```
 
-### 2.3 Dimensional Breakdown via GenerationCostFact
-Break down generation costs along all five dimensions of `GenerationCostFact`:
-- `providerKey` — Spend by provider (e.g. `fashn`).
-- `modelRouteAuditIdentity` — Spend by model variant (e.g. `tryon-v1.6`, `tryon-max`). Note: currently, `GenerationWorkProcessor` hardcodes the persisted dimension value to `default`.
-- `technicalOutcome` — Filter by outcome: `SUCCESS` vs `FAILED`.
-- `qualityOutcome` — Filter by quality gate decision: `PASS`, `RETRY`, `FAIL`, or `null`.
-- `costStatus` — Distribution of billing certainty: `ESTIMATED`, `FINAL`, or `UNKNOWN`.
-
-*Audit Constraint:* The proportion of generations with `costStatus = UNKNOWN` must remain $< 2.0\%$. An unknown share $> 5.0\%$ indicates a broken provider webhook or billing parser and represents a P2 defect.
+### 2.3 Accounting Rules
+- Any UNKNOWN attempt, NULL `cost_status`, malformed known-cost row, or more than one known currency makes spend and unit cost `NULL`/UNKNOWN, never zero.
+- The Look denominator uses only undeleted PASS Looks from completed jobs and binds approval to the publishing attempt encoded in the Look storage key.
+- The proportion of generations with `costStatus = UNKNOWN` must remain $< 2.0\%$. A share $> 5.0\%$ indicates a broken provider webhook or billing parser and represents a P2 defect.
 
 ### 2.4 Tuning Levers & Controls
 When cost trends exceed projections, the operator adjusts three primary system controls:
@@ -189,17 +230,16 @@ Verify cost telemetry against frozen observability metric constants:
 
 ### 2.7 Section 2 Sign-Off
 ```text
-[ ] Section 2 Sign-Off: Cost Optimization (LOCAL)
-    Total Monthly Spend:                 $__________
+[ ] Section 2 Sign-Off: Cost Optimization (LOCAL SQL)
+    Total Monthly Attempts:              __________
+    Total Monthly Spend:                 __________ [currency / BLOCKED]
     Quality-Approved Looks:              __________
-    Cost per Quality-Approved Look:      $__________ (PRIMARY METRIC)
-    Cost per Request:                    $__________
-    Cost per Active User:                $__________
+    Cost per Quality-Approved Look:      __________ [currency / BLOCKED]
     Cost Status UNKNOWN Share:           ______% (Ceiling: < 2.0%)
-    Provider Credits Runway:             ______ days remaining
+    Provider Invoice Reconciled:         [YES / NO / BLOCKED-CREDENTIALS]
     Admission Policy Adjustments Made:   [NONE / TUNED: ______________________________]
-    Circuit Breaker Thresholds Verified: [YES / ADJUSTED]
-    Verdict:                             [PASS / AMBER / RED / NO_DATA]
+    Circuit Breaker Thresholds Verified: [YES / ADJUSTED / BLOCKED]
+    Verdict:                             [PASS / AMBER / RED / BLOCKED]
     Operator: ___________________________ Date: ________________________
 ```
 
@@ -287,16 +327,15 @@ The monthly privacy audit verifies compliance with technical implementation plan
 The operator walks all eleven checklist items from plan §78 verbatim. Each item is verified against its named repository control:
 
 ```text
-[ ] explicit avatar-use consent
-    Repository Control: Flyway migration V010__create_consents.sql provides generic schema
-    consent(id uuid PK, user_id, purpose text, version text, granted_at, revoked_at). Explicit
-    avatar-use consent is recorded via generic consent.purpose free-text, version, and granted_at
-    lifecycle, verified by inspecting PrivacyService and active consent records prior to photo ingestion.
+[ ] explicit avatar-use consent — BLOCKED / NOT WIRED
+    Repository evidence: V010__create_consents.sql provides only a generic schema. No production
+    consent store or fail-closed check is mounted at avatar ingestion, so zero-consent ingestion
+    is not blocked. This item must not be marked PASS from schema inspection.
 
-[ ] third-party inference disclosure
-    Repository Control: Third-party inference disclosure terms (FASHN ephemeral lifecycle) are recorded
-    via generic consent.purpose, version, and granted_at/revoked_at records in V010 consent table,
-    verified by inspecting PrivacyService and consent records before job dispatch.
+[ ] third-party inference disclosure — BLOCKED / NOT WIRED
+    Repository evidence: V010__create_consents.sql provides only a generic schema. No production
+    consent persistence or fail-closed check is mounted before generation dispatch, so a job can
+    proceed without a disclosure record. This item must not be marked PASS.
 
 [ ] no training by default
     Repository Control: No-training commitments and non-retention policies are tracked via
@@ -328,10 +367,10 @@ The operator walks all eleven checklist items from plan §78 verbatim. Each item
     (wired LooksController.delete/objectStore().delete), which removes Look records and rendered assets from StorageDomain.LOOK.
     Note: PrivacyService.deleteLook is the plan-§47 target contract with no production bean/impl yet.
 
-[ ] account deletion supported
-    Repository Control: Active runtime deletion executes via DELETE /me (IdentityProvisioning.beginDeletion
-    and AccountMediaPurge); multi-stage target workflow schema established in Flyway migration
-    V021__privacy_deletion_workflow.sql.
+[ ] account deletion supported — BLOCKED / NOT WIRED
+    Repository evidence: DELETE /me exposes a synchronous purge-first best-effort path, but the V021
+    durable workflow is not mounted. A purge failure can leave the account active without a resumable
+    checkpoint, so this item must not be marked PASS.
 
 [ ] temp image retention enforced
     Repository Control: RetentionPolicy.DEFAULT_MAXIMUM_AGE = 24h configured via application
@@ -358,13 +397,13 @@ Verify that `RetentionCleanupJob` is active and purging orphaned temporary objec
 ```text
 [ ] Section 4 Sign-Off: Privacy Audit (LOCAL)
     §78 Checklist Walked (11 of 11 items): [COMPLETE / DEFICIENCIES NOTED]
-    V010 Consent Schema Verified:          [PASS / FAIL]
+    Consent Enforcement at Processing Boundaries: [BLOCKED / NOT WIRED]
     Active REST Deletion Endpoints Live:   [PASS / FAIL]
     Temp Media Max Age (24h) Enforced:     [PASS / FAIL]
     RetentionCleanupJob Running Hourly:    [PASS / FAIL]
     ADR-015 Telemetry Media Exclusion:    [PASS / FAIL]
     Deficiencies / Corrective Actions:     _____________________________________________
-    Verdict:                               [PASS / AMBER / RED]
+    Verdict:                               [AMBER / RED / BLOCKED]
     Operator: ___________________________ Date: ________________________
 ```
 
@@ -401,21 +440,21 @@ The operator walks all thirteen checklist items from plan §77 verbatim. Each it
     to validate MIME types, magic byte signatures, image dimensions, and byte size limits before accepting uploads.
 
 [ ] storage buckets private
-    Repository Control: All S3 buckets across AVATAR, VAULT, LOOK, and TEMP storage domains
-    block public access (BlockPublicAcls, BlockPublicPolicy, IgnorePublicAcls, RestrictPublicBuckets).
+    Repository Control: Terraform provisions public-access blocks for all four S3 buckets. AWS
+    applied state and production bucket settings are BLOCKED-EXTERNAL until verified in the target account.
 
 [ ] DB not publicly exposed
-    Repository Control: PostgreSQL database resides in private VPC subnets with no public IPv4
-    allocation (`publicly_accessible = false`); access restricted to the API and worker ECS tasks via
-    `aws_security_group.rds` ingress from `aws_security_group.api` and `aws_security_group.worker` on port 5432.
+    Repository Control: Terraform provisions private networking and a non-public RDS instance. AWS
+    applied state and production DB ingress are BLOCKED-EXTERNAL until verified in the target account.
 
 [ ] Redis not publicly exposed
-    Repository Control: Redis / ElastiCache serverless cache resides in private VPC data subnets with
-    no external ingress (`aws_security_group.cache` admits only the api and worker security groups on 6379).
+    Repository Control: No Redis or ElastiCache is configured in the current V1 application or compose
+    stack; the environment validator rejects REDIS_URL. Treat this item as N/A for this repository.
 
 [ ] provider key in secret manager
-    Repository Control: FASHN_API_KEY and external provider secrets managed in AWS Secrets
-    Manager and injected via environment variables (vault.fashn.api-key); never hardcoded.
+    Repository Control: Terraform provisions an AWS Secrets Manager secret and injects it into both
+    ECS task definitions. Applied state, secret population, and runtime resolution are
+    BLOCKED-EXTERNAL until verified in the target account.
 
 [ ] secrets excluded from logs
     Repository Control: Logback structured JSON logging pattern filters authorization headers,
@@ -460,8 +499,7 @@ From the `mobile/` directory:
 npm audit --audit-level=high
 ```
 
-### 5.4 Healthy Standards & Escalation
-- **Checklist Compliance:** 13 of 13 items verified PASS.
+- **Checklist Compliance:** 13 of 13 items verified PASS or explicitly N/A/BLOCKED according to the current deployment state.
 - **CVE Threshold:** 0 Critical or High severity vulnerabilities in production dependencies.
 - **Escalation:** Any Critical CVE without an immediate patch requires mitigation via feature flag (§66) or dependency exclusion.
 
@@ -472,7 +510,7 @@ npm audit --audit-level=high
     Backend OWASP Dependency Scan:        [0 HIGH/CRITICAL / CVEs FOUND: ____________]
     Mobile npm Audit:                     [0 HIGH/CRITICAL / CVEs FOUND: ____________]
     Secret Isolation & Logging Verified:  [PASS / FAIL]
-    VPC & Bucket Privacy Intact:          [PASS / FAIL]
+    VPC & Bucket Privacy Applied State:   [BLOCKED-EXTERNAL / PASS / FAIL]
     Corrective Actions Opened:            _____________________________________________
     Verdict:                              [PASS / AMBER / RED]
     Operator: ___________________________ Date: ________________________
@@ -482,14 +520,14 @@ npm audit --audit-level=high
 
 ## 6. Data Deletion Test
 
-- **Execution Class:** **LOCAL** (Active Runtime Path via `DELETE /me` and per-entity endpoints) / **NOT-YET-WIRED / BLOCKED-EXTERNAL** (V021 Nine-Step Workflow Drive).
+- **Execution Class:** **LOCAL / PARTIAL / BEST-EFFORT** (active synchronous path; diagnostic only) / **BLOCKED-EXTERNAL** (V021 durable workflow not mounted).
 
 ### 6.1 Purpose, Runtime Wiring Reality & Seam Architecture
-The monthly data deletion test proves that user data and entity deletion function reliably across database rows, media assets in object storage, and user identity lifecycles.
+The monthly deletion test documents current deletion behavior; it cannot certify compliant account deletion until a durable disable-first workflow is mounted.
 
 #### Current Wiring Reality vs Target Contract
 Operational honesty requires documenting the architecture that executes today versus the planned future orchestrator:
-- **Active Runtime Path (LOCAL):** Account deletion today executes via `DELETE /me` (`MeController`), which delegates to `IdentityProvisioning.beginDeletion(userId, deletedAt)`. This triggers registered `AccountMediaPurge` beans (`AvatarAccountMediaPurge`, `ShareImportAccountMediaPurge`, and `GenerationAccountMediaPurge` which purges user objects via `ObjectStore.purgeUserObjects` and calls `JdbcGenerationStore.deleteUserLinkedGenerationData` to perform a **HARD DELETE** of user generation records), and updates the database to mark `users.deleted_at` set (`UPDATE users SET deleted_at = ?, updated_at = ? WHERE id = ?`). Individual entity deletions are handled by `DELETE /vault/items/{id}`, `DELETE /looks/{id}`, and `DELETE /avatars/{id}`.
+- **Active Runtime Path (LOCAL, PARTIAL/BEST-EFFORT):** Account deletion executes via `DELETE /me` (`MeController`) and `IdentityProvisioning.beginDeletion(userId, deletedAt)`. It synchronously runs registered purge components (`AvatarAccountMediaPurge`, `ShareImportAccountMediaPurge`, and `GenerationAccountMediaPurge`) before setting `users.deleted_at`. A purge exception therefore leaves the user undeleted, with no resumable workflow checkpoint. Individual entity deletions remain available through the per-entity endpoints.
 - **V021 Nine-Step Workflow Drive (NOT-YET-WIRED / BLOCKED-EXTERNAL):** Flyway migration `V021__privacy_deletion_workflow.sql` created the `account_deletion_workflow` table and defined the target nine-step deletion lifecycle (`REQUESTED` $\rightarrow$ `DELETE_AVATARS` $\rightarrow$ `DELETE_VAULT` $\rightarrow$ `DELETE_LOOKS` $\rightarrow$ `DELETE_TEMPORARY_GENERATIONS` $\rightarrow$ `REVOKE_AUTH` $\rightarrow$ `REMOVE_PUSH_TOKENS` $\rightarrow$ `ANONYMIZE_OPERATIONAL_DATA` $\rightarrow$ `COMPLETE`). However, `DefaultPrivacyService` has no Spring `@Bean` definition, `AccountDeletionWorkflowStore` has no production implementation in `src/main`, and `PrivacyService` is injected into no production controller. Nothing in `src/main` currently writes or transitions rows in `account_deletion_workflow`.
 - **Harness Prior Art:** The nine-step state machine and lease mechanics exist as verified test harness implementations in `AccountDeletionOrchestratorTest` and `AccountDeletionWorkflowTest`. These serve as prior art for when production workflow storage and controllers are wired.
 
@@ -506,11 +544,11 @@ Operational honesty requires documenting the architecture that executes today ve
   - `ai-fashion-vault-local-generation-temp` (`StorageDomain.TEMP`)
 - **Staging:** When staging environment is available (post slice-58).
 
-### 6.3 Active Path Deletion Test Procedure (LOCAL)
-This procedure exercises the deletion surface that actually executes in production and local development today:
+### 6.3 Active Path Diagnostic (LOCAL; NOT A COMPLIANCE PASS)
+This procedure may expose happy-path behavior, but it must never be recorded as compliant deletion evidence. The current path is purge-first, synchronous, and has no durable retry ledger or failure-injection/restart proof.
 
 1. **Provision Test Fixture:**
-   - Create a dedicated test account with known UUID (`test-user-monthly-<timestamp>`).
+   - Create a dedicated test account with a known synthetic UUID (for example, `00000000-0000-0000-0000-000000000001`).
    - Create My Model avatar in `StorageDomain.AVATAR`.
    - Create two Vault items in `StorageDomain.VAULT`.
    - Create one completed Look in `StorageDomain.LOOK`.
@@ -556,20 +594,14 @@ The documented target contract for future runtime wiring defines nine sequential
 ### 6.5 Section 6 Sign-Off
 ```text
 [ ] Section 6 Sign-Off: Data Deletion Test
-    Execution Mode:                      [LOCAL (Active Path) / BLOCKED-EXTERNAL (V021 Workflow)]
-    Test User UUID:                       _____________________________________________
+    Execution Mode:                      [LOCAL (PARTIAL/BEST-EFFORT) / BLOCKED-EXTERNAL]
     Active REST Endpoints Exercised:     DELETE /vault/items/{id}, DELETE /looks/{id},
                                          DELETE /avatars/{id}, DELETE /me
-    IdentityProvisioning Invoked:        CONFIRMED (beginDeletion dispatched)
-    AccountMediaPurge Dispatched:        CONFIRMED (Avatar, ShareImport, Generation purges)
-    AVATAR Domain Media Purged:          [CONFIRMED 0 REMAINING]
-    VAULT Domain Media Purged:           [CONFIRMED 0 REMAINING]
-    LOOK Domain Media Purged:            [CONFIRMED 0 REMAINING]
-    TEMP Domain Media Purged:            [CONFIRMED 0 REMAINING]
-    users.deleted_at Timestamp Set:      [CONFIRMED NON-NULL]
-    Generation Data Hard-Deleted:        [CONFIRMED 0 ROWS in generation_job / attempt]
-    V021 Nine-Step Drive Status:         NOT-YET-WIRED / BLOCKED-EXTERNAL (Schema only)
-    Verdict:                             [PASS (Active Path) / FAIL]
+    Happy-Path Observations:             _____________________________________________
+    Failure Injection / Restart Proof:   [NOT AVAILABLE / BLOCKED]
+    V021 Nine-Step Drive Status:         BLOCKED / NOT WIRED (schema only)
+    Durable Disable-First Workflow:      BLOCKED / NOT WIRED
+    Compliance Verdict:                  [BLOCKED / FAIL]
     Operator: ___________________________ Date: ________________________
 ```
 
@@ -683,11 +715,11 @@ The on-call operator compiles the findings across all seven monthly review secti
 | # | Review Item | Execution Class | Primary Surface | Verdict (PASS / AMBER / RED / BLOCKED) | Operator Initials |
 |---|---|---|---|---|---|
 | 1 | Provider Benchmark | REQUIRES-CREDENTIALS | `EvaluationBenchmarkRunner` / Manifest `2026.01.0` | ____________________ | ________ |
-| 2 | Cost Optimization | LOCAL | `CostAggregate` / `GenerationCostFact` | ____________________ | ________ |
+| 2 | Cost Optimization | LOCAL SQL | Persisted `generation_attempt` + `look` / `quality_result` SQL; provider invoice reconciliation | ____________________ | ________ |
 | 3 | Dependency Updates | LOCAL | `mvnw versions` / `npm outdated` | ____________________ | ________ |
-| 4 | Privacy Audit | LOCAL | §78 Checklist (11 items) / Wired REST Deletion Endpoints | ____________________ | ________ |
+| 4 | Privacy Audit | LOCAL | §78 Checklist; consent and durable account-deletion compliance BLOCKED / NOT WIRED | ____________________ | ________ |
 | 5 | Security Audit | LOCAL | §77 Checklist (13 items) / OWASP / npm audit | ____________________ | ________ |
-| 6 | Data Deletion Test | LOCAL (Active Path) / NOT-YET-WIRED (V021 Drive) | DELETE /me & Per-Entity Deletions / AccountMediaPurge / users.deleted_at | ____________________ | ________ |
+| 6 | Data Deletion Test | LOCAL (PARTIAL/BEST-EFFORT) / BLOCKED (V021) | DELETE /me & per-entity diagnostics; compliant verdict BLOCKED until durable workflow exists | ____________________ | ________ |
 | 7 | Backup Restore Drill | BLOCKED-EXTERNAL | AWS RDS PITR / Slices 58 & 76 Blocked | BLOCKED-EXTERNAL | ________ |
 
 ---

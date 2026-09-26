@@ -50,12 +50,12 @@ Escalation:
 - Severity: P0 if app crashes on launch or authentication for all users (§68); P1 if crash-free sessions drop below 99.0% on current release.
 - Responding role: Mobile On-Call Engineer + Engineering Lead.
 - First mitigation: If crash correlates with a new app version, halt staged rollout in Play Console / App Store Connect immediately; if crash is triggered by an AI studio/share feature, invoke §66 feature flag kill-switch via backend config (`MULTI_ITEM=false`, `SHARE_IMPORT_ANDROID=false`, or `SHARE_IMPORT_IOS=false`).
-- Automation note: Host health is monitored by `<prefix>-p0-api-live-tasks` and `<prefix>-p0-alb-5xx` (in `infra/alerts/alarms-p0.tf`, pending `terraform apply`); until client crash alerting is automated, open a manual P0/P1 incident referencing runbook Section 1.
+- Automation note: Host-health alarm definitions are AVAILABLE NOW (repo) in `infra/alerts/alarms-p0.tf`; AWS applied/deployment state is not verified by repository source. Client crash alerting is not automated, so open a manual P0/P1 incident referencing runbook Section 1.
 
 ---
 
 ## 2. import failures
-Source: AVAILABLE NOW (repo) - PostgreSQL share_import table, Micrometer meter product.share.import.success (parts numerator/denominator), SourceResolverMetrics (share.import.resolver.outcome / .duration), ObservationFacade span share.resolve | ARRIVES WITH slice-68 (<prefix>-p2-import-resolver-degraded-<source>)
+Source: AVAILABLE NOW (repo) - PostgreSQL share_import table, Micrometer meter product.share.import.success (parts numerator/denominator), SourceResolverMetrics (share.import.resolver.outcome / .duration), ObservationFacade span share.resolve | Alarm definition AVAILABLE NOW (repo): `<prefix>-p2-import-resolver-degraded-<source>`
 Command:
 ```sql
 -- 1. Daily share import volume, success rate, and terminal failure breakdown
@@ -98,12 +98,12 @@ Escalation:
 - Severity: P2 if single source or retailer is degraded (§68); P1 if global import success drops below 85%; P0 if all share imports fail.
 - Responding role: Backend On-Call Engineer.
 - First mitigation: If failure is platform-specific, remotely disable share ingestion via §66 feature flag `SHARE_IMPORT_ANDROID=false` or `SHARE_IMPORT_IOS=false` to route users to direct in-app photo upload.
-- Automation note: Guarded by alert `<prefix>-p2-import-resolver-degraded-<source>` (in `infra/alerts/alarms-p2.tf`, pending `terraform apply`); open manual P2 incident referencing runbook Section 2 if alarm is not yet active.
+- Automation note: Alarm definition is AVAILABLE NOW (repo) in `infra/alerts/alarms-p2.tf`; AWS applied/deployment state is not verified by repository source. Open a manual P2 incident if the deployed alarm is absent or inactive.
 
 ---
 
 ## 3. generation failures
-Source: AVAILABLE NOW (repo) - PostgreSQL generation_job and generation_attempt tables, Micrometer meters generation.terminal (category tags), generation.transition, provider.error (provider, error_code tags) | ARRIVES WITH slice-53 (generation.failure, provider.error_rate), slice-68 (<prefix>-p0-generation-failure-ratio, <prefix>-p1-provider-errors)
+Source: AVAILABLE NOW (repo) - PostgreSQL generation_job and generation_attempt tables, Micrometer meters generation.terminal (category tags), generation.transition, provider.error (provider, error_code tags) | Alarm definitions AVAILABLE NOW (repo): `<prefix>-p0-generation-failure-ratio`, `<prefix>-p1-provider-errors`
 Command:
 ```sql
 -- 1. Daily generation job terminal status and technical success rate
@@ -142,12 +142,12 @@ Escalation:
 - Severity: P0 if all generations are failing (§68: "all generations failing"); P1 if provider failure rate exceeds threshold (§68: "provider failures > threshold"); P2 if isolated to non-default provider.
 - Responding role: Backend On-Call Engineer + AI Platform Lead.
 - First mitigation: If failure is tied to high-cost or multi-garment features, flip §66 flags `TRYON_MAX=false` (fallback to v1.6 fast path), `HD_GENERATION=false`, or `MULTI_ITEM=false`.
-- Automation note: Guarded by alerts `<prefix>-p0-generation-failure-ratio` (P0) and `<prefix>-p1-provider-errors` (P1) (in `infra/alerts/`, pending `terraform apply`); open manual P0/P1 incident referencing runbook Section 3 if alarms are not yet active.
+- Automation note: Alarm definitions are AVAILABLE NOW (repo) in `infra/alerts/`; AWS applied/deployment state is not verified by repository source. Open a manual P0/P1 incident if a deployed alarm is absent or inactive.
 
 ---
 
 ## 4. quality rejects
-Source: AVAILABLE NOW (repo) - PostgreSQL quality_result table, Micrometer meter generation.quality (policy_version, decision, reason_code tags), product.generation.quality_rejection | ARRIVES WITH slice-68 (<prefix>-p1-quality-reject-ratio), slice-69 (<prefix>-ai-quality-collapse)
+Source: AVAILABLE NOW (repo) - PostgreSQL quality_result table, Micrometer meter generation.quality (policy_version, decision, reason_code tags), product.generation.quality_rejection | Alarm definitions AVAILABLE NOW (repo): `<prefix>-p1-quality-reject-ratio`, `<prefix>-ai-quality-collapse`
 Command:
 ```sql
 -- 1. Daily quality gate decisions and rejection rate
@@ -189,7 +189,7 @@ Escalation:
 - Severity: P1 per §68 ("quality failures spike"); Critical AI Alert per §69 if technical success is green but quality passes collapse.
 - Responding role: AI Evaluation / ML Engineer + Backend On-Call Engineer.
 - First mitigation: If reject surge is triggered by a newly deployed evaluator policy, revert via §66 feature flag `NEW_QUALITY_GATE=false`; if multi-item layering fails, disable `MULTI_ITEM=false`.
-- Automation note: Guarded by `<prefix>-p1-quality-reject-ratio` (in `infra/alerts/alarms-p1.tf`) and `<prefix>-ai-quality-collapse` (in `infra/alerts/ai-quality-collapse.tf`, pending `terraform apply`). Operators must inspect this condition daily by hand until alarms are deployed.
+- Automation note: Alarm definitions are AVAILABLE NOW (repo) in `infra/alerts/alarms-p1.tf` and `infra/alerts/ai-quality-collapse.tf`; AWS applied/deployment state is not verified by repository source.
 
 ---
 
@@ -232,7 +232,7 @@ Escalation:
 ---
 
 ## 6. queue latency
-Source: AVAILABLE NOW (repo) - AWS CloudWatch AWS/SQS ApproximateAgeOfOldestMessage and ApproximateNumberOfMessagesVisible, Micrometer gauges generation.outbox.lag + queue.depth + queue.oldest_age (QueueObservability), Micrometer timer generation.queue_wait | ARRIVES WITH slice-68 (<prefix>-p1-queue-oldest-age, <prefix>-p1-sqs-backlog)
+Source: AVAILABLE NOW (repo) - AWS CloudWatch AWS/SQS ApproximateAgeOfOldestMessage and ApproximateNumberOfMessagesVisible, Micrometer gauges generation.outbox.lag + queue.depth + queue.oldest_age (QueueObservability), Micrometer timer generation.queue_wait | Alarm definitions AVAILABLE NOW (repo): `<prefix>-p1-queue-oldest-age`, `<prefix>-p1-sqs-backlog`
 Command:
 AWS CLI v2 commands (substitute `<queue-name>` with deployed queue name, e.g., from Terraform `var.generation_queue_name`):
 ```bash
@@ -274,12 +274,12 @@ Escalation:
 - Severity: P1 per §68 ("queue delay too high").
 - Responding role: Infrastructure / Backend On-Call Engineer.
 - First mitigation: Scale out ECS Fargate generation worker task count; if backlog is driven by runaway batch submissions, throttle generation ingress or flip `MULTI_ITEM=false`.
-- Automation note: Guarded by alerts `<prefix>-p1-queue-oldest-age` and `<prefix>-p1-sqs-backlog` (in `infra/alerts/alarms-p1.tf`, pending `terraform apply`).
+- Automation note: Alarm definitions are AVAILABLE NOW (repo) in `infra/alerts/alarms-p1.tf`; AWS applied/deployment state is not verified by repository source.
 
 ---
 
 ## 7. cost per Look
-Source: AVAILABLE NOW (repo) - PostgreSQL generation_attempt table (actual_cost, estimated_cost, cost_status, credits_used), Micrometer meters generation.cost (recordCostStatus), generation.cost.amount, generation.cost.attempt, provider.credit_balance | ARRIVES WITH slice-68 (<prefix>-p1-generation-cost-hourly, <prefix>-p1-provider-credits-low)
+Source: AVAILABLE NOW (repo) - PostgreSQL generation_attempt table (actual_cost, estimated_cost, cost_status, credits_used), Micrometer meters generation.cost (recordCostStatus), generation.cost.amount, generation.cost.attempt, provider.credit_balance | Alarm definitions AVAILABLE NOW (repo): `<prefix>-p1-generation-cost-hourly`, `<prefix>-p1-provider-credits-low`
 Command:
 ```sql
 -- 1. Headline: Cost per Quality-Approved Look (ADR-014 / §43) with coverage integrity
@@ -289,59 +289,93 @@ WITH attempt_costs AS (
         ga.generation_job_id,
         ga.provider,
         ga.cost_status,
-        COALESCE(ga.actual_cost, ga.estimated_cost, 0) AS cost,
+        CASE
+            WHEN ga.cost_status = 'FINAL' AND ga.actual_cost IS NOT NULL AND ga.currency IS NOT NULL THEN ga.actual_cost
+            WHEN ga.cost_status = 'ESTIMATED' AND ga.estimated_cost IS NOT NULL AND ga.currency IS NOT NULL THEN ga.estimated_cost
+            ELSE NULL
+        END AS cost,
+        ga.currency,
         ga.credits_used
     FROM generation_attempt ga
     WHERE ga.started_at >= :day_start AND ga.started_at < :day_end
 ),
-job_outcomes AS (
+cost_totals AS (
     SELECT
-        gj.id AS job_id,
-        COUNT(DISTINCT l.id) AS approved_looks,
-        COUNT(DISTINCT CASE WHEN gj.status = 'COMPLETED' THEN gj.id END) AS completed_jobs
-    FROM generation_job gj
-    -- Canonical definition of quality-approved Look: technical SUCCESS and quality PASS (GenerationCostFact)
-    LEFT JOIN look l ON l.generation_job_id = gj.id AND l.quality_status = 'PASS'
-    WHERE gj.created_at >= :day_start AND gj.created_at < :day_end
-    GROUP BY gj.id
+        COUNT(*) AS total_attempts,
+        CASE
+            WHEN COUNT(*) FILTER (WHERE cost_status = 'UNKNOWN') > 0
+              OR COUNT(*) FILTER (WHERE cost_status IS NULL) > 0
+              OR COUNT(DISTINCT currency) FILTER (WHERE cost_status IN ('FINAL', 'ESTIMATED')) > 1
+              OR COUNT(cost) <> COUNT(*) FILTER (WHERE cost_status IN ('FINAL', 'ESTIMATED'))
+            THEN NULL
+            ELSE SUM(cost)
+        END AS total_cost,
+        SUM(credits_used) AS total_credits_used,
+        COUNT(*) FILTER (WHERE cost_status IN ('FINAL', 'ESTIMATED')) AS known_cost_attempts,
+        COUNT(*) FILTER (WHERE cost_status = 'UNKNOWN') AS unknown_cost_attempts,
+        ROUND(100.0 * COUNT(*) FILTER (WHERE cost_status IN ('FINAL', 'ESTIMATED')) / NULLIF(COUNT(*), 0), 2) AS known_cost_coverage_pct,
+        ROUND(100.0 * COUNT(*) FILTER (WHERE cost_status = 'UNKNOWN') / NULLIF(COUNT(*), 0), 2) AS unknown_cost_pct
+    FROM attempt_costs
+),
+approved_looks AS (
+    SELECT COUNT(DISTINCT l.id) AS quality_approved_looks_count
+    FROM look l
+    JOIN generation_job gj ON gj.id = l.generation_job_id AND gj.user_id = l.user_id
+    JOIN generation_attempt ga
+      ON ga.generation_job_id = gj.id
+     AND split_part(l.storage_key, '/', 4) LIKE ga.id::text || '.%'
+    JOIN quality_result qr ON qr.generation_attempt_id = ga.id
+    WHERE l.created_at >= :day_start AND l.created_at < :day_end
+      AND l.deleted_at IS NULL
+      AND l.quality_status = 'PASS'
+      AND gj.status = 'COMPLETED'
+      AND ga.technical_outcome = 'SUCCESS'
+      AND qr.decision = 'PASS'
 ),
 job_totals AS (
-    SELECT
-        COALESCE(SUM(approved_looks), 0) AS total_approved_looks,
-        COALESCE(SUM(completed_jobs), 0) AS total_completed_jobs
-    FROM job_outcomes
+    SELECT COUNT(*) FILTER (WHERE status = 'COMPLETED') AS total_completed_jobs
+    FROM generation_job
+    WHERE created_at >= :day_start AND created_at < :day_end
 )
 SELECT
-    COUNT(DISTINCT ac.attempt_id) AS total_attempts,
-    ROUND(SUM(ac.cost)::numeric, 4) AS total_cost_usd,
-    SUM(ac.credits_used) AS total_credits_used,
-    jt.total_approved_looks AS total_quality_approved_looks,
-    -- Headline Metric: Cost per Quality-Approved Look
-    ROUND((SUM(ac.cost) / NULLIF(jt.total_approved_looks, 0))::numeric, 4) AS cost_per_quality_approved_look,
-    -- Secondary Context: Cost per Completed Job
-    ROUND((SUM(ac.cost) / NULLIF(jt.total_completed_jobs, 0))::numeric, 4) AS cost_per_completed_job,
-    -- Cost Status Coverage Audit
-    COUNT(*) FILTER (WHERE ac.cost_status IN ('FINAL', 'ESTIMATED')) AS known_cost_attempts,
-    COUNT(*) FILTER (WHERE ac.cost_status = 'UNKNOWN') AS unknown_cost_attempts,
-    ROUND(100.0 * COUNT(*) FILTER (WHERE ac.cost_status IN ('FINAL', 'ESTIMATED')) / NULLIF(COUNT(*), 0), 2) AS known_cost_coverage_pct,
-    ROUND(100.0 * COUNT(*) FILTER (WHERE ac.cost_status = 'UNKNOWN') / NULLIF(COUNT(*), 0), 2) AS unknown_cost_pct
-FROM attempt_costs ac
+    ct.total_attempts,
+    ROUND(ct.total_cost::numeric, 4) AS total_cost,
+    ct.total_credits_used,
+    al.quality_approved_looks_count AS total_quality_approved_looks,
+    ROUND((ct.total_cost / NULLIF(al.quality_approved_looks_count, 0))::numeric, 4) AS cost_per_quality_approved_look,
+    ROUND((ct.total_cost / NULLIF(jt.total_completed_jobs, 0))::numeric, 4) AS cost_per_completed_job,
+    ct.known_cost_attempts,
+    ct.unknown_cost_attempts,
+    ct.known_cost_coverage_pct,
+    ct.unknown_cost_pct
+FROM cost_totals ct
 CROSS JOIN job_totals jt
-GROUP BY jt.total_approved_looks, jt.total_completed_jobs;
+CROSS JOIN approved_looks al;
 
 -- 2. Provider-level cost and credit consumption split
 SELECT
     provider,
+    currency,
+    cost_status,
     COUNT(*) AS attempts,
-    ROUND(SUM(COALESCE(actual_cost, estimated_cost, 0))::numeric, 4) AS provider_cost_usd,
+    ROUND(SUM(
+        CASE
+            WHEN cost_status = 'FINAL' AND actual_cost IS NOT NULL AND currency IS NOT NULL THEN actual_cost
+            WHEN cost_status = 'ESTIMATED' AND estimated_cost IS NOT NULL AND currency IS NOT NULL THEN estimated_cost
+        END
+    )::numeric, 4) AS provider_cost,
     SUM(credits_used) AS provider_credits_used,
-    COUNT(*) FILTER (WHERE cost_status = 'UNKNOWN') AS unknown_cost_attempts,
-    ROUND(AVG(COALESCE(actual_cost, estimated_cost, 0))::numeric, 4) AS avg_cost_per_attempt
-FROM generation_attempt
+    ROUND(AVG(
+        CASE
+            WHEN cost_status = 'FINAL' AND actual_cost IS NOT NULL AND currency IS NOT NULL THEN actual_cost
+            WHEN cost_status = 'ESTIMATED' AND estimated_cost IS NOT NULL AND currency IS NOT NULL THEN estimated_cost
+        END
+    )::numeric, 4) AS avg_cost_per_attempt
 WHERE started_at >= :day_start AND started_at < :day_end
-GROUP BY provider
-ORDER BY provider_cost_usd DESC;
+GROUP BY provider, currency, cost_status
+ORDER BY provider, currency, cost_status;
 ```
+Accounting gate: if any included attempt is UNKNOWN, has a NULL `cost_status`, has a malformed known-cost row, or known attempts use more than one currency, monetary totals and unit costs are `NULL`/UNKNOWN, never zero.
 Healthy:
 - Target: Cost per quality-approved Look within modeled unit economics ($0.04–$0.08 initial baseline); known-cost coverage >= 95%; UNKNOWN cost status < 5% (initial operational default per ADR-014).
 - Amber band: Day-over-day increase between 15% and 30% with stable traffic volume, or UNKNOWN cost status share between 5% and 10%.
@@ -356,12 +390,12 @@ Escalation:
 - Severity: P1 per §68 ("generation cost spike" or "provider credits low").
 - Responding role: Engineering Lead + Product Owner / FinOps.
 - First mitigation: If HD or Max renders drive cost spike, disable via §66 feature flags `HD_GENERATION=false` or `TRYON_MAX=false`; if per-user quota runaway, enforce tighter rate limits.
-- Automation note: Guarded by alerts `<prefix>-p1-generation-cost-hourly` and `<prefix>-p1-provider-credits-low` (in `infra/alerts/alarms-p1.tf`, pending `terraform apply`).
+- Automation note: Alarm definitions are AVAILABLE NOW (repo) in `infra/alerts/alarms-p1.tf`; AWS applied/deployment state is not verified by repository source.
 
 ---
 
 ## 8. problematic categories
-Source: AVAILABLE NOW (repo) - PostgreSQL quality_result, generation_attempt, generation_job, generation_render_step, generation_render_step_item, vault_item tables | ARRIVES WITH slice-68 (<prefix>-p2-category-quality-degraded-<category>)
+Source: AVAILABLE NOW (repo) - PostgreSQL quality_result, generation_attempt, generation_job, generation_render_step, generation_render_step_item, vault_item tables | Alarm definition AVAILABLE NOW (repo): `<prefix>-p2-category-quality-degraded-<category>`
 Command:
 ```sql
 -- Garment category quality reject rates ranked by reject percentage
@@ -376,7 +410,7 @@ SELECT
 FROM quality_result qr
 JOIN generation_attempt ga ON qr.generation_attempt_id = ga.id
 JOIN generation_job gj ON ga.generation_job_id = gj.id
-JOIN generation_render_step grs ON grs.generation_job_id = gj.id
+JOIN generation_render_step grs ON grs.id = ga.render_step_id
 JOIN generation_render_step_item grsi ON grsi.render_step_id = grs.id
 LEFT JOIN vault_item vi ON grsi.vault_item_id = vi.id
 WHERE qr.created_at >= :day_start AND qr.created_at < :day_end
@@ -399,12 +433,12 @@ Escalation:
 - Severity: P2 per §68 ("one garment category quality degraded").
 - Responding role: AI Evaluation / ML Engineer.
 - First mitigation: Adjust category routing rules in provider adapter; temporarily warn users or constrain multi-item composition for degraded category; if whole category causes failure, restrict via feature flag.
-- Automation note: Guarded by alert `<prefix>-p2-category-quality-degraded-<category>` (in `infra/alerts/alarms-p2.tf`, pending `terraform apply`).
+- Automation note: Alarm definition is AVAILABLE NOW (repo) in `infra/alerts/alarms-p2.tf`; AWS applied/deployment state is not verified by repository source.
 
 ---
 
 ## 9. problematic source apps
-Source: AVAILABLE NOW (repo) - PostgreSQL share_import table (source_site_name, source_url, source_kind, terminal_reason_code) | ARRIVES WITH slice-68 (<prefix>-p2-import-resolver-degraded-<source>)
+Source: AVAILABLE NOW (repo) - PostgreSQL share_import table (source_site_name, source_url, source_kind, terminal_reason_code) | Alarm definition AVAILABLE NOW (repo): `<prefix>-p2-import-resolver-degraded-<source>`
 Command:
 ```sql
 -- Share import failure rates ranked by retailer domain / source site
@@ -412,8 +446,8 @@ Command:
 -- Attribution is by retailer domain. Native app package compatibility is tracked via external share matrix (§62).
 SELECT
     COALESCE(
-        NULLIF(source_site_name, ''),
-        NULLIF(split_part(split_part(source_url, '://', 2), '/', 1), ''),
+        NULLIF(lower(split_part(split_part(source_url, '://', 2), '/', 1)), ''),
+        NULLIF(lower(source_site_name), ''),
         'direct_upload_or_unknown'
     ) AS source_domain,
     source_kind,
@@ -427,8 +461,8 @@ FROM share_import
 WHERE created_at >= :day_start AND created_at < :day_end
 GROUP BY
     COALESCE(
-        NULLIF(source_site_name, ''),
-        NULLIF(split_part(split_part(source_url, '://', 2), '/', 1), ''),
+        NULLIF(lower(split_part(split_part(source_url, '://', 2), '/', 1)), ''),
+        NULLIF(lower(source_site_name), ''),
         'direct_upload_or_unknown'
     ),
     source_kind
@@ -449,7 +483,7 @@ Escalation:
 - Severity: P2 per §68 ("one retailer/source import degraded").
 - Responding role: Backend / Integrations On-Call Engineer.
 - First mitigation: If scraper is blocked by retailer, update scraper User-Agent / headers or prompt mobile client to recommend screenshot share; if whole platform share target is broken, disable via §66 feature flag `SHARE_IMPORT_ANDROID=false` or `SHARE_IMPORT_IOS=false`.
-- Automation note: Guarded by alert `<prefix>-p2-import-resolver-degraded-<source>` (in `infra/alerts/alarms-p2.tf`, pending `terraform apply`).
+- Automation note: Alarm definition is AVAILABLE NOW (repo) in `infra/alerts/alarms-p2.tf`; AWS applied/deployment state is not verified by repository source.
 
 ---
 

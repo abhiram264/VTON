@@ -1,5 +1,5 @@
 import { createBottomTabNavigator, type BottomTabBarButtonProps, type BottomTabScreenProps } from '@react-navigation/bottom-tabs';
-import type { CompositeScreenProps } from '@react-navigation/native';
+import { useFocusEffect, type CompositeScreenProps } from '@react-navigation/native';
 import { createNativeStackNavigator, type NativeStackScreenProps } from '@react-navigation/native-stack';
 import { Pressable, Text, View } from 'react-native';
 import GenerateScreen from '../screens/GenerateScreen';
@@ -43,7 +43,14 @@ const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tabs = createBottomTabNavigator<PrimaryTabParamList>();
 
 function TabButton({ label, accessibilityRole: _role, role: _ariaRole, ...props }: BottomTabBarButtonProps & { label: string }) {
-  return <Pressable {...props} accessibilityRole="tab" accessibilityLabel={label} accessibilityState={{ ...props.accessibilityState, selected: props.accessibilityState?.selected ?? props['aria-selected'] }} />;
+  return <Pressable {...props} accessibilityRole="tab" accessibilityLabel={props.accessibilityLabel ?? label} accessibilityState={{ ...props.accessibilityState, selected: props.accessibilityState?.selected ?? props['aria-selected'] }} />;
+}
+
+function VaultTabScreen({ navigation, route }: TabProps<'VaultTab'>) {
+  useFocusEffect(() => () => {
+    navigation.setParams({ mode: 'BROWSE', studioSessionId: undefined });
+  });
+  return <VaultScreen onProfile={() => navigation.navigate('ProfileSettings')} selectionUnavailable={route.params?.mode === 'SELECT_FOR_STUDIO' && !route.params.studioSessionId} onSelect={route.params?.studioSessionId ? itemId => { navigation.setParams({ mode: 'BROWSE', studioSessionId: undefined }); navigation.navigate('StudioTab', { studioSessionId: route.params?.studioSessionId, selectedVaultItemId: itemId }); } : undefined} />;
 }
 
 function MainTabs() {
@@ -53,7 +60,7 @@ function MainTabs() {
         {({ navigation }: TabProps<'HomeTab'>) => <HomeScreen onImport={payload => navigation.navigate('ShareImport', { payload })} onOpenLook={lookId => navigation.navigate('Look', { lookId })} onProfile={() => navigation.navigate('ProfileSettings')} onQuickTry={() => navigation.navigate('Generate')} />}
       </Tabs.Screen>
       <Tabs.Screen name="VaultTab" options={{ tabBarLabel: 'VAULT' }}>
-        {({ navigation, route }: TabProps<'VaultTab'>) => <VaultScreen onProfile={() => navigation.navigate('ProfileSettings')} selectionUnavailable={route.params?.mode === 'SELECT_FOR_STUDIO' && !route.params.studioSessionId} onSelect={route.params?.studioSessionId ? itemId => navigation.navigate('StudioTab', { studioSessionId: route.params?.studioSessionId, selectedVaultItemId: itemId }) : undefined} />}
+        {props => <VaultTabScreen {...props} />}
       </Tabs.Screen>
       <Tabs.Screen name="StudioTab" options={{ tabBarLabel: 'STUDIO' }}>
         {({ navigation, route }: TabProps<'StudioTab'>) => <StudioScreen {...route.params} onAddFromVault={studioSessionId => navigation.navigate('VaultTab', { mode: 'SELECT_FOR_STUDIO', studioSessionId })} onAvatar={() => navigation.navigate('MyModel')} onGenerate={() => navigation.navigate('Generate')} onProfile={() => navigation.navigate('ProfileSettings')} />}

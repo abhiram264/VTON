@@ -132,25 +132,42 @@ resource "aws_iam_role_policy" "api_task_policy" {
         Resource = aws_sqs_queue.generation_work.arn
       },
       {
-        Sid    = "AdotMetricsAndTraces"
+        Sid      = "AdotMetrics"
+        Effect   = "Allow"
+        Action   = "cloudwatch:PutMetricData"
+        Resource = "*"
+        Condition = {
+          StringEquals = {
+            "cloudwatch:namespace" = var.metric_namespace
+          }
+        }
+      },
+      {
+        Sid    = "AdotTraces"
         Effect = "Allow"
         Action = [
-          "cloudwatch:PutMetricData",
           "xray:PutTraceSegments",
           "xray:PutTelemetryRecords"
         ]
         Resource = "*"
       },
       {
-        Sid    = "AdotLogWrites"
+        Sid    = "AdotLogGroupCreate"
+        Effect = "Allow"
+        Action = "logs:CreateLogGroup"
+        Resource = [
+          aws_cloudwatch_log_group.api.arn
+        ]
+      },
+      {
+        Sid    = "AdotLogStreamWrites"
         Effect = "Allow"
         Action = [
-          "logs:CreateLogGroup",
           "logs:CreateLogStream",
           "logs:PutLogEvents"
         ]
         Resource = [
-          "arn:aws:logs:${var.aws_region}:*:log-group:/aws/*"
+          "${aws_cloudwatch_log_group.api.arn}:*"
         ]
       }
     ]
@@ -207,25 +224,42 @@ resource "aws_iam_role_policy" "worker_task_policy" {
         ]
       },
       {
-        Sid    = "AdotMetricsAndTraces"
+        Sid      = "AdotMetrics"
+        Effect   = "Allow"
+        Action   = "cloudwatch:PutMetricData"
+        Resource = "*"
+        Condition = {
+          StringEquals = {
+            "cloudwatch:namespace" = var.metric_namespace
+          }
+        }
+      },
+      {
+        Sid    = "AdotTraces"
         Effect = "Allow"
         Action = [
-          "cloudwatch:PutMetricData",
           "xray:PutTraceSegments",
           "xray:PutTelemetryRecords"
         ]
         Resource = "*"
       },
       {
-        Sid    = "AdotLogWrites"
+        Sid    = "AdotLogGroupCreate"
+        Effect = "Allow"
+        Action = "logs:CreateLogGroup"
+        Resource = [
+          aws_cloudwatch_log_group.worker.arn
+        ]
+      },
+      {
+        Sid    = "AdotLogStreamWrites"
         Effect = "Allow"
         Action = [
-          "logs:CreateLogGroup",
           "logs:CreateLogStream",
           "logs:PutLogEvents"
         ]
         Resource = [
-          "arn:aws:logs:${var.aws_region}:*:log-group:/aws/*"
+          "${aws_cloudwatch_log_group.worker.arn}:*"
         ]
       }
     ]
@@ -237,12 +271,44 @@ resource "aws_iam_role_policy_attachment" "execution_base" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
-resource "aws_iam_role_policy_attachment" "api_task_ssm" {
-  role       = aws_iam_role.api_task.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+resource "aws_iam_role_policy" "api_task_ecs_exec_policy" {
+  name = "${local.name_prefix}-api-task-ecs-exec"
+  role = aws_iam_role.api_task.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "EcsExecChannels"
+        Effect = "Allow"
+        Action = [
+          "ssmmessages:CreateControlChannel",
+          "ssmmessages:CreateDataChannel",
+          "ssmmessages:OpenControlChannel",
+          "ssmmessages:OpenDataChannel"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
 }
 
-resource "aws_iam_role_policy_attachment" "worker_task_ssm" {
-  role       = aws_iam_role.worker_task.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+resource "aws_iam_role_policy" "worker_task_ecs_exec_policy" {
+  name = "${local.name_prefix}-worker-task-ecs-exec"
+  role = aws_iam_role.worker_task.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "EcsExecChannels"
+        Effect = "Allow"
+        Action = [
+          "ssmmessages:CreateControlChannel",
+          "ssmmessages:CreateDataChannel",
+          "ssmmessages:OpenControlChannel",
+          "ssmmessages:OpenDataChannel"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
 }

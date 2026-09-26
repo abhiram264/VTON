@@ -30,6 +30,11 @@ public final class VaultContracts {
 	}
 
 	public record JsonNullable<T>(boolean defined, T value) {
+		public JsonNullable {
+			if (!defined && value != null) {
+				throw new IllegalArgumentException("undefined value must be null");
+			}
+		}
 		public static <T> JsonNullable<T> undefinedValue() { return new JsonNullable<>(false, null); }
 		public static <T> JsonNullable<T> of(T value) { return new JsonNullable<>(true, value); }
 		public boolean undefined() { return !defined; }

@@ -57,14 +57,14 @@ class AvatarSchemaConstraintsTest {
 	}
 
 	@Test
-	void flywayHistoryIsExactlyVersionsOneThroughTwentyThree() {
+	void flywayHistoryIsExactlyVersionsOneThroughTwentyFour() {
         List<Map<String, Object>> history = jdbc.queryForList(
             "SELECT version, success FROM flyway_schema_history "
                 + "WHERE version IS NOT NULL ORDER BY installed_rank");
 
-        assertThat(history).hasSize(23);
+        assertThat(history).hasSize(24);
         assertThat(history).extracting(row -> Integer.parseInt(row.get("version").toString()))
-            .containsExactly(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23);
+            .containsExactly(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24);
 
 		assertThat(history)
 			.extracting(row -> row.get("success"))

@@ -98,7 +98,7 @@ class AuthorizedGenerationMediaResolverTest {
 		assertThat(resolved.avatar()).isEqualTo(new PrivateMediaRef(new StorageKey(avatarKey), OptionalLong.empty()));
 		assertThat(resolved.products()).containsExactly(
 			new VtonProductAsset(new PrivateMediaRef(new StorageKey(topsKey), OptionalLong.empty()), new ItemCategory("tops")),
-			new VtonProductAsset(new PrivateMediaRef(new StorageKey(garmentKey), OptionalLong.empty()), new ItemCategory("garment")));
+			new VtonProductAsset(new PrivateMediaRef(new StorageKey(garmentKey), OptionalLong.empty()), new ItemCategory("clothing")));
 		assertThat(resolved.avatar().storageKey().value())
 			.doesNotContain("http://", "https://", "data:", "x-amz");
 		assertThat(resolved.products())

@@ -69,6 +69,7 @@ object StagedImagePaths {
     // canonicalFile resolves symlinks and ../ segments, so containment is checked on the
     // resolved target; parent equality rejects anything not a direct child.
     val file = File(path).canonicalFile
+    if (uri.normalize().path != path) return null
     if (file.parentFile?.canonicalFile != staging) return null
     if (!isCanonicalUuid(file.name)) return null
     if (!file.isFile) return null
