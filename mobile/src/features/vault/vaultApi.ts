@@ -1,4 +1,5 @@
 import { apiRequest, rejectDataUri, requireOk, uploadMedia } from '../my-model/http';
+import { productionApiConfig } from '../../config/apiConfig';
 import { productContentType, validateProduct, ProductRejectedError } from '../generation/productUpload';
 import type { LocalPhoto } from '../my-model/types';
 
@@ -20,7 +21,7 @@ function parseItems(value: unknown): VaultItemSummary[] {
   return value.map(row => parseItem(row));
 }
 
-const config = { baseUrl: '', getAccessToken: () => null };
+const config = productionApiConfig;
 
 export const vaultApi = {
   async list(category?: string): Promise<VaultItemSummary[]> {
