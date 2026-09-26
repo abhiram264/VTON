@@ -104,6 +104,14 @@ backend\mvnw.cmd -f backend\pom.xml verify     # Windows
 
 186 test classes; roughly 3–7 min on this host (host-pace varies; see docs/BASELINE.md for the recorded runs).
 
+Run the suite with `VTON_IMAGE_API_KEY` UNSET. `InferHubLiveGenerationTest` self-skips
+unless that variable is exported, and when it IS exported the suite stops being offline:
+it makes a real call to the paid InferHub provider (up to 3 attempts at ~170s each) and
+writes through a real LocalStack object store. That class is the live proof that the
+provider path works end to end and is meant to be run deliberately, not as part of the
+default suite. It also means a full-suite test count taken with the key exported differs
+from one taken without, so record which state a measurement was taken in.
+
 Mobile, from `mobile/`:
 
 ```text

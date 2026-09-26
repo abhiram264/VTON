@@ -34,6 +34,8 @@ vault:
     temp-bucket: ai-fashion-vault-local-generation-temp
   fashn:
     api-key: test-fashn-key
+  inferhub:
+    api-key:
   firebase:
     project-id: demo-ai-fashion-vault
   otel:

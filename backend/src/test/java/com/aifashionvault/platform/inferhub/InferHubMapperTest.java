@@ -13,13 +13,19 @@ import com.aifashionvault.generation.vton.ProviderFailureCategory;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Wire-shape classification for the InferHub submit path. Every malformed provider
- * shape must end as a CLASSIFIED outcome, never as an escaping exception: an exception
- * from {@code mapRun} is caught by the worker and misrouted to submission-indeterminate,
- * which re-queues a permanent protocol violation until the recovery deadline.
+ * Malformed-shape hardening for the InferHub submit path.
  *
- * <p>Regression pin for the OUTPUT_URL defect: a plain http(s) image_url is a permanent,
- * non-retryable protocol violation and must be classified as such.
+ * <p>Scope is deliberately narrow: {@link InferHubMapperContractTest} already pins the
+ * primary wire shapes (verified text-then-image content, OUTPUT_MISSING, OUTPUT_URL,
+ * status/outcome classification, contract version, cached-output status). This class
+ * covers only the shapes that one suite would otherwise leave unpinned — the
+ * non-object/blank variants that reach the same classifier through a different guard —
+ * so the two files complement rather than duplicate each other.
+ *
+ * <p>Why these matter: every malformed shape must end as a CLASSIFIED outcome. An
+ * exception escaping {@code mapRun} is caught by the worker and misrouted to
+ * submission-indeterminate, which re-queues a permanent protocol violation until the
+ * recovery deadline instead of terminating it.
  */
 class InferHubMapperTest {
     private static final ObjectMapper JSON = new ObjectMapper();
@@ -37,120 +43,78 @@ class InferHubMapperTest {
         return mapper.mapRun(InferHubHttpResponse.http(200, json(body), false)).submission();
     }
 
-    private static void assertRejected(GenerationSubmission submission, String safeCode, boolean retryable) {
+    private static void assertOutputMissing(GenerationSubmission submission) {
         assertThat(submission).isInstanceOf(GenerationSubmission.Rejected.class);
         GenerationSubmission.Rejected rejected = (GenerationSubmission.Rejected) submission;
         assertThat(rejected.failure().category()).isEqualTo(ProviderFailureCategory.PROTOCOL_VIOLATION);
-        assertThat(rejected.failure().safeCode()).isEqualTo(safeCode);
-        assertThat(rejected.failure().retryable()).isEqualTo(retryable);
+        assertThat(rejected.failure().safeCode()).isEqualTo("OUTPUT_MISSING");
+        assertThat(rejected.failure().retryable()).isFalse();
     }
 
-    @Test
-    void inlineDataUriIsAccepted() {
-        String body = content("[{\"type\":\"text\",\"text\":\"here\"},"
-            + "{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:image/png;base64,iVBORw0KGgo=\"}}]");
-        InferHubMapper.Mapped mapped = mapper.mapRun(InferHubHttpResponse.http(200, json(body), false));
-        assertThat(mapped.submission()).isInstanceOf(GenerationSubmission.Accepted.class);
-        assertThat(mapped.dataUri()).startsWith("data:image/png;base64,");
-    }
-
-    /** The defect this test exists for: a URL is a permanent protocol violation, not an ambiguity. */
-    @Test
-    void plainHttpsUrlIsAPermanentRejectionNotAnAmbiguity() {
-        for (String url : new String[] {
-            "https://cdn.example.com/out.png",
-            "http://cdn.example.com/out.png"}) {
-            GenerationSubmission submission = submit(content(
-                "[{\"type\":\"text\"},{\"type\":\"image_url\",\"image_url\":{\"url\":\"" + url + "\"}}]"));
-            assertRejected(submission, "OUTPUT_URL", false);
-            assertThat(submission).isNotInstanceOf(GenerationSubmission.Indeterminate.class);
-        }
-    }
-
-    @Test
-    void nonDataNonHttpSchemeIsAlsoAUrlRejection() {
-        assertRejected(submit(content(
-            "[{\"type\":\"image_url\",\"image_url\":{\"url\":\"file:///tmp/out.png\"}}]")),
-            "OUTPUT_URL", false);
-    }
-
-    @Test
-    void missingImagePartIsOutputMissing() {
-        assertRejected(submit(content("[{\"type\":\"text\",\"text\":\"no image here\"}]")), "OUTPUT_MISSING", false);
-    }
-
-    @Test
-    void blankUrlIsOutputMissing() {
-        assertRejected(submit(content(
-            "[{\"type\":\"image_url\",\"image_url\":{\"url\":\"   \"}}]")), "OUTPUT_MISSING", false);
-    }
-
-    @Test
-    void nonObjectImageUrlIsOutputMissing() {
-        assertRejected(submit(content(
-            "[{\"type\":\"image_url\",\"image_url\":\"https://cdn.example.com/out.png\"}]")), "OUTPUT_MISSING", false);
-    }
-
-    @Test
-    void nonArrayContentIsOutputMissing() {
-        assertRejected(submit(content("\"just a string\"")), "OUTPUT_MISSING", false);
-    }
-
-    @Test
-    void emptyChoicesIsOutputMissing() {
-        assertRejected(submit("{\"choices\":[]}"), "OUTPUT_MISSING", false);
-    }
-
-    /** choices[0] present but not an object: must not throw (latent-trap hardening). */
+    /** choices[0] present but not an object: must not throw (the isObject guard). */
     @Test
     void nonObjectFirstChoiceIsOutputMissing() {
-        assertRejected(submit("{\"choices\":[\"not-an-object\"]}"), "OUTPUT_MISSING", false);
+        assertOutputMissing(submit("{\"choices\":[\"not-an-object\"]}"));
     }
 
+    /** image_url present but not an object (a bare string). */
     @Test
-    void missingChoicesIsOutputMissing() {
-        assertRejected(submit("{}"), "OUTPUT_MISSING", false);
+    void nonObjectImageUrlIsOutputMissing() {
+        assertOutputMissing(submit(content(
+            "[{\"type\":\"image_url\",\"image_url\":\"https://cdn.example.com/out.png\"}]")));
     }
 
+    /** A blank url is a malformed part, not a URL classification. */
     @Test
-    void missingMessageIsOutputMissing() {
-        assertRejected(submit("{\"choices\":[{}]}"), "OUTPUT_MISSING", false);
+    void blankUrlIsOutputMissing() {
+        assertOutputMissing(submit(content(
+            "[{\"type\":\"image_url\",\"image_url\":{\"url\":\"   \"}}]")));
     }
 
+    /** content present but not an array (distinct from content absent). */
     @Test
-    void oversizedBodyIsIndeterminate() {
-        GenerationSubmission submission = mapper.mapRun(
-            InferHubHttpResponse.http(200, json(content("[]")), true)).submission();
-        assertThat(submission).isInstanceOf(GenerationSubmission.Indeterminate.class);
-        assertThat(((GenerationSubmission.Indeterminate) submission).failure().safeCode())
-            .isEqualTo("OUTPUT_TOO_LARGE");
+    void nonArrayContentIsOutputMissing() {
+        assertOutputMissing(submit(content("\"just a string\"")));
     }
 
+    /**
+     * A non-data, non-http scheme (file:, ftp:) is still a URL rather than an inline image,
+     * so it takes the permanent OUTPUT_URL classification and never reaches the decoder.
+     */
     @Test
-    void unsentAndIndeterminateOutcomesClassifyAsRetryableNetworkFailures() {
-        GenerationSubmission unsent = mapper.mapRun(InferHubHttpResponse.unsent()).submission();
-        assertThat(((GenerationSubmission.Rejected) unsent).failure().safeCode()).isEqualTo("CONNECTION_FAILED");
-        assertThat(((GenerationSubmission.Rejected) unsent).failure().retryable()).isTrue();
-        assertThat(mapper.mapRun(InferHubHttpResponse.indeterminate()).submission())
-            .isInstanceOf(GenerationSubmission.Indeterminate.class);
-    }
-
-    /** 502/503 are transient upstream: retryable, never permanent. */
-    @Test
-    void transientStatusesAreRetryable() {
-        for (int status : new int[] {502, 503}) {
-            GenerationSubmission submission = mapper.mapRun(
-                InferHubHttpResponse.http(status, json("{}"), false)).submission();
-            assertThat(submission).isInstanceOf(GenerationSubmission.Rejected.class);
-            assertThat(((GenerationSubmission.Rejected) submission).failure().retryable())
-                .as("status " + status + " must be retryable").isTrue();
+    void nonDataNonHttpSchemeIsAUrlRejection() {
+        for (String url : new String[] {"file:///tmp/out.png", "ftp://cdn.example.com/out.png"}) {
+            GenerationSubmission submission = submit(content(
+                "[{\"type\":\"image_url\",\"image_url\":{\"url\":\"" + url + "\"}}]"));
+            assertThat(submission).as("scheme of %s", url)
+                .isInstanceOf(GenerationSubmission.Rejected.class);
+            GenerationSubmission.Rejected rejected = (GenerationSubmission.Rejected) submission;
+            assertThat(rejected.failure().category()).isEqualTo(ProviderFailureCategory.PROTOCOL_VIOLATION);
+            assertThat(rejected.failure().safeCode()).as("scheme of %s", url).isEqualTo("OUTPUT_URL");
+            assertThat(rejected.failure().retryable()).as("scheme of %s", url).isFalse();
+            assertThat(submission).as("scheme of %s", url)
+                .isNotInstanceOf(GenerationSubmission.Indeterminate.class);
         }
     }
 
+    /** No malformed shape may escape as an exception (the misrouting regression). */
     @Test
-    void nonRetryableStatusIsPermanent() {
-        GenerationSubmission submission = mapper.mapRun(
-            InferHubHttpResponse.http(400, json("{}"), false)).submission();
-        assertThat(((GenerationSubmission.Rejected) submission).failure().retryable()).isFalse();
+    void everyMalformedShapeIsClassifiedRatherThanThrown() {
+        String[] malformed = {
+            "{\"choices\":[\"not-an-object\"]}",
+            "{\"choices\":[{}]}",
+            "{\"choices\":[]}",
+            "{}",
+            content("\"just a string\""),
+            content("[]"),
+            content("[{\"type\":\"image_url\"}]"),
+            content("[{\"type\":\"image_url\",\"image_url\":{}}]"),
+            content("[{\"type\":\"image_url\",\"image_url\":{\"url\":\"\"}}]"),
+            content("[{\"type\":\"image_url\",\"image_url\":{\"url\":\"file:///tmp/x.png\"}}]"),
+        };
+        for (String body : malformed) {
+            assertThat(submit(body)).as("shape: %s", body)
+                .isInstanceOf(GenerationSubmission.Rejected.class);
+        }
     }
 }
