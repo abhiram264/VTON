@@ -168,9 +168,9 @@ jobs:
 
       # F02/F15 gate. The backend (backend-init.yml) and mobile (mobile-init.yml)
       # suites are already PR-gated, but every suite passes while a client is
-      # mounted with no API base URL / no token, or while the production malware
-      # scanner is hardcoded to answer UNAVAILABLE. These are greps over the
-      # product source: no credential, no service, no network.
+      # mounted with no API base URL / no token, or while every profile is
+      # forced to answer UNAVAILABLE for malware inspection. These are greps over
+      # the product source: no credential, no service, no network.
       - name: Runtime config is not stubbed (F02/F15)
         shell: bash
         run: |
@@ -186,9 +186,19 @@ jobs:
           if git grep -nE "getAccessToken: *\(\) *=?> *null" -- "${mobile_scope[@]}"; then
             die "F02: a mobile client is mounted with a null access token; an absent token must be a visible refusal, not a null default"
           fi
-          if git grep -nE "new MalwareScanResult\(MalwareVerdict\.UNAVAILABLE" -- backend/src/main/java; then
-            die "F15: the production malware scanner is hardcoded to answer UNAVAILABLE; wire a real scanner or fail the upload closed"
-          fi
+
+          # The fail-closed UNAVAILABLE malware default is INTENDED and must stay
+          # (ObjectStoreConfigurationTest.defaultMalwareScannerFailsClosed). The
+          # defect is that it is unconditional: no profile can install an honest
+          # scanner through the existing MalwareScanner seam, so
+          # UploadWorkflow.java:104-106 fails EVERY upload in EVERY profile.
+          # Scope the default; never satisfy this by removing the guarantee.
+          while IFS= read -r scanner_default; do
+            [ -n "$scanner_default" ] || continue
+            if ! grep -qE '@Profile\(|@ConditionalOnMissingBean' "$scanner_default"; then
+              die "F15: the fail-closed malware-scanner default in $scanner_default is unconditional, so no profile can supply a working scanner and every upload fails; scope it to a profile. Do NOT remove the fail-closed default."
+            fi
+          done < <(git grep -lE "new MalwareScanResult\(MalwareVerdict\.UNAVAILABLE" -- backend/src/main/java)
 
       - name: Local-dev init test
         shell: bash
