@@ -5,16 +5,19 @@ import java.awt.Graphics2D;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.net.URI;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-
 import javax.imageio.ImageIO;
 import javax.imageio.ImageWriter;
 import javax.imageio.stream.ImageOutputStream;
@@ -42,7 +45,7 @@ class UploadWorkflowTest {
 		@Test
 		void mintsUploadIdAndCallsPresignStagingPutOnly() {
 			FakeObjectStore store = new FakeObjectStore();
-			UploadWorkflow workflow = new UploadWorkflow(store, new ImageInspector(), () -> FIXED_UPLOAD);
+			UploadWorkflow workflow = UploadWorkflow.forTesting(store, new ImageInspector(), () -> FIXED_UPLOAD);
 			MediaDeclaration declaration = new MediaDeclaration("image/jpeg", 2048L);
 
 			UploadCapability capability = workflow.create(USER_ID, declaration);
@@ -62,7 +65,7 @@ class UploadWorkflowTest {
 		@Test
 		void mapsUnsupportedTypeAndInvalidLength() {
 			FakeObjectStore store = new FakeObjectStore();
-			UploadWorkflow workflow = new UploadWorkflow(store, new ImageInspector(), () -> FIXED_UPLOAD);
+			UploadWorkflow workflow = UploadWorkflow.forTesting(store, new ImageInspector(), () -> FIXED_UPLOAD);
 
 			assertThatThrownBy(() -> workflow.create(USER_ID, new MediaDeclaration("image/webp", 2048L)))
 				.isInstanceOf(ObjectStoreExceptions.UnsupportedMediaTypeException.class);
@@ -76,7 +79,7 @@ class UploadWorkflowTest {
 		@Test
 		void createWithAvatarPurposePresignsAvatarStaging() {
 			FakeObjectStore store = new FakeObjectStore();
-			UploadWorkflow workflow = new UploadWorkflow(store, new ImageInspector(), () -> FIXED_UPLOAD);
+			UploadWorkflow workflow = UploadWorkflow.forTesting(store, new ImageInspector(), () -> FIXED_UPLOAD);
 			MediaDeclaration declaration = new MediaDeclaration("image/jpeg", 2048L);
 
 			UploadCapability capability = workflow.create(USER_ID, declaration, UploadPurpose.AVATAR);
@@ -323,8 +326,30 @@ class UploadWorkflowTest {
 		}
 	}
 
+	@Nested
+	class ProductionApi {
+
+		@Test
+		void noPublicConstructorOrFactoryHandsOutAnImplicitlyCleanScanner() {
+			for (Constructor<?> constructor : UploadWorkflow.class.getConstructors()) {
+				assertThat(Arrays.stream(constructor.getParameterTypes()).map(Class::getName))
+					.as("public constructor %s must require an explicit MalwareScanner", Arrays.toString(constructor.getParameterTypes()))
+					.contains(MalwareScanner.class.getName());
+			}
+
+			for (Method method : UploadWorkflow.class.getDeclaredMethods()) {
+				if (method.isSynthetic() || !Modifier.isStatic(method.getModifiers()) || !Modifier.isPublic(method.getModifiers())) {
+					continue;
+				}
+				assertThat(method.getName())
+					.as("public static factory %s may only be the explicitly named test factory", method.getName())
+					.isEqualTo("forTesting");
+			}
+		}
+	}
+
 	private static UploadWorkflow workflow(FakeObjectStore store) {
-		return new UploadWorkflow(store, new ImageInspector(), () -> FIXED_UPLOAD);
+		return UploadWorkflow.forTesting(store, new ImageInspector(), () -> FIXED_UPLOAD);
 	}
 
 	private static FakeObjectStore staged(byte[] bytes, String contentType) {
