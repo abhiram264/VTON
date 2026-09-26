@@ -19,83 +19,33 @@ resource "aws_cloudwatch_metric_alarm" "ai_quality_collapse" {
     return_data = true
   }
 
+  # SEARCH, not metric{}: GenerationMetrics publishes these meters with their full
+  # tag set (generation.cost.attempt = provider, model, technical_outcome, quality_outcome,
+  # cost_status; generation.quality = policy_version, decision, reason_code, category), and a
+  # CloudWatch metric query matches the dimension set exactly. A metric{} block naming only one
+  # of those dimensions can never match, so the alarm would never fire.
   metric_query {
-    id          = "tech_success"
-    return_data = false
-
-    metric {
-      metric_name = "generation.cost.attempt"
-      namespace   = var.metric_namespace
-      period      = var.ai_quality_collapse_period_seconds
-      stat        = "Sum"
-
-      dimensions = {
-        technical_outcome = "SUCCESS"
-      }
-    }
+    id         = "tech_success"
+    expression = "SEARCH('{${var.metric_namespace}} generation.cost.attempt', 'technical_outcome', 'SUCCESS', ${var.ai_quality_collapse_period_seconds})"
   }
 
   metric_query {
-    id          = "tech_failure"
-    return_data = false
-
-    metric {
-      metric_name = "generation.cost.attempt"
-      namespace   = var.metric_namespace
-      period      = var.ai_quality_collapse_period_seconds
-      stat        = "Sum"
-
-      dimensions = {
-        technical_outcome = "FAILED"
-      }
-    }
+    id         = "tech_failure"
+    expression = "SEARCH('{${var.metric_namespace}} generation.cost.attempt', 'technical_outcome', 'FAILED', ${var.ai_quality_collapse_period_seconds})"
   }
 
   metric_query {
-    id          = "retry"
-    return_data = false
-
-    metric {
-      metric_name = "generation.quality"
-      namespace   = var.metric_namespace
-      period      = var.ai_quality_collapse_period_seconds
-      stat        = "Sum"
-
-      dimensions = {
-        decision = "RETRY"
-      }
-    }
+    id         = "retry"
+    expression = "SEARCH('{${var.metric_namespace}} generation.quality', 'decision', 'RETRY', ${var.ai_quality_collapse_period_seconds})"
   }
 
   metric_query {
-    id          = "fail"
-    return_data = false
-
-    metric {
-      metric_name = "generation.quality"
-      namespace   = var.metric_namespace
-      period      = var.ai_quality_collapse_period_seconds
-      stat        = "Sum"
-
-      dimensions = {
-        decision = "FAIL"
-      }
-    }
+    id         = "fail"
+    expression = "SEARCH('{${var.metric_namespace}} generation.quality', 'decision', 'FAIL', ${var.ai_quality_collapse_period_seconds})"
   }
 
   metric_query {
-    id          = "pass"
-    return_data = false
-
-    metric {
-      metric_name = "generation.quality"
-      namespace   = var.metric_namespace
-      period      = var.ai_quality_collapse_period_seconds
-      stat        = "Sum"
-
-      dimensions = {
-        decision = "PASS"
-      }
-    }
+    id         = "pass"
+    expression = "SEARCH('{${var.metric_namespace}} generation.quality', 'decision', 'PASS', ${var.ai_quality_collapse_period_seconds})"
   }
 }
