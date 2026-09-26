@@ -1,6 +1,14 @@
 import { render, screen } from '@testing-library/react-native';
 import type { ComponentType } from 'react';
 
+// Every test in this file renders a component and awaits rendered queries.
+// The default 5s per-test timeout was measured tripping on a loaded box
+// (concurrent Maven + jest) while the work itself is milliseconds, which
+// reported a pass as a failure. The timeout is raised rather than any
+// assertion relaxed, so a genuinely hung render still fails here.
+jest.setTimeout(30_000);
+
+
 // The app entry must boot under a placeholder/absent Firebase config: the
 // module-scope initializeFirebase() in AppShell resolves an explicitly
 // unavailable surface and navigation still mounts. This covers the boot

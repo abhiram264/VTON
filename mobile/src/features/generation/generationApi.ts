@@ -142,12 +142,19 @@ export function createIdempotencyKey(): string {
 // A poll is always finite. Without a bound the loop's only exits are an
 // undefined bound or a caller-supplied signal, so a generation that never
 // reaches a terminal status pins the caller's busy lock for the life of the
-// process. Default bound applies to every production call site; the
-// InferHub adapter's read timeout is >=300s per generation, so the client
-// bound must be at least that or long generations fail client-side while
-// succeeding server-side. 150 attempts = 300s at the 2000ms interval.
-export const POLL_DEADLINE_MS = 300_000;
-export const POLL_MAX_ATTEMPTS = 150;
+// process. The default bound applies to every production call site and is
+// derived from the SERVER's own budget, not from observed latency. A job is
+// allowed ORCHESTRATION_DEADLINE = 30 minutes (GenerationJob.java:61,
+// V013:10), and the engine permits MAX_TECHNICAL_RETRIES_PER_JOB = 2 retries,
+// i.e. 3 transmissions (GenerationRetryBudget.java:9), each bounded by the
+// adapter read timeout of 300s (InferHubConfig.java:32). The client must not
+// give up before the server does: a slow-but-successful generation reported as
+// a client-side failure is worse than a long wait, and the poll is still
+// cancellable through the caller's signal. So the bound is the full server
+// deadline plus a minute of margin to observe a job that finishes right at it.
+// 930 attempts = 1_860_000ms at the 2000ms interval.
+export const POLL_DEADLINE_MS = 1_860_000;
+export const POLL_MAX_ATTEMPTS = 930;
 
 export async function pollGeneration(options: {
   get: (id: string) => Promise<GenerationResource>;

@@ -162,4 +162,11 @@ test('a poll that never settles is bounded, releases the busy lock, and shows an
   // The resume polls the SAME accepted generation: no second one is started.
   await waitFor(() => expect(jest.mocked(generationApi.get).mock.calls.length).toBeGreaterThan(0));
   expect(jest.mocked(looksApi.regenerate).mock.calls).toHaveLength(1);
-});
+// This test deliberately runs the REAL attempt bound to its end (the bound is
+// ~930 polls so that it cannot expire before the server's 30-minute job
+// deadline), and each poll re-renders the screen. The default 5s is therefore
+// a cliff under concurrent load even though the work is bounded. The timeout is
+// raised rather than the bound shortened, so the test keeps exercising the
+// production default end-to-end; the bound's own invariant is pinned separately
+// in boundedGenerationPoll.test.tsx.
+}, 60_000);

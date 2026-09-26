@@ -6,6 +6,14 @@ import SignInScreen, {
 } from '../src/screens/SignInScreen';
 import type { AuthSurface } from '../src/config/firebase';
 
+// Every test in this file renders a component and awaits rendered queries.
+// The default 5s per-test timeout was measured tripping on a loaded box
+// (concurrent Maven + jest) while the work itself is milliseconds, which
+// reported a pass as a failure. The timeout is raised rather than any
+// assertion relaxed, so a genuinely hung render still fails here.
+jest.setTimeout(30_000);
+
+
 jest.mock('@firebase/auth', () => ({
   getAuth: jest.fn(() => ({})),
   onAuthStateChanged: jest.fn(() => () => {}),
