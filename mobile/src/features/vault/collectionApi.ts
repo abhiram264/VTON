@@ -1,4 +1,5 @@
 import { apiRequest, requireOk } from '../my-model/http';
+import { productionApiConfig } from '../../config/apiConfig';
 
 export type CollectionSummary = { id: string; name: string; vaultItemIds: string[] };
 
@@ -18,6 +19,6 @@ function parseCollections(value: unknown): CollectionSummary[] {
 
 export const collectionApi = {
   async list(): Promise<CollectionSummary[]> {
-    return parseCollections(await requireOk(await apiRequest({ baseUrl: '', getAccessToken: () => null }, '/collections', { method: 'GET' })));
+    return parseCollections(await requireOk(await apiRequest(productionApiConfig, '/collections', { method: 'GET' })));
   },
 };

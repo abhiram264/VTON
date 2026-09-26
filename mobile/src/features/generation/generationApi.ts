@@ -7,6 +7,7 @@ import type {
   LookResource,
 } from './types';
 import { apiRequest, requireOk } from '../my-model/http';
+import { productionApiConfig } from '../../config/apiConfig';
 
 const GENERATION_STATUSES: readonly GenerationStatus[] = [
   'QUEUED',
@@ -122,10 +123,7 @@ export function createGenerationApi(
   };
 }
 
-export const generationApi = createGenerationApi({
-  baseUrl: '',
-  getAccessToken: () => null,
-});
+export const generationApi = createGenerationApi(productionApiConfig);
 
 export function createIdempotencyKey(): string {
   const crypto = (globalThis as { crypto?: { randomUUID?: () => string } })
