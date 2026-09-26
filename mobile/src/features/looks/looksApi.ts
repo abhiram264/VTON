@@ -68,6 +68,12 @@ function parseGeneration(value: unknown): GenerationResource {
 }
 const defaultConfig: AvatarApiConfig = productionApiConfig;
 
+// No share method, deliberately. POST /looks/{id}/share-link mints a signed, time-limited
+// URL that hands a rendered Look to anyone holding it. The backend endpoint still exists
+// (LooksController:113) but the app must not be able to call it: an exfiltration capability
+// with no call site is still a capability. t121 removed the UI call site; this removes the
+// client. A future share feature must be an explicit owner decision with its own consent
+// surface, not a re-added one-liner.
 export function createLooksApi(config: AvatarApiConfig = defaultConfig) {
   return {
     async list(): Promise<LookResource[]> {
@@ -89,23 +95,6 @@ export function createLooksApi(config: AvatarApiConfig = defaultConfig) {
         ),
       );
       return parseGeneration(payload);
-    },
-    async share(lookId: string): Promise<string> {
-      const value = await requireOk(
-        await apiRequest(
-          config,
-          `/looks/${encodeURIComponent(lookId)}/share-link`,
-          { method: 'POST' },
-        ),
-      );
-      if (
-        value === null ||
-        typeof value !== 'object' ||
-        typeof (value as Record<string, unknown>).url !== 'string'
-      ) {
-        throw new Error('Invalid share response');
-      }
-      return (value as { url: string }).url;
     },
   };
 }

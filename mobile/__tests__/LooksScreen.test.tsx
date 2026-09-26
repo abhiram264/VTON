@@ -6,7 +6,7 @@ import type { GenerationResource, LookResource } from '../src/features/generatio
 import { generationApi } from '../src/features/generation/generationApi';
 import { Share } from 'react-native';
 jest.mock('../src/features/looks/looksApi', () => ({
-  looksApi: { list: jest.fn(), regenerate: jest.fn(), share: jest.fn() },
+  looksApi: { list: jest.fn(), regenerate: jest.fn() },
 }));
 // `pollGeneration` stays real so the bound under test is the real one; only the
 // network client is faked, and it is faked per test by clearAllMocks.
@@ -113,8 +113,11 @@ test('no Look share URL is ever produced or handed to the OS share sheet', async
   await waitFor(() => expect(looksApi.regenerate).toHaveBeenCalled());
 
   // No share URL is minted, and nothing reaches the share sheet.
-  expect(jest.mocked(looksApi.share)).not.toHaveBeenCalled();
   expect(shareSpy).not.toHaveBeenCalled();
+  // The client capability itself is gone, not just unused: looksApi exposes no share method at
+  // all. Asserting "not called" over a method that exists would keep the exfiltration surface
+  // alive in the app and would only prove nobody pressed the button.
+  expect((looksApi as unknown as Record<string, unknown>).share).toBeUndefined();
   shareSpy.mockRestore();
 });
 

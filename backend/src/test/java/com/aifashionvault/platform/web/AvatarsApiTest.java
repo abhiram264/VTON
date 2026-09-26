@@ -605,15 +605,27 @@ class AvatarsApiTest {
 			return new FakeSemanticInspector();
 		}
 
+		// RULE (t202): a test bean must never reuse a PRODUCTION bean NAME. avatarPreflight and
+		// avatarWorkflow are owned by AvatarConfiguration (:29, :39); a same-named @TestConfiguration
+		// bean fails registration with BeanDefinitionOverrideException and takes the whole context
+		// down. @Primary does NOT save that: overriding is a name-level check that runs BEFORE
+		// primary/fallback type resolution. Renamed, not deleted - this suite needs its own
+		// preflight/workflow bound to the fake store, so the substitution is the point.
+		// @Primary then resolves the resulting TYPE ambiguity: production still registers
+		// avatarPreflight/avatarWorkflow, so each type has two candidates and the stub is the one
+		// this suite must drive. Production stays the single non-primary candidate, so no other
+		// test's graph changes.
 		@Bean
-		AvatarPreflight avatarPreflight(ImageInspector imageInspector, SemanticInspector semanticInspector) {
+		@Primary
+		AvatarPreflight stubAvatarPreflight(ImageInspector imageInspector, SemanticInspector semanticInspector) {
 			return new AvatarPreflight(
 				new ImageInspectorAvatarBytesInspector(imageInspector),
 				semanticInspector);
 		}
 
 		@Bean
-		AvatarWorkflow avatarWorkflow(
+		@Primary
+		AvatarWorkflow stubAvatarWorkflow(
 			JdbcAvatarStore store,
 			FakeAvatarObjectStore objectStore,
 			AvatarPreflight preflight

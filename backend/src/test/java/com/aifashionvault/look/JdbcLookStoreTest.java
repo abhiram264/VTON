@@ -14,6 +14,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -93,12 +94,16 @@ class JdbcLookStoreTest {
 		UserId userId = insertUser();
 		GenerationJobId jobId = insertJob(userId);
 		LookId firstId = new LookId(UUID.randomUUID());
-		LookId replayId = new LookId(UUID.randomUUID());
+		// A REPLAY carries the SAME look as the first attempt - same id, same storage key. The
+		// previous fixture built the retry with a fresh id and a fresh key, which is not a replay:
+		// JdbcLookStore.sameReplayPayload (:341-353) requires the ids and storage keys to match, so
+		// the store correctly rethrew the unique-violation conflict and the test failed on its own
+		// fixture. Idempotency is the guarantee being pinned here, so the fixture now models the
+		// retry the store is actually contracted to absorb.
 		Look first = look(firstId, userId, jobId, storageKey(userId, firstId));
-		Look replay = look(replayId, userId, jobId, storageKey(userId, replayId));
 
 		Look stored = store.insert(first);
-		Look second = store.insert(replay);
+		Look second = store.insert(first);
 
 		assertThat(stored.id()).isEqualTo(firstId);
 		assertThat(second.id()).isEqualTo(firstId);
@@ -110,6 +115,26 @@ class JdbcLookStoreTest {
 			UUID.class,
 			jobId.value())).isEqualTo(firstId.value());
 	}
+	/**
+	 * The half of the contract the fixture above cannot express, and which must NOT be weakened: a
+	 * same-job insert carrying a DIFFERENT payload is a genuine conflict and is rethrown, not
+	 * silently replayed. The unique index look_one_per_generation_job makes the database the last
+	 * line of defence; existingLook (:327-338) rethrows the original conflict when
+	 * sameReplayPayload is false.
+	 */
+	@Test
+	void sameJobWithADifferentPayloadIsAConflictNotAReplay() {
+		UserId userId = insertUser();
+		GenerationJobId jobId = insertJob(userId);
+		LookId firstId = new LookId(UUID.randomUUID());
+		LookId otherId = new LookId(UUID.randomUUID());
+		store.insert(look(firstId, userId, jobId, storageKey(userId, firstId)));
+
+		assertThatThrownBy(() -> store.insert(look(otherId, userId, jobId, storageKey(userId, otherId))))
+			.isInstanceOf(DataIntegrityViolationException.class);
+		assertThat(count("look")).isEqualTo(1);
+	}
+
 	@Test
 	void compositeOwnerConstraintRejectsForeignAvatarProfile() {
 		UserId owner = insertUser();

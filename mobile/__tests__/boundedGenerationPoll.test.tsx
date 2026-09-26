@@ -6,7 +6,7 @@ import { generationApi } from '../src/features/generation/generationApi';
 import type { GenerationResource, LookResource } from '../src/features/generation/types';
 
 jest.mock('../src/features/looks/looksApi', () => ({
-  looksApi: { list: jest.fn(), regenerate: jest.fn(), share: jest.fn() },
+  looksApi: { list: jest.fn(), regenerate: jest.fn() },
 }));
 
 jest.mock('../src/features/generation/generationApi', () => ({

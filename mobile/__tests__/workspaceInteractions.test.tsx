@@ -12,7 +12,7 @@ import { generationApi } from '../src/features/generation/generationApi';
 
 jest.mock('../src/features/vault/vaultApi', () => ({ vaultApi: { list: jest.fn() } }));
 jest.mock('../src/features/vault/collectionApi', () => ({ collectionApi: { list: jest.fn() } }));
-jest.mock('../src/features/looks/looksApi', () => ({ looksApi: { list: jest.fn(), regenerate: jest.fn(), share: jest.fn() } }));
+jest.mock('../src/features/looks/looksApi', () => ({ looksApi: { list: jest.fn(), regenerate: jest.fn() } }));
 jest.mock('../src/features/studio/studioApi', () => ({ studioApi: { get: jest.fn().mockResolvedValue({ sessionId: 'session-1', itemIds: [] }), command: jest.fn() } }));
 jest.mock('../src/features/generation/generationApi', () => ({ generationApi: { get: jest.fn() }, pollGeneration: jest.requireActual('../src/features/generation/generationApi').pollGeneration }));
 

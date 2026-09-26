@@ -177,7 +177,12 @@ class FlywayFoundationTest {
         assertThat(history).extracting(row -> row.get("success")).containsOnly(true);
 		assertThat(jdbc.queryForObject(
 			"SELECT description FROM flyway_schema_history WHERE version = '024'",
-			String.class)).isEqualTo("notification fencing and provider constraints__contract");
+			String.class)).isEqualTo("notification fencing and provider constraints  contract");
+		// The migration is V024__notification_fencing_and_provider_constraints__contract.sql. Flyway
+		// derives the description by replacing each underscore with a space, so the DOUBLE
+		// underscore lands as two spaces. The old expectation collapsed it to one, which no
+		// Flyway version does - the file is append-only and its name is load-bearing, so renaming
+		// it to make the assertion prettier would be the wrong direction.
     }
 
 	@Test

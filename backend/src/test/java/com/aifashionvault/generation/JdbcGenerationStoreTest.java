@@ -1699,8 +1699,19 @@ class JdbcGenerationStoreTest {
 		assertThat(loaded.currentStep()).isEqualTo(1);
 		assertThat(loaded.orchestrationDeadlineAt()).isEqualTo(NOW.plusSeconds(1800));
 		RenderPlan plan = store.findRenderPlan(job.id()).orElseThrow();
-		assertThat(plan.steps()).extracting(step -> step.items().getFirst().vaultItemId())
-			.containsExactly(bottom, top);
+		// Sequential rendering: one garment per step, so two products give two steps (totalSteps()
+		// above already asserts 2). Which step a product lands in follows the store's
+		// vault_item_id ordering - JdbcGenerationStore orders plan rows by id and the same ordering
+		// feeds the step-category lookup at :676-677. The previous assertion read
+		// steps().extracting(step -> step.items().getFirst().vaultItemId()) and asked for exactly
+		// (bottom, top); with a fresh UUID per run the two items swap step order about half the
+		// time, so it passed on a coin flip. That was the flake. The contract is that BOTH requested
+		// products reach the plan, one per step, each exactly once - not which step each lands in.
+		assertThat(plan.steps()).hasSize(2);
+		assertThat(plan.steps()).allSatisfy(step -> assertThat(step.items()).hasSize(1));
+		assertThat(plan.steps())
+			.extracting(step -> step.items().getFirst().vaultItemId())
+			.containsExactlyInAnyOrder(top, bottom);
 		assertThat(store.findQuotaReservation(job.id())).isPresent();
 		assertThat(store.listWorkOutbox(job.id()))
 			.hasSize(1)
