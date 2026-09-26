@@ -55,8 +55,13 @@ header (`mobile/src/features/my-model/http.ts:48`) and then send the bare relati
 that the empty base collapses to (`mobile/src/features/my-model/http.ts:52`), so they read
 as indistinguishable from being offline rather than as an authentication failure.
 These are backlog defects owned by their tickets — upload completion cannot succeed with
-the default scanner, which returns `null` for both the camera and the library picker
-(F15, PR-05; `mobile/src/features/my-model/photoSource.ts:24-30`); a resolved share cannot
+the default `MalwareScanner` bean outside development: it is fail-closed, returns
+`MalwareVerdict.UNAVAILABLE` with a named reason, and the completion gate admits only
+`MalwareVerdict.CLEAN`, so every staging and production upload is rejected (F15, PR-05;
+`backend/src/main/java/com/aifashionvault/platform/objectstore/ObjectStoreConfiguration.java:104-126`,
+`backend/src/main/java/com/aifashionvault/platform/objectstore/UploadWorkflow.java:114-125`);
+only the development profile passes that gate, and then only against a scanner that
+inspects nothing and names itself synthetic in every result; a resolved share cannot
 become a saved item, because the share import contract stops at an import id and no mobile
 call turns one into a vault item (F04, PR-08/PR-11;
 `mobile/src/features/vault/vaultFallback.ts:42`,
