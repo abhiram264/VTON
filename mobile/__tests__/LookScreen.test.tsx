@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react-native';
+import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import LookScreen from '../src/screens/LookScreen';
 import { generationApi } from '../src/features/generation/generationApi';
 import type { LookResource } from '../src/features/generation/types';
@@ -46,5 +46,31 @@ describe('LookScreen', () => {
 
     expect(await screen.findByText('Could not open the look.')).toBeTruthy();
     expect(screen.queryByRole('image')).toBeNull();
+  });
+
+  test('a broken preview offers a retry the user can actually press, keeping the honest error copy', async () => {
+    const getLook = jest
+      .spyOn(generationApi, 'getLook')
+      .mockResolvedValue({ ...STORED_LOOK });
+
+    await render(<LookScreen lookId={LOOK_ID} />);
+    const image = await screen.findByRole('image');
+
+    // The signed URL failed to load. The user must be told, in words.
+    await act(async () => {
+      fireEvent(image, 'error');
+    });
+    expect(screen.getByText('Signed preview unavailable.')).toBeTruthy();
+
+    // ...and must be able to do something about it. Reachability is the bug:
+    // the control existed but could never be pressed.
+    const retry = screen.getByRole('button', { name: 'Retry preview' });
+    await act(async () => {
+      fireEvent.press(retry);
+    });
+
+    // Pressing it must actually re-request the look.
+    expect(getLook).toHaveBeenCalledTimes(2);
+    expect(await screen.findByRole('image')).toBeTruthy();
   });
 });

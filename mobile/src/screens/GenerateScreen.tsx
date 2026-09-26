@@ -221,7 +221,7 @@ export default function GenerateScreen({
 
   return (
     <View style={styles.page}>
-      <Text style={styles.title}>Create a Look</Text>
+      <Text accessibilityRole="header" style={styles.title}>Create a Look</Text>
       <Text style={styles.body}>
         Choose one product photo (JPEG or PNG). Your current My Model will wear
         it.

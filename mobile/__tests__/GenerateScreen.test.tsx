@@ -839,4 +839,12 @@ describe('GenerateScreen', () => {
     expect(screen.queryByText(OUTAGE_BODY)).toBeNull();
     expect(vaultSave).not.toHaveBeenCalled();
   });
+
+  test('the screen title is exposed as an accessible header', async () => {
+    await render(<GenerateScreen />);
+
+    // A screen reader announces this as a heading, so the user can jump to it
+    // instead of hearing an unlabelled run of text.
+    expect(await screen.findByRole('header', { name: 'Create a Look' })).toBeTruthy();
+  });
 });
