@@ -6,6 +6,13 @@ import {
   waitFor,
 } from '@testing-library/react-native';
 import GenerateScreen from '../src/screens/GenerateScreen';
+
+jest.mock('../src/config/apiConfig', () => ({
+  productionApiConfig: {
+    baseUrl: 'https://api.test',
+    getAccessToken: () => 'test-token',
+  },
+}));
 import {
   ACTION_CHOOSE_ANOTHER_PHOTO,
   ACTION_TRY_AGAIN,

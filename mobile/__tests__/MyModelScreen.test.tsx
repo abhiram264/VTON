@@ -6,6 +6,13 @@ import {
   waitFor,
 } from '@testing-library/react-native';
 import MyModelScreen from '../src/screens/MyModelScreen';
+
+jest.mock('../src/config/apiConfig', () => ({
+  productionApiConfig: {
+    baseUrl: 'https://api.test',
+    getAccessToken: () => 'test-token',
+  },
+}));
 import { Alert } from 'react-native';
 import { choosePhoto, takePhoto } from '../src/features/my-model/photoSource';
 
