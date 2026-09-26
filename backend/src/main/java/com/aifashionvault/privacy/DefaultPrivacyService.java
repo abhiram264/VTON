@@ -16,7 +16,7 @@ public final class DefaultPrivacyService implements PrivacyService {
 
 	private static final Set<String> FORBIDDEN_EXPORT_KEY_PARTS = Set.of("apikey", "authorization", "base64", "bytes",
 			"credential", "lease", "media", "objectkey", "password", "payload", "provider", "pushtoken", "secret",
-			"token", "url");
+			"storagekey", "token", "url");
 	private static final Set<String> FORBIDDEN_EXPORT_VALUE_PARTS = Set.of("http://", "https://", "data:image",
 			"x-amz-", "signature=", "/9j/", "ivborw0kggo");
 
