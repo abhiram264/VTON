@@ -23,6 +23,13 @@ jest.mock('../src/screens/ShareImportScreen', () => {
   };
 });
 
+// Every test in this file mounts the real navigator and awaits rendered
+// queries. The default 5s per-test timeout was measured tripping on a loaded
+// box (concurrent Maven + jest) while the work itself is milliseconds, which
+// reported a pass as a failure. The timeout is raised rather than any
+// assertion relaxed, so a genuinely hung navigator still fails here.
+jest.setTimeout(30_000);
+
 const navigationRef = createNavigationContainerRef<RootStackParamList>();
 
 function Harness({ session }: { session: AuthSession }) {
