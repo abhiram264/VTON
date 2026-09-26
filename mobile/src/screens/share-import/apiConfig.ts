@@ -1,12 +1,9 @@
 import type {AvatarApiConfig} from '../../features/my-model/types';
+import {productionApiConfig} from '../../config/apiConfig';
 
 export type ShareImportApiConfig = AvatarApiConfig;
 
-// The mounted default must fail before any relative or bearer-less request.
-// M06 owns replacing this with the live configured authenticated session.
-export const apiConfig: ShareImportApiConfig = {
-  baseUrl: '',
-  getAccessToken: () => {
-    throw new Error('Share import API is not configured');
-  },
-};
+// The share-import screen must not own a second API seam: it delegates to the
+// single shared module, which stays fail-closed (unset EXPO_PUBLIC_API_URL and
+// the absent session store both throw). A local stub here would drift.
+export const apiConfig: ShareImportApiConfig = productionApiConfig;
