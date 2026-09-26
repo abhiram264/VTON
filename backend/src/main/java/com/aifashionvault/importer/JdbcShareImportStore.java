@@ -277,6 +277,79 @@ public class JdbcShareImportStore {
 			id.value(), ownerId.value()).stream().findFirst();
 	}
 
+	/**
+	 * Confirms an owner-owned READY import into the persistent Vault. The
+	 * resolved object is already owned by this user at {@code storage_key}, so
+	 * confirmation reuses it — no second upload, no download round-trip, and
+	 * no original upload id, which a URL import never had (PRD PR-08).
+	 * <p>
+	 * Identity is derived from (user, import), so a repeated or concurrent
+	 * confirmation converges on the same saved item instead of creating two,
+	 * and the import's source provenance is preserved through the
+	 * {@code source_reference} row. The write is owner-scoped and transactional;
+	 * a foreign import never resolves here and no item is inserted.
+	 *
+	 * @return the confirmed Vault item, or empty when the import is not
+	 * owner-visible, is not READY, or has no resolved object.
+	 */
+	public Optional<ConfirmedItem> confirm(UserId ownerId, ShareImportId id) {
+		Objects.requireNonNull(ownerId, "ownerId");
+		Objects.requireNonNull(id, "id");
+		ShareImport current = find(ownerId, id).orElse(null);
+		if (current == null || current.state() != ShareImportState.READY || current.storageKey() == null) {
+			return Optional.empty();
+		}
+		UUID itemId = confirmedItemId(ownerId, id);
+		Instant now = clock.instant();
+		transactions.executeWithoutResult(status -> {
+			// The source row is the vault_item FK target; ON CONFLICT keeps a
+			// repeat confirmation idempotent without losing provenance.
+			jdbc.update(
+				"INSERT INTO source_reference (id, url, retailer, raw_metadata, created_at) VALUES (?, ?, ?, ?::jsonb, ?) "
+					+ "ON CONFLICT (id) DO NOTHING",
+				id.value(), current.sourceUrl() == null ? null : current.sourceUrl().toString(),
+				current.sourceSiteName(), sourceMetadata(current), Timestamp.from(now));
+			jdbc.update(
+				"INSERT INTO vault_item (id, user_id, storage_key, source_reference_id, name, created_at) "
+					+ "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING",
+				itemId, ownerId.value(), current.storageKey().value(), id.value(),
+				current.sourceTitle(), Timestamp.from(now));
+		});
+		return confirmedItem(ownerId, itemId);
+	}
+
+	private Optional<ConfirmedItem> confirmedItem(UserId ownerId, UUID itemId) {
+		return jdbc.query(
+			"SELECT v.id, v.source_reference_id, v.created_at FROM vault_item v WHERE v.id = ? AND v.user_id = ?",
+			(rs, rowNum) -> new ConfirmedItem(rs.getObject("id", UUID.class),
+				rs.getObject("source_reference_id", UUID.class), rs.getTimestamp("created_at").toInstant()),
+			itemId, ownerId.value()).stream().findFirst();
+	}
+
+	/**
+	 * Stable saved-item identity for one (owner, import) pair: repeating or
+	 * racing a confirmation can never mint a second item for the same import.
+	 */
+	private static UUID confirmedItemId(UserId ownerId, ShareImportId id) {
+		return UUID.nameUUIDFromBytes(
+			("share-import:" + ownerId.value() + ":" + id.value()).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+	}
+
+	private static String sourceMetadata(ShareImport current) {
+		if (current.sourceSiteName() == null && current.sourceTitle() == null) {
+			return null;
+		}
+		return "{\"siteName\":" + jsonText(current.sourceSiteName()) + ",\"title\":" + jsonText(current.sourceTitle()) + "}";
+	}
+
+	private static String jsonText(String value) {
+		return value == null ? "null" : "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\"";
+	}
+
+	/** Saved-item identity returned by a successful confirmation. */
+	public record ConfirmedItem(UUID itemId, UUID sourceReferenceId, java.time.Instant createdAt) {
+	}
+
 	public DeleteResult delete(UserId ownerId, ShareImportId id) {
 		Objects.requireNonNull(ownerId, "ownerId");
 		Objects.requireNonNull(id, "id");
