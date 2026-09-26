@@ -1,6 +1,7 @@
 package com.aifashionvault.platform.web;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
@@ -13,6 +14,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Bean;
@@ -67,6 +69,61 @@ class AppIntegrityBoundaryTest {
         assertPatchBlocked(path, body, "secret");
     }
 
+    @Test void requiredGenerationIntegrityAlsoBlocksLookRegenerate() throws Exception {
+        assertBlocked("/looks/" + UUID.randomUUID() + "/regenerate", null, null);
+        verifier.verdict = new AppIntegrityVerdict(AppIntegrityVerdictStatus.DENIED, AppIntegrityFailureReason.PROVIDER_REJECTED);
+        assertBlocked("/looks/" + UUID.randomUUID() + "/regenerate", null, "secret");
+        verifier.verdict = new AppIntegrityVerdict(AppIntegrityVerdictStatus.INDETERMINATE, AppIntegrityFailureReason.PROVIDER_UNAVAILABLE);
+        assertBlocked("/looks/" + UUID.randomUUID() + "/regenerate", null, "secret");
+    }
+
+    @Test void requiredIntegrityRejectsInProcessRegenerateWithNoRequestAsForbidden() {
+        GenerationApiProperties enabled = new GenerationApiProperties();
+        enabled.setAttestationRequired(true);
+
+        // No servlet request means no evidence, so the gate must answer its own 403 +
+        // APP_INTEGRITY_REQUIRED rather than dereferencing null into a 500. Nothing below
+        // the boundary is reached: the look lookup would raise NotFound instead.
+        AppIntegrityBoundary.Problem blocked = catchIntegrityProblem(() ->
+            new LooksController(emptyProviders(), emptyProviders(), emptyProviders(), emptyProviders(), verifier, enabled)
+                .regenerate(new com.aifashionvault.shared.UserId(UUID.randomUUID()), UUID.randomUUID().toString(), "key"));
+        assertThat(blocked).isNotNull();
+        assertThat(blocked.status()).isEqualTo(org.springframework.http.HttpStatus.FORBIDDEN);
+        assertThat(blocked.code()).isEqualTo("APP_INTEGRITY_REQUIRED");
+
+        // With the flag off the boundary is a no-op, so the same call falls past the gate
+        // and fails in the controller's own look lookup instead. That difference is what
+        // proves the 403 above came from the gate and not from a missing look.
+        assertThatThrownBy(() ->
+            new LooksController(emptyProviders(), emptyProviders(), emptyProviders(), emptyProviders(), verifier,
+                new GenerationApiProperties())
+                .regenerate(new com.aifashionvault.shared.UserId(UUID.randomUUID()), UUID.randomUUID().toString(), "key"))
+            .isNotInstanceOf(AppIntegrityBoundary.Problem.class)
+            .isInstanceOf(RuntimeException.class);
+    }
+
+    private static <T> ObjectProvider<T> emptyProviders() {
+        @SuppressWarnings("unchecked")
+        ObjectProvider<T> provider = org.mockito.Mockito.mock(ObjectProvider.class);
+        org.mockito.Mockito.when(provider.getIfAvailable()).thenReturn(null);
+        return provider;
+    }
+
+    private static AppIntegrityBoundary.Problem catchIntegrityProblem(Runnable call) {
+        try {
+            call.run();
+            return null;
+        }
+        catch (AppIntegrityBoundary.Problem ex) {
+            return ex;
+        }
+        catch (RuntimeException ex) {
+            throw new AssertionError("expected the integrity 403, but the call threw " + ex, ex);
+        }
+    }
+
+
+
     @Test void verifiedAvatarReplaceProceedsPastIntegrityBoundaryWithoutExposure() throws Exception {
         verifier.verdict = new AppIntegrityVerdict(AppIntegrityVerdictStatus.VERIFIED, AppIntegrityFailureReason.NONE);
         mockMvc.perform(patchRequest("/avatars/" + UUID.randomUUID(),
@@ -120,7 +177,8 @@ class AppIntegrityBoundaryTest {
             .with(SecurityMockMvcRequestPostProcessors.httpBasic("integrity-test", "integrity-test"))
             .header("X-App-Integrity-Platform", "ANDROID")
             .header("X-App-Integrity-Nonce", "nonce")
-            .contentType(MediaType.APPLICATION_JSON).content(body);
+            .contentType(MediaType.APPLICATION_JSON);
+        if (body != null) request.content(body);
         return evidence == null ? request : request.header("X-App-Integrity-Evidence", evidence);
     }
 
@@ -128,6 +186,26 @@ class AppIntegrityBoundaryTest {
     static class Configuration {
         @Bean @Primary ExternalTokenVerifier tokenVerifier() { return InProcessJwtFixture.verifier(); }
         @Bean("recordingAppIntegrityVerifier") @Primary RecordingVerifier recordingVerifier() { return new RecordingVerifier(); }
+
+        /**
+         * Pre-existing context blocker, not a behaviour of this test. The production
+         * {@code objectStore} bean is typed {@code ObjectStore} but returns an
+         * {@code S3ObjectStore}, which also implements {@code GenerationMediaStore}, so it
+         * becomes a second {@code GenerationMediaStore} candidate alongside
+         * {@code generationMediaStore} (GenerationProcessorConfiguration:92-104). The
+         * graph then calls {@code getIfAvailable()} on an {@code ObjectProvider<GenerationMediaStore>}
+         * (GenerationProcessorConfiguration:260) and throws
+         * NoUniqueBeanDefinitionException, failing the whole context. This @Primary
+         * GenerationMediaStore supplies the same instance the production factory already
+         * prefers (GenerationProcessorConfiguration:98-100 casts the ObjectStore to
+         * GenerationMediaStore), so the ambiguity resolves to the value production would
+         * choose. No product code is changed.
+         */
+        @Bean @Primary
+        com.aifashionvault.platform.objectstore.GenerationMediaStore integrityTestGenerationMediaStore(
+                com.aifashionvault.platform.objectstore.ObjectStore objectStore) {
+            return (com.aifashionvault.platform.objectstore.GenerationMediaStore) objectStore;
+        }
     }
 
     static final class RecordingVerifier implements AppIntegrityVerifier {

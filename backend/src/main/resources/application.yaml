@@ -54,13 +54,27 @@ vault:
     resource-attributes: ${OTEL_RESOURCE_ATTRIBUTES:}
     exporter-otlp-endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:}
     exporter-otlp-headers: ${OTEL_EXPORTER_OTLP_HEADERS:}
+  # --- App attestation: NOT YET ENFORCING ---------------------------------------
+  # All three flags below default to false, and they are false in every real
+  # deployment. AppIntegrityBoundary therefore returns immediately and NO endpoint is
+  # actually gated. These flags are the wiring point, not a working control.
+  # Setting any of them to true today is fail-closed but NOT functional: no
+  # IntegrityEvidenceProvider is registered and android-app-id / ios-app-id are
+  # unset, so the verifier can never return VERIFIED and every request to a covered
+  # endpoint would be answered 403 APP_INTEGRITY_REQUIRED. Do not enable without
+  # selecting a real attestation provider and configuring both app ids first.
+  # Covered when enabled: POST /generations, POST /looks/{id}/regenerate,
+  # POST /avatars, PATCH /avatars/{id}.
   integrity:
     required: false
   avatar:
+    # See the NOT YET ENFORCING note above; true today = 403 on all avatar writes.
     attestation-required: false
   generation:
     multi-item-enabled: false
     admission-paused: false
+    # See the NOT YET ENFORCING note above; true today = 403 on all generation
+    # writes, including POST /looks/{id}/regenerate.
     attestation-required: false
     queue:
       visibility-timeout-seconds: 120

@@ -8,8 +8,12 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
+import jakarta.servlet.http.HttpServletRequest;
+
 import org.springframework.beans.factory.NoUniqueBeanDefinitionException;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
+
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -29,6 +33,8 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 import com.aifashionvault.generation.CoarseGenerationPhase;
+import com.aifashionvault.integrity.AppIntegrityOperation;
+import com.aifashionvault.integrity.AppIntegrityVerifier;
 import com.aifashionvault.generation.GenerationJob;
 import com.aifashionvault.generation.GenerationStatus;
 import com.aifashionvault.generation.GenerationStore;
@@ -61,6 +67,7 @@ public class LooksController {
 	private final ObjectStore objects;
 	private final GenerationStore generations;
 	private final Clock clock;
+	private final AppIntegrityBoundary integrity;
 
 	public LooksController(
 		ObjectProvider<JdbcLookStore> lookStores,
@@ -68,11 +75,29 @@ public class LooksController {
 		ObjectProvider<GenerationStore> generationStores,
 		ObjectProvider<Clock> clocks
 	) {
+		this(lookStores, objectStores, generationStores, clocks, null, new GenerationApiProperties());
+	}
+
+	@Autowired
+	public LooksController(
+		ObjectProvider<JdbcLookStore> lookStores,
+		ObjectProvider<ObjectStore> objectStores,
+		ObjectProvider<GenerationStore> generationStores,
+		ObjectProvider<Clock> clocks,
+		AppIntegrityVerifier verifier,
+		GenerationApiProperties properties
+	) {
 		this.looks = first(lookStores);
 		this.objects = first(objectStores);
 		this.generations = first(generationStores);
 		Clock configured = first(clocks);
 		this.clock = configured == null ? Clock.systemUTC() : configured;
+		// Regeneration enqueues the same provider-cost generation job as POST /generations,
+		// so it carries the same attestation gate under the same generation flag. The
+		// boundary is a no-op while the flag is false and fail-closed once it is true; see
+		// AppIntegrityBoundary for the NOT-YET-ENFORCING status of that flag today.
+		this.integrity = new AppIntegrityBoundary(verifier == null ? evidence -> null : verifier,
+			properties.isAttestationRequired());
 	}
 
 	@GetMapping
@@ -94,8 +119,12 @@ public class LooksController {
 	public ResponseEntity<GenerationResponse> regenerate(
 		@AuthenticationPrincipal UserId ownerId,
 		@PathVariable String id,
-		@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey
+		@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+		HttpServletRequest httpRequest
 	) {
+		// First statement: a rejected attestation must 403 before any look lookup, key
+		// validation or generation job creation, matching POST /generations exactly.
+		this.integrity.verify(httpRequest, AppIntegrityOperation.GENERATION_CREATION);
 		String key = validKey(idempotencyKey);
 		Look look = owned(ownerId, id);
 		GenerationStore generationStore = generationStore();
@@ -130,6 +159,21 @@ public class LooksController {
 			.body(body);
 	}
 
+	/**
+	 * In-process entry point for callers with no servlet request to attest against. It
+	 * delegates to the same gated method with a null request, so it is the SAME gate, not
+	 * a disabled one. While the flag is false the boundary returns immediately. Once the
+	 * flag is true the null request reaches the platform-header read inside the boundary's
+	 * try block, whose RuntimeException catch treats it as unusable evidence and rejects
+	 * with 403 APP_INTEGRITY_REQUIRED. Verified by
+	 * requiredIntegrityRejectsInProcessRegenerateWithNoRequestAsForbidden, which fails
+	 * loudly if that rejection ever stops happening.
+	 */
+	ResponseEntity<GenerationResponse> regenerate(UserId ownerId, String id, String idempotencyKey) {
+		return regenerate(ownerId, id, idempotencyKey, null);
+	}
+
+
 	@DeleteMapping("/{id}")
 	@ResponseStatus(HttpStatus.NO_CONTENT)
 	public void delete(@AuthenticationPrincipal UserId ownerId, @PathVariable String id) {
@@ -144,6 +188,11 @@ public class LooksController {
 		catch (ObjectStoreExceptions.StagedObjectMissingException ignored) {
 			// Absence is the converged cleanup state.
 		}
+	}
+
+	@ExceptionHandler(AppIntegrityBoundary.Problem.class)
+	ResponseEntity<GenerationProblemResponse> integrityProblem(AppIntegrityBoundary.Problem ex) {
+		return problem(ex.status(), ex.code());
 	}
 
 	@ExceptionHandler(NotFound.class)
