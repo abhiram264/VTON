@@ -27,6 +27,9 @@ export const PROVIDER_OUTAGE_TRIGGER_CODES: readonly string[] = [
   'PROVIDER_QUOTA_EXHAUSTED',
   'NO_ELIGIBLE_PROVIDER',
   'RETRY_BUDGET_EXHAUSTED',
+  // Server emits this on create/preflight when the generation media store is
+  // unavailable (GenerationCreationService throws problem(503, ...)).
+  'GENERATION_MEDIA_UNAVAILABLE',
 ];
 
 const PROVIDER_OUTAGE_TRIGGER_SET: ReadonlySet<string> = new Set(
@@ -45,6 +48,7 @@ export const OUTAGE_FAILURE_CODES: readonly string[] = [
   'PROVIDER_OUTPUT_INVALID',
   'ORCHESTRATION_DEADLINE_EXCEEDED',
   'ADMISSION_PAUSED',
+  'GENERATION_MEDIA_UNAVAILABLE',
 ];
 
 const OUTAGE_SET: ReadonlySet<string> = new Set(OUTAGE_FAILURE_CODES);
