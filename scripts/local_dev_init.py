@@ -44,6 +44,7 @@ ENV_NAMES = frozenset(
         "AWS_ACCESS_KEY_ID",
         "AWS_SECRET_ACCESS_KEY",
         "FASHN_API_KEY",
+        "VTON_IMAGE_API_KEY",
         "FIREBASE_PROJECT_ID",
         "OTEL_SERVICE_NAME",
         "S3_AVATAR_BUCKET",

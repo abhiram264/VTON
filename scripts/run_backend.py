@@ -82,6 +82,7 @@ def backend_env(parsed: dict[str, str], root: Path) -> dict[str, str]:
     }
     for key in (
         "FASHN_API_KEY",
+        "VTON_IMAGE_API_KEY",
         "FIREBASE_PROJECT_ID",
         "OTEL_EXPORTER_OTLP_ENDPOINT",
         "JAVA_TOOL_OPTIONS",

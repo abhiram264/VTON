@@ -61,6 +61,7 @@ AWS_REGION=us-east-1
 AWS_ACCESS_KEY_ID=test
 AWS_SECRET_ACCESS_KEY=test
 FASHN_API_KEY=
+VTON_IMAGE_API_KEY=
 FIREBASE_PROJECT_ID=
 OTEL_SERVICE_NAME=ai-fashion-vault-api
 S3_AVATAR_BUCKET=ai-fashion-vault-local-avatar-private
@@ -215,6 +216,7 @@ class TestLocalDevInit(IsolatedTempRoot):
                 "AWS_ACCESS_KEY_ID",
                 "AWS_SECRET_ACCESS_KEY",
                 "FASHN_API_KEY",
+                "VTON_IMAGE_API_KEY",
                 "FIREBASE_PROJECT_ID",
                 "OTEL_SERVICE_NAME",
                 "S3_AVATAR_BUCKET",
@@ -233,6 +235,7 @@ class TestLocalDevInit(IsolatedTempRoot):
         self.assertIn("AWS_ACCESS_KEY_ID=test", env_example)
         self.assertIn("AWS_SECRET_ACCESS_KEY=test", env_example)
         self.assertIn("FASHN_API_KEY=\n", env_norm)
+        self.assertIn("VTON_IMAGE_API_KEY=\n", env_norm)
         self.assertIn("FIREBASE_PROJECT_ID=\n", env_norm)
         self.assertIn("OTEL_SERVICE_NAME=ai-fashion-vault-api", env_example)
         self.assertNotIn("REDIS_URL", env_example)
