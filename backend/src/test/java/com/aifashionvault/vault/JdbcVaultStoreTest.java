@@ -1,6 +1,7 @@
 package com.aifashionvault.vault;
 
 import java.time.*;
+import java.time.temporal.ChronoUnit;
 import java.util.*;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.*;
@@ -26,5 +27,6 @@ class JdbcVaultStoreTest {
  @Test void patchDistinguishesOmittedNullAndValue(){UserId owner=user();VaultItem item=item(owner,Instant.now(),"Name","Brand",ProductCategory.TOP,"Black");store.insert(item);Patch patch=new Patch(JsonNullable.undefinedValue(),JsonNullable.of(null),JsonNullable.of(ProductCategory.UNKNOWN),JsonNullable.undefinedValue(),JsonNullable.undefinedValue(),JsonNullable.undefinedValue(),JsonNullable.undefinedValue());VaultItem updated=store.patchForUser(item.id(),owner,patch).orElseThrow();assertThat(updated.name()).isEqualTo("Name");assertThat(updated.brand()).isNull();assertThat(updated.category()).isEqualTo(ProductCategory.UNKNOWN);}
  @Test void collectionFilterIsOwnerScoped(){UserId owner=user(),foreign=user();VaultItem item=item(owner,Instant.now(),"Name",null,null,null);store.insert(item);UUID collection=UUID.randomUUID();jdbc.update("INSERT INTO collection(id,user_id,name,created_at,updated_at) VALUES(?,?,?,now(),now())",collection,owner.value(),"owned");jdbc.update("INSERT INTO collection_item(collection_id,vault_item_id,user_id,created_at) VALUES(?,?,?,now())",collection,item.id().value(),owner.value());assertThat(store.listForUser(owner,new Filters(null,collection,null,null,null,null,null))).containsExactly(item);assertThat(store.listForUser(foreign,new Filters(null,collection,null,null,null,null,null))).isEmpty();}
  private UserId user(){UserId id=new UserId(UUID.randomUUID());jdbc.update("INSERT INTO users(id,created_at,updated_at) VALUES(?,now(),now())",id.value());return id;}
- private VaultItem item(UserId user,Instant at,String name,String brand,ProductCategory category,String color){return new VaultItem(new VaultItemId(UUID.randomUUID()),user,new StorageKey("users/"+user.value()+"/vault/"+UUID.randomUUID()+".jpg"),null,name,brand,category,null,color,null,new ObjectMapper().readTree("{\"nested\":{\"ok\":true}}"),at);}
+    /** Postgres timestamptz is microsecond precision; truncate so the fixture instant survives the round trip exactly. */
+    private VaultItem item(UserId user,Instant at,String name,String brand,ProductCategory category,String color){return new VaultItem(new VaultItemId(UUID.randomUUID()),user,new StorageKey("users/"+user.value()+"/vault/"+UUID.randomUUID()+".jpg"),null,name,brand,category,null,color,null,new ObjectMapper().readTree("{\"nested\":{\"ok\":true}}"),at.truncatedTo(ChronoUnit.MICROS));}
 }
