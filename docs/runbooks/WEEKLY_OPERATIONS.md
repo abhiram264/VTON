@@ -592,7 +592,7 @@ This section operationalizes plan §49 ("Data Retention"):
   - `generation.orphan.cleanup` (counter of orphaned storage objects purged)
 - **Verified Background Retention Jobs:**
   - Hourly temp cleanup: `ObjectStoreConfiguration.TempCleanup`
-  - Generation orphan sweeper (24h safe age): `platform/objectstore/GenerationOrphanSweeper.java`
+  - **NOT MOUNTED** — generation orphan sweeper (24h safe age) exists at `platform/objectstore/GenerationOrphanSweeper.java` but has no bean, no schedule and no instantiation, so it never runs. Stranded derived Looks are not reaped today. Do not report it as a verified background job.
   - Avatar orphan cleanup: `avatar/AvatarCleanupConfiguration ScheduledCleanup`
   - Privacy deletion purge handlers: Flyway V021 account deletion lifecycle
 - **SQL Fallback (Read-Only PostgreSQL):**
@@ -635,7 +635,7 @@ WHERE created_at < NOW() - INTERVAL '24 hours'
 ### 6.4 Breach Action & Escalation
 - **Retention Funnel Drop > 20% WoW:** Severity P2 / Product Review. Escalate to Product Lead. Review onboarding drop-off points.
 - **Storage Hygiene Breach (Lingering Temp Records > 0):** Severity P1 Compliance Breach (violates plan §49 and ADR-015 privacy policy). Escalate to Infrastructure / Backend On-Call Engineer.
-  - Manually trigger `GenerationOrphanSweeper` and `ObjectStoreConfiguration.TempCleanup`.
+  - Manually trigger `ObjectStoreConfiguration.TempCleanup`. `GenerationOrphanSweeper` **cannot be triggered — it is not mounted**, so leaked derived Looks must be escalated to engineering as a product gap, not remediated by an operator action.
   - Check S3 bucket lifecycle configuration and ECS task scheduler status.
 
 ### 6.5 Section 6 Sign-Off
