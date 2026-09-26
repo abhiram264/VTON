@@ -94,9 +94,14 @@ public class GenerationProcessorConfiguration {
 	@Primary
 	FactoryBean<GenerationMediaStore> generationMediaStore(
 		ObjectProvider<ObjectStore> objectStores,
-		ObjectProvider<S3ObjectStore> s3ObjectStores
+		ObjectProvider<S3ObjectStore> s3ObjectStores,
+		@Qualifier("stubGenerationMediaStore") ObjectProvider<GenerationMediaStore> externalMediaStores
 	) {
 		return factory(GenerationMediaStore.class, () -> {
+			GenerationMediaStore external = externalMediaStores.getIfAvailable();
+			if (external != null) {
+				return external;
+			}
 			ObjectStore objectStore = objectStores.getIfAvailable();
 			if (objectStore instanceof GenerationMediaStore mediaStore) {
 				return mediaStore;
