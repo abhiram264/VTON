@@ -1,4 +1,8 @@
 import type { AvatarApiConfig } from './types';
+// A hung socket must not hang the caller forever, so every request is
+// bounded. AbortController + setTimeout only: no new dependency.
+const REQUEST_TIMEOUT_MS = 30_000;
+
 
 export type UploadTicket = {
   id: string;
