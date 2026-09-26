@@ -104,8 +104,7 @@ resource "aws_iam_role_policy" "api_task_policy" {
         Action = [
           "s3:GetObject",
           "s3:PutObject",
-          "s3:DeleteObject",
-          "s3:AbortMultipartUpload"
+          "s3:DeleteObject"
         ]
         Resource = [
           "${aws_s3_bucket.avatar.arn}/*",
@@ -186,8 +185,7 @@ resource "aws_iam_role_policy" "worker_task_policy" {
         Action = [
           "s3:GetObject",
           "s3:PutObject",
-          "s3:DeleteObject",
-          "s3:AbortMultipartUpload"
+          "s3:DeleteObject"
         ]
         Resource = [
           "${aws_s3_bucket.avatar.arn}/*",
