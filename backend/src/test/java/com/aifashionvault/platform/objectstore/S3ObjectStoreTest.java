@@ -47,6 +47,7 @@ import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.presigner.S3Presigner;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
@@ -732,6 +733,47 @@ class S3ObjectStoreTest {
 			assertThat(deleted.getAllValues())
 				.extracting(DeleteObjectRequest::key)
 				.containsExactly("avatar-1", "avatar-2", "gen-input-1", "vault-1", "look-1", "temp-1");
+		}
+
+		@Test
+		void purgeSurfacesAFailingObjectDeleteInsteadOfReportingCompletedErasure() {
+			S3Client s3 = mock(S3Client.class);
+			S3ObjectStore store = store(s3, (object, age) -> {
+			});
+			when(s3.listObjectsV2(any(ListObjectsV2Request.class))).thenAnswer(invocation -> {
+				ListObjectsV2Request request = invocation.getArgument(0);
+				if ("configured-vault".equals(request.bucket()) && USER_PREFIX.equals(request.prefix())) {
+					return ListObjectsV2Response.builder().contents(obj("vault-1", NOW)).isTruncated(false).build();
+				}
+				return ListObjectsV2Response.builder().isTruncated(false).build();
+			});
+			when(s3.deleteObject(any(DeleteObjectRequest.class))).thenAnswer(invocation -> {
+				DeleteObjectRequest request = invocation.getArgument(0);
+				if ("vault-1".equals(request.key())) {
+					throw SdkClientException.create("https://configured-vault.s3.amazonaws.com/vault-1 timed out");
+				}
+				return null;
+			});
+
+			assertThatThrownBy(() -> store.purgeUserObjects(USER_ID))
+				.isInstanceOf(ObjectStoreExceptions.ObjectStoreUnavailableException.class);
+		}
+
+		@Test
+		void tempRetentionSweepStaysBestEffortWhenItsDeleteFails() {
+			S3Client s3 = mock(S3Client.class);
+			S3ObjectStore store = store(s3, (object, age) -> {
+			});
+			when(s3.listObjectsV2(any(ListObjectsV2Request.class))).thenReturn(ListObjectsV2Response.builder()
+				.contents(obj("age-20h", NOW.minus(Duration.ofHours(20))))
+				.isTruncated(false)
+				.build());
+			when(s3.deleteObject(any(DeleteObjectRequest.class)))
+				.thenThrow(SdkClientException.create("https://configured-temp.s3.amazonaws.com/age-20h timed out"));
+
+			assertThatCode(() -> store.cleanupTemp()).doesNotThrowAnyException();
+
+			verify(s3).deleteObject(any(DeleteObjectRequest.class));
 		}
 	}
 

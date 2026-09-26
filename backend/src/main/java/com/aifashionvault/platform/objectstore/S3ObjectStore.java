@@ -14,6 +14,9 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import com.aifashionvault.platform.environment.VaultEnvironmentProperties;
 import com.aifashionvault.shared.StorageKey;
 import com.aifashionvault.shared.UploadId;
@@ -52,6 +55,7 @@ public final class S3ObjectStore implements ObjectStore, GenerationMediaStore {
 	private static final String CLAIM_MARKER = "claim-marker";
 	private static final String MISSING_MESSAGE = "staged object is missing";
 	private static final String UNAVAILABLE_MESSAGE = "object store is unavailable";
+	private static final Logger log = LoggerFactory.getLogger(S3ObjectStore.class);
 
 	private final S3Client s3;
 	private final S3Presigner presigner;
@@ -482,7 +486,7 @@ public final class S3ObjectStore implements ObjectStore, GenerationMediaStore {
 				if (obj == null || obj.key() == null || obj.key().isBlank()) {
 					continue;
 				}
-				deleteQuietly(bucketName, obj.key());
+				deleteForErasure(bucketName, obj.key());
 			}
 			token = Boolean.TRUE.equals(page.isTruncated()) ? page.nextContinuationToken() : null;
 		}
@@ -502,12 +506,25 @@ public final class S3ObjectStore implements ObjectStore, GenerationMediaStore {
 		}
 	}
 
+	private void deleteForErasure(String bucketName, String key) {
+		try {
+			s3.deleteObject(DeleteObjectRequest.builder().bucket(bucketName).key(key).build());
+		}
+		catch (RuntimeException ex) {
+			log.error("erasure delete failed: {}/{} was not removed; account deletion is not complete.", bucketName, key, ex);
+			throw new ObjectStoreExceptions.ObjectStoreUnavailableException(
+					"object store is unavailable while erasing an account object");
+		}
+	}
+
 	private void deleteQuietly(String bucketName, String key) {
 		try {
 			s3.deleteObject(DeleteObjectRequest.builder().bucket(bucketName).key(key).build());
 		}
-		catch (RuntimeException ignored) {
-			// Per-object delete failures must not stop the sweep.
+		catch (RuntimeException ex) {
+			// The temp-retention sweep is explicitly best-effort: a later sweep retries
+			// the object, so a per-object failure must not stop this one.
+			log.error("temp retention sweep could not delete {}/{}", bucketName, key, ex);
 		}
 	}
 
