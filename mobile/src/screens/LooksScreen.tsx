@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Pressable, Share, StyleSheet, Text, View } from 'react-native';
+import { Image, Pressable, Share, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { looksApi } from '../features/looks/looksApi';
 import { generationApi, pollGeneration } from '../features/generation/generationApi';
@@ -14,6 +14,7 @@ export default function LooksScreen({ onModify, onOpenLook, onProfile, pollDelay
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [recentGeneration, setRecentGeneration] = useState<{ sourceLookId: string; generation: GenerationResource } | null>(null);
+  const [brokenImages, setBrokenImages] = useState<ReadonlySet<string>>(() => new Set());
   const selectedRef = useRef<string | null>(null);
   const acceptedGenerations = useRef(new Map<string, string>());
   const recentGenerationRef = useRef<{ sourceLookId: string; generation: GenerationResource } | null>(null);
@@ -130,7 +131,7 @@ export default function LooksScreen({ onModify, onOpenLook, onProfile, pollDelay
     {status === 'loading' ? <Text accessibilityLiveRegion="polite">Loading Looks…</Text> : null}
     {status === 'failed' ? <Text accessibilityLiveRegion="polite">Could not load Looks. You can keep using navigation.</Text> : null}
     {status === 'ready' && looks.length === 0 ? <Text>No saved Looks yet.</Text> : null}
-    {looks.map(look => <View key={look.id}><Pressable accessibilityRole="button" accessibilityLabel={`Look ${look.id}`} accessibilityHint="Selects this Look. Use Open Look for details." accessibilityState={{ selected: selected === look.id }} onPress={() => selectLook(look.id)} onLongPress={() => onOpenLook(look.id)} style={styles.button}><Text style={styles.buttonLabel}>Look created {look.createdAt}</Text></Pressable><Action label={`Open Look ${look.id}`} onPress={() => onOpenLook(look.id)} /></View>)}
+    {looks.map(look => <View key={look.id} style={styles.cell}>{brokenImages.has(look.id) ? <Text accessibilityLiveRegion="polite" style={styles.imageNotice}>Preview unavailable for {look.id}.</Text> : <Image accessible accessibilityRole="image" accessibilityLabel={`Look image ${look.id}`} onError={() => setBrokenImages(current => new Set(current).add(look.id))} source={{ uri: look.image.url }} style={styles.thumbnail} />}<Pressable accessibilityRole="button" accessibilityLabel={`Look ${look.id}`} accessibilityHint="Selects this Look. Use Open Look for details." accessibilityState={{ selected: selected === look.id }} onPress={() => selectLook(look.id)} onLongPress={() => onOpenLook(look.id)} style={styles.button}><Text style={styles.buttonLabel}>Look created {look.createdAt}</Text></Pressable><Action label={`Open Look ${look.id}`} onPress={() => onOpenLook(look.id)} /></View>)}
     <Text accessibilityRole="header" style={styles.heading}>Recent generations</Text>
     {recentGeneration ? <View accessibilityLiveRegion="polite"><Text accessibilityLabel={`Generation ${recentGeneration.generation.id}, ${recentGeneration.generation.status}${recentGeneration.generation.failureCode ? `, ${recentGeneration.generation.failureCode}` : ''}`}>Generation {recentGeneration.generation.id}: {recentGeneration.generation.status}{recentGeneration.generation.failureCode ? ` (${recentGeneration.generation.failureCode})` : ''}</Text>{recentGeneration.generation.lookId ? <Action label="Open generated Look" onPress={() => onOpenLook(recentGeneration.generation.lookId!)} /> : null}</View> : <Text>No recent generations yet.</Text>}
     <Action label={resumeSelected ? 'Resume regeneration' : 'Regenerate'} onPress={regenerate} disabled={disabled} busy={busy} />
@@ -141,4 +142,4 @@ export default function LooksScreen({ onModify, onOpenLook, onProfile, pollDelay
 }
 
 function Action({ label, onPress, disabled = false, busy = false }: { label: string; onPress: () => void; disabled?: boolean; busy?: boolean }) { return <Pressable accessibilityRole="button" accessibilityLabel={label} accessibilityState={{ disabled, busy }} disabled={disabled} onPress={onPress} style={[styles.button, disabled && styles.disabled]}><Text style={styles.buttonLabel}>{label}</Text></Pressable>; }
-const styles = StyleSheet.create({ page: { flex: 1, padding: 20, gap: 12, backgroundColor: '#f4f4f2' }, headingRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }, title: { fontSize: 28, fontWeight: '700', color: '#1a1a1a' }, heading: { fontSize: 20, fontWeight: '700' }, button: { minHeight: 44, justifyContent: 'center', borderRadius: 8, paddingHorizontal: 16, backgroundColor: '#6b4f2a' }, buttonLabel: { color: '#fff', fontWeight: '600', textAlign: 'center' }, disabled: { opacity: 0.45 } });
+const styles = StyleSheet.create({ page: { flex: 1, padding: 20, gap: 12, backgroundColor: '#f4f4f2' }, headingRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }, title: { fontSize: 28, fontWeight: '700', color: '#1a1a1a' }, heading: { fontSize: 20, fontWeight: '700' }, button: { minHeight: 44, justifyContent: 'center', borderRadius: 8, paddingHorizontal: 16, backgroundColor: '#6b4f2a' }, buttonLabel: { color: '#fff', fontWeight: '600', textAlign: 'center' }, disabled: { opacity: 0.45 }, cell: { gap: 8 }, thumbnail: { width: '100%', aspectRatio: 2 / 3, borderRadius: 8, backgroundColor: '#ddd8d0' }, imageNotice: { color: '#8a2f2b' } });
