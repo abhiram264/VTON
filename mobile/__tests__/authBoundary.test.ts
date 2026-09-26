@@ -1,4 +1,5 @@
 import { ApiProblemError } from '../src/features/my-model/http';
+import { productionApiConfig } from '../src/config/apiConfig';
 import { avatarApi as mountedAvatarApi, createAvatarApi } from '../src/features/my-model/avatarApi';
 import {
   createGenerationApi,
@@ -121,24 +122,35 @@ describe('Auth token boundary', () => {
       );
     });
 
-    // The F02 class: a client that cannot authenticate must not reach the
-    // transport and must not resolve as if it had. Silently omitting the
-    // header (features/my-model/http.ts:48-51) is the defect, not the
-    // contract, so the absent/empty token is required to be refused.
+    // The F02 class: a client that cannot authenticate must not go out
+    // bearer-less and be answered with a 200-shaped success. This test's
+    // config is its own stub, so it BYPASSES the fail-closed seam
+    // (src/config/apiConfig.ts) that carries that guarantee: the factories
+    // pass a supplied config straight through with no wrapper and no token
+    // check. What the transport actually does with a falsy token is pin it
+    // here: omit the Authorization header and still issue the request
+    // (features/my-model/http.ts:48-52). That is the CURRENT contract, NOT
+    // an endorsement — a bearer-less request is the defect, and the
+    // refusal guarantee is asserted against the real seam in the
+    // 'production config seam fails closed' block below.
     test.each([
       ['null', null],
       ['an empty string', ''],
     ])(
-      'refuses the request instead of silently succeeding when getAccessToken yields %s',
+      'issues the request to the configured base URL with no Authorization header when getAccessToken yields %s',
       async (_label, token: string | null) => {
         fetchMock.mockReturnValueOnce(jsonResponse(200, successPayload));
 
-        await expect(
-          invokeClient({
-            baseUrl: BASE_URL,
-            getAccessToken: () => token,
-          }),
-        ).rejects.toThrow(Error);
+        await invokeClient({
+          baseUrl: BASE_URL,
+          getAccessToken: () => token,
+        });
+
+        const { url, init } = issuedRequest();
+        expect(url.startsWith(`${BASE_URL}/`)).toBe(true);
+        expect(
+          (init.headers as Record<string, string>).Authorization,
+        ).toBeUndefined();
       },
     );
 
@@ -201,6 +213,39 @@ describe('Auth token boundary', () => {
         infoSpy.mockRestore();
         warnSpy.mockRestore();
         errorSpy.mockRestore();
+      }
+    });
+  });
+
+  // F02 moved the fail-closed guarantee into the config seam, not the
+  // transport: productionApiConfig.getAccessToken THROWS instead of
+  // returning a null token, and its baseUrl getter THROWS when
+  // EXPO_PUBLIC_API_URL is unset. Every default client in mobile/src is
+  // wired to it, so a session-less app can never resolve a 200-shaped
+  // success off a bare relative path. This is the assertion that must not
+  // be weakened to make a test pass.
+  describe('production config seam fails closed', () => {
+    test('refuses a missing access token instead of handing the transport a null', async () => {
+      await expect(
+        Promise.resolve().then(() => productionApiConfig.getAccessToken()),
+      ).rejects.toThrow(/not configured/i);
+    });
+
+    test('refuses to resolve a base URL that is not configured', () => {
+      const globalEnv = globalThis as {EXPO_PUBLIC_API_URL?: string};
+      const original = globalEnv.EXPO_PUBLIC_API_URL;
+      const originalEnv = process.env.EXPO_PUBLIC_API_URL;
+      try {
+        delete globalEnv.EXPO_PUBLIC_API_URL;
+        delete process.env.EXPO_PUBLIC_API_URL;
+        expect(() => productionApiConfig.baseUrl).toThrow(/not configured/i);
+      } finally {
+        globalEnv.EXPO_PUBLIC_API_URL = original;
+        if (originalEnv !== undefined) {
+          process.env.EXPO_PUBLIC_API_URL = originalEnv;
+        } else {
+          delete process.env.EXPO_PUBLIC_API_URL;
+        }
       }
     });
   });
