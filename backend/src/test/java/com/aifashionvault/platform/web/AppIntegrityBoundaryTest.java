@@ -138,7 +138,7 @@ class AppIntegrityBoundaryTest {
         verifier.verdict = new AppIntegrityVerdict(AppIntegrityVerdictStatus.VERIFIED, AppIntegrityFailureReason.NONE);
         mockMvc.perform(request("/generations", "{\"productUploadId\":\"" + UUID.randomUUID() + "\"}", "secret"))
             .andExpect(status().isServiceUnavailable())
-            .andExpect(content().string("{\"code\":\"ADMISSION_PAUSED\"}"));
+            .andExpect(content().string("{\"code\":\"GENERATION_PROVIDER_UNAVAILABLE\"}"));
         mockMvc.perform(request("/avatars", "{\"uploadId\":\"" + UUID.randomUUID() + "\"}", "secret"))
             .andExpect(status().isServiceUnavailable())
             .andExpect(content().string("{\"code\":\"AVATAR_MEDIA_MISSING\"}"));
@@ -187,25 +187,6 @@ class AppIntegrityBoundaryTest {
         @Bean @Primary ExternalTokenVerifier tokenVerifier() { return InProcessJwtFixture.verifier(); }
         @Bean("recordingAppIntegrityVerifier") @Primary RecordingVerifier recordingVerifier() { return new RecordingVerifier(); }
 
-        /**
-         * Pre-existing context blocker, not a behaviour of this test. The production
-         * {@code objectStore} bean is typed {@code ObjectStore} but returns an
-         * {@code S3ObjectStore}, which also implements {@code GenerationMediaStore}, so it
-         * becomes a second {@code GenerationMediaStore} candidate alongside
-         * {@code generationMediaStore} (GenerationProcessorConfiguration:92-104). The
-         * graph then calls {@code getIfAvailable()} on an {@code ObjectProvider<GenerationMediaStore>}
-         * (GenerationProcessorConfiguration:260) and throws
-         * NoUniqueBeanDefinitionException, failing the whole context. This @Primary
-         * GenerationMediaStore supplies the same instance the production factory already
-         * prefers (GenerationProcessorConfiguration:98-100 casts the ObjectStore to
-         * GenerationMediaStore), so the ambiguity resolves to the value production would
-         * choose. No product code is changed.
-         */
-        @Bean @Primary
-        com.aifashionvault.platform.objectstore.GenerationMediaStore integrityTestGenerationMediaStore(
-                com.aifashionvault.platform.objectstore.ObjectStore objectStore) {
-            return (com.aifashionvault.platform.objectstore.GenerationMediaStore) objectStore;
-        }
     }
 
     static final class RecordingVerifier implements AppIntegrityVerifier {
