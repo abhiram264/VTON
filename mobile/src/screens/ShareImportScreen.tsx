@@ -26,7 +26,7 @@ import {
 // NEEDS_IMAGE).
 export type ShareImportFlowState =
   | {view: 'RESOLVING'}
-  | {view: 'READY'}
+  | {view: 'READY'; importId: string}
   | {view: 'NEEDS_IMAGE'; importId: string}
   | {view: 'FAILED_RETRYABLE'; reason?: 'DEPENDENCY_UNAVAILABLE' | 'RESOLUTION_TIMEOUT'; importId?: string}
   | {view: 'FAILED_TERMINAL'; message?: string}
@@ -86,7 +86,7 @@ function retryAfterLease(
 function toFlowState(response: ShareImportResponse): ShareImportFlowState {
   switch (response.status) {
     case 'READY':
-      return {view: 'READY'};
+      return {view: 'READY', importId: response.importId};
     case 'NEEDS_IMAGE':
       return {view: 'NEEDS_IMAGE', importId: response.importId};
     case 'FAILED_RETRYABLE':
@@ -194,7 +194,7 @@ export default function ShareImportScreen({
     // key stays stable for the lifetime of the route (spec D-lifecycle).
   }, [payload, activeResolver]);
 
-  const retry = useCallback(async () => {
+  const retry = useCallback(async (expectedImportId?: string) => {
     if (busyRef.current) {
       return;
     }
@@ -212,7 +212,25 @@ export default function ShareImportScreen({
         controller.signal,
       );
       if (!controller.signal.aborted && operation === operationRef.current) {
-        setState(next);
+        // Confirm replays the same stable idempotency key, so a READY answer
+        // must come back bound to the importId the user actually confirmed.
+        // A different id is a state conflict, not a confirmed item.
+        const rebound =
+          expectedImportId !== undefined &&
+          next.view === 'READY' &&
+          next.importId !== expectedImportId;
+        setState(
+          rebound
+            ? {view: 'FAILED_TERMINAL', message: terminalMessage('IMPORT_STATE_CONFLICT')}
+            : next,
+        );
+        if (
+          expectedImportId !== undefined &&
+          !rebound &&
+          next.view === 'READY'
+        ) {
+          setNotice('Item confirmed. Add it to your Vault from there.');
+        }
       }
     } catch (error) {
       if (!controller.signal.aborted && operation === operationRef.current) {
@@ -318,9 +336,25 @@ export default function ShareImportScreen({
         </View>
       ) : null}
       {state.view === 'READY' ? (
-        <View accessible accessibilityLiveRegion="polite">
-          <Text accessibilityRole="header" style={styles.title}>Shared item ready</Text>
-        </View>
+        <>
+          <View accessible accessibilityLiveRegion="polite">
+            <Text accessibilityRole="header" style={styles.title}>Shared item ready</Text>
+            <Text style={styles.body}>
+              Confirm this item to keep it for your Vault.
+            </Text>
+          </View>
+          <View style={styles.actions}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityState={{disabled: busy, busy}}
+              disabled={busy}
+              onPress={() => retry(state.importId)}
+              style={[styles.button, styles.primary, busy && styles.disabled]}
+            >
+              <Text style={styles.primaryLabel}>Confirm Item</Text>
+            </Pressable>
+          </View>
+        </>
       ) : null}
       {state.view === 'NEEDS_IMAGE' ? (
         <>
@@ -361,7 +395,7 @@ export default function ShareImportScreen({
               accessibilityRole="button"
               accessibilityState={{disabled: busy, busy}}
               disabled={busy}
-              onPress={retry}
+              onPress={() => retry()}
               style={[styles.button, styles.primary, busy && styles.disabled]}
             >
               <Text style={styles.primaryLabel}>Try Again</Text>

@@ -543,6 +543,35 @@ describe('ShareImportScreen flow', () => {
     );
   }
 
+  test('READY carries the importId into the confirm action and reuses the same import', async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(201, ready()))
+      .mockResolvedValueOnce(jsonResponse(201, ready()));
+    const view = await render(
+      <ShareImportScreen payload={{ kind: 'url', url: SOURCE_URL }} api={api()} />,
+    );
+    expect(await view.findByText('Shared item ready')).toBeTruthy();
+
+    // The resolved importId must reach the confirm affordance: pre-fix the
+    // READY branch dropped it, so no forward action existed at all.
+    const confirm = await view.findByText('Confirm Item');
+    await act(async () => {
+      fireEvent.press(confirm);
+    });
+
+    expect(await view.findByText('Item confirmed. Add it to your Vault from there.')).toBeTruthy();
+    // One share creates at most one import: the confirm replays the same
+    // idempotency key, so the second POST is bound to the SAME importId.
+    const importPosts = fetchMock.mock.calls.filter(call =>
+      requestUrl(call[0]).endsWith('/share/imports'),
+    );
+    expect(importPosts).toHaveLength(2);
+    expect(importPosts[1][1].headers['Idempotency-Key']).toBe(
+      importPosts[0][1].headers['Idempotency-Key'],
+    );
+    expect(view.queryByText(/https?:\/\//)).toBeNull();
+  });
+
   test('URL payload renders READY with the exact URL request mapping', async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(201, ready()));
     const view = await render(
