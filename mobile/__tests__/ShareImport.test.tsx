@@ -558,8 +558,9 @@ describe('ShareImportScreen flow', () => {
     await act(async () => {
       fireEvent.press(confirm);
     });
-
-    expect(await view.findByText('Item confirmed. Add it to your Vault from there.')).toBeTruthy();
+    // Honest copy: no confirm route is mounted, so the affordance must not
+    // claim the item was saved or kept.
+    expect(await view.findByText('Item is ready. Saving it to your Vault is not available yet.')).toBeTruthy();
     // One share creates at most one import: the confirm replays the same
     // idempotency key, so the second POST is bound to the SAME importId.
     const importPosts = fetchMock.mock.calls.filter(call =>
