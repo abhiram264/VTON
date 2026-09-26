@@ -17,6 +17,7 @@ import org.springframework.scheduling.TaskScheduler;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Primary;
 
 import com.aifashionvault.admission.AbuseBudgetPolicy;
 import com.aifashionvault.admission.AggregateBackedCostCircuitBreaker;
@@ -90,6 +91,7 @@ public class GenerationProcessorConfiguration {
 	}
 
 	@Bean
+	@Primary
 	FactoryBean<GenerationMediaStore> generationMediaStore(
 		ObjectProvider<ObjectStore> objectStores,
 		ObjectProvider<S3ObjectStore> s3ObjectStores
