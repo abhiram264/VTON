@@ -65,7 +65,10 @@ inspects nothing and names itself synthetic in every result; a resolved share ca
 become a saved item, because the share import contract stops at an import id and no mobile
 call turns one into a vault item (F04, PR-08/PR-11;
 `mobile/src/features/vault/vaultFallback.ts:42`,
-`backend/src/main/java/com/aifashionvault/platform/web/SharesController.java:39-72`); import
+`backend/src/main/java/com/aifashionvault/platform/web/SharesController.java:39-72`); generation
+is refused with `GENERATION_PROVIDER_UNAVAILABLE` before any reservation, image transfer, outbox
+row or provider call when no provider is configured, because no `ProviderRegistry` bean exists
+without an API key; a configured provider still admits (F15 sibling gap, PR-26); import
 replay is arbitrated before the verified-upload requirement is applied (F05, PR-07;
 `backend/src/main/java/com/aifashionvault/platform/web/ShareImportService.java:55-59`); and
 the item response carries no image read capability (F06, PR-06/PR-11;

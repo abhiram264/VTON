@@ -27,6 +27,8 @@ import com.aifashionvault.generation.GenerationStore;
 import com.aifashionvault.generation.JdbcGenerationStore;
 import com.aifashionvault.platform.objectstore.GenerationMediaStore;
 import com.aifashionvault.platform.objectstore.ObjectStore;
+import com.aifashionvault.platform.fashn.FashnConfig;
+import com.aifashionvault.platform.environment.VaultEnvironmentProperties;
 import com.aifashionvault.admission.JdbcGenerationRateLimiter;
 import com.aifashionvault.platform.generation.GenerationMetrics;
 import com.aifashionvault.shared.UserId;
@@ -45,6 +47,7 @@ public class GenerationsController {
 		ObjectProvider<ObjectStore> objectStores,
 		ObjectProvider<GenerationMetrics> generationMetrics,
 		GenerationApiProperties properties,
+		VaultEnvironmentProperties vaultProperties,
 		AppIntegrityVerifier verifier
 	) {
 		this.integrity = new AppIntegrityBoundary(verifier, properties.isAttestationRequired());
@@ -61,7 +64,7 @@ public class GenerationsController {
 		this.service = new GenerationCreationService(
 			store, new JdbcTemplate(dataSource), properties, Clock.systemUTC(),
 			mediaStore, new JdbcGenerationRateLimiter(dataSource, Clock.systemUTC()),
-			generationMetrics.getIfAvailable());
+			generationMetrics.getIfAvailable(), FashnConfig.providerConfigured(vaultProperties));
 	}
 
 	@PostMapping
@@ -120,7 +123,7 @@ public class GenerationsController {
 		if (this.service == null) {
 			throw new GenerationCreationService.Problem(
 				org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
-				GenerationCreationService.ADMISSION_PAUSED);
+				GenerationCreationService.GENERATION_PROVIDER_UNAVAILABLE);
 		}
 		return this.service;
 	}

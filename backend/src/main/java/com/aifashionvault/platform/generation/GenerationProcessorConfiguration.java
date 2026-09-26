@@ -331,9 +331,14 @@ public class GenerationProcessorConfiguration {
 		if (registry != null) {
 			return registry.selectedProvider();
 		}
+		// No silent provider selection: without a ProviderRegistry there is no provider,
+		// and the create path refuses admission with GENERATION_PROVIDER_UNAVAILABLE.
+		// Auto-selecting a bare provider bean here would defeat the honest-unavailable
+		// posture that FashnConfig's conditional beans establish.
 		FashnVtonProvider fashn = fashnProviders.getIfAvailable();
 		if (fashn != null) {
-			return fashn;
+			throw new IllegalStateException(
+				"a VtonProvider bean exists without a ProviderRegistry; refusing to select a default provider");
 		}
 		throw new IllegalStateException("VtonProvider is required");
 	}
