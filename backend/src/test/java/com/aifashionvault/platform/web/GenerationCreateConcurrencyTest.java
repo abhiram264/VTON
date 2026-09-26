@@ -140,7 +140,7 @@ class GenerationCreateConcurrencyTest {
     @TestConfiguration
     static class Configuration {
         @Bean @Primary ExternalTokenVerifier verifier() { return InProcessJwtFixture.verifier(); }
-        @Bean @Primary GenerationMediaStore generationMediaStore() {
+        @Bean GenerationMediaStore stubGenerationMediaStore() {
             return new GenerationMediaStore() {
                 @Override public void putBounded(StorageKey dest, InputStream source, long maxBytes, String mediaType) { }
                 @Override public ClaimResult claim(com.aifashionvault.platform.objectstore.GenerationClaimCommand command) { throw new UnsupportedOperationException(); }

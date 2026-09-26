@@ -358,7 +358,7 @@ class GenerationHttpContractTest {
             return new GenerationMetrics(testGenerationMeterRegistry);
         }
         @Bean @Primary GenerationWorkQueue generationWorkQueue() { return new RecordingWorkQueue(); }
-        @Bean @Primary GenerationMediaStore generationMediaStore() {
+        @Bean GenerationMediaStore stubGenerationMediaStore() {
             return new GenerationMediaStore() {
                 @Override public void putBounded(StorageKey dest, InputStream source, long maxBytes, String mediaType) { }
                 @Override public ClaimResult claim(com.aifashionvault.platform.objectstore.GenerationClaimCommand command) {

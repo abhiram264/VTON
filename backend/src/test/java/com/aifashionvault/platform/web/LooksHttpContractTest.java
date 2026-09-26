@@ -248,7 +248,6 @@ class LooksHttpContractTest {
 		@Bean @Primary ExternalTokenVerifier verifier() { return InProcessJwtFixture.verifier(); }
 		@Bean @Primary GenerationStore generations() { return mock(GenerationStore.class); }
 		@Bean @Primary FakeLooksObjectStore objects() { return new FakeLooksObjectStore(); }
-		@Bean JdbcLookStore looks(DataSource dataSource) { return new JdbcLookStore(dataSource); }
 	}
 
 	static final class FakeLooksObjectStore implements ObjectStore {

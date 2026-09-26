@@ -606,11 +606,6 @@ class AvatarsApiTest {
 		}
 
 		@Bean
-		JdbcAvatarStore jdbcAvatarStore(DataSource dataSource) {
-			return new JdbcAvatarStore(dataSource);
-		}
-
-		@Bean
 		AvatarPreflight avatarPreflight(ImageInspector imageInspector, SemanticInspector semanticInspector) {
 			return new AvatarPreflight(
 				new ImageInspectorAvatarBytesInspector(imageInspector),
