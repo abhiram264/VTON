@@ -511,7 +511,6 @@ class UploadsApiTest {
 			throw new AssertionError("claim must not be called");
 		}
 
-		@Override
 		// Not an error any more. DELETE /me now PURGES before it marks the account deleted: that
 		// ordering is the erasure guarantee (JdbcIdentityProvisioning purges every object, then
 		// UPDATEs deleted_at, and rethrows per-object failures). This test exercises exactly that
