@@ -22,9 +22,10 @@ final class VaultEnvironmentValidator {
 		validateAws(env, properties.aws());
 		validateSqs(env, properties.aws() == null ? null : properties.aws().region(), properties.sqs());
 		validateS3(properties.s3());
-		if (properties.fashn() == null || isBlank(properties.fashn().apiKey())) {
-			reject("FASHN_API_KEY is required");
-		}
+		// The image provider is deliberately NOT required at boot. A blank or absent
+		// FASHN_API_KEY means no ProviderRegistry bean exists and the create path refuses
+		// admission with GENERATION_PROVIDER_UNAVAILABLE, which is the honest signal.
+		// Requiring it here would make the app unbootable instead of honestly unavailable.
 		if (properties.firebase() == null || isBlank(properties.firebase().projectId())) {
 			reject("FIREBASE_PROJECT_ID is required");
 		}

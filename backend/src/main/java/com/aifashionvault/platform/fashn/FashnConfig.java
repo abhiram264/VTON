@@ -5,6 +5,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpHeaders;
@@ -28,23 +29,38 @@ public class FashnConfig {
     }
 
     @Bean
+    @ConditionalOnProperty(prefix = "vault.fashn", name = "api-key")
     RestClient fashnRestClient(VaultEnvironmentProperties properties) {
         return fashnRestClientBuilder(properties.fashn().apiKey()).build();
     }
 
     @Bean
+    @ConditionalOnProperty(prefix = "vault.fashn", name = "api-key")
     FashnClient fashnClient(RestClient fashnRestClient) {
         return new FashnClient(fashnRestClient);
     }
 
     @Bean
+    @ConditionalOnProperty(prefix = "vault.fashn", name = "api-key")
     FashnVtonProvider fashnVtonProvider(FashnMapper fashnMapper, FashnClient fashnClient, ObjectStore objectStore) {
         return new FashnVtonProvider(fashnMapper, fashnClient, objectStore);
     }
 
     @Bean
+    @ConditionalOnProperty(prefix = "vault.fashn", name = "api-key")
     ProviderRegistry providerRegistry(FashnVtonProvider fashnVtonProvider) {
         return new DefaultProviderRegistry(List.of(fashnVtonProvider), fashnVtonProvider.providerKey(), Map.of());
+    }
+
+    /**
+     * Whether an image provider is genuinely configured. A blank or absent API key means no
+     * {@code ProviderRegistry} bean exists at all, so the default provider is honestly
+     * unavailable rather than silently selected. Single source of truth for the
+     * create-path admission gate in {@code GenerationCreationService}.
+     */
+    public static boolean providerConfigured(VaultEnvironmentProperties properties) {
+        return properties != null && properties.fashn() != null
+            && properties.fashn().apiKey() != null && !properties.fashn().apiKey().isBlank();
     }
 
     static RestClient.Builder fashnRestClientBuilder(String apiKey) {

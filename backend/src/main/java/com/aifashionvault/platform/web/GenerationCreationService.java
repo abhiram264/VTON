@@ -40,6 +40,7 @@ public class GenerationCreationService {
 	static final String ADMISSION_PAUSED = "ADMISSION_PAUSED";
 	static final String CREATE_OUTCOME_UNKNOWN = "CREATE_OUTCOME_UNKNOWN";
 	static final String GENERATION_MEDIA_UNAVAILABLE = "GENERATION_MEDIA_UNAVAILABLE";
+	static final String GENERATION_PROVIDER_UNAVAILABLE = "GENERATION_PROVIDER_UNAVAILABLE";
 
     private final GenerationStore store;
     private final JdbcTemplate jdbc;
@@ -48,6 +49,7 @@ public class GenerationCreationService {
     private final GenerationMediaStore mediaStore;
     private final com.aifashionvault.admission.GenerationRateLimiter rateLimiter;
     private final com.aifashionvault.platform.generation.GenerationMetrics metrics;
+    private final boolean providerAvailable;
 
     public GenerationCreationService(GenerationStore store, JdbcTemplate jdbc, GenerationApiProperties properties, Clock clock,
         GenerationMediaStore mediaStore) {
@@ -62,6 +64,12 @@ public class GenerationCreationService {
     public GenerationCreationService(GenerationStore store, JdbcTemplate jdbc, GenerationApiProperties properties, Clock clock,
         GenerationMediaStore mediaStore, com.aifashionvault.admission.GenerationRateLimiter rateLimiter,
         com.aifashionvault.platform.generation.GenerationMetrics metrics) {
+        this(store, jdbc, properties, clock, mediaStore, rateLimiter, metrics, true);
+    }
+
+    public GenerationCreationService(GenerationStore store, JdbcTemplate jdbc, GenerationApiProperties properties, Clock clock,
+        GenerationMediaStore mediaStore, com.aifashionvault.admission.GenerationRateLimiter rateLimiter,
+        com.aifashionvault.platform.generation.GenerationMetrics metrics, boolean providerAvailable) {
         this.store = store;
         this.jdbc = jdbc;
         this.properties = properties;
@@ -69,6 +77,7 @@ public class GenerationCreationService {
         this.mediaStore = mediaStore;
         this.rateLimiter = rateLimiter;
         this.metrics = metrics;
+        this.providerAvailable = providerAvailable;
     }
 
     public GenerationResponse create(UserId userId, String idempotencyKey, GenerationRequest request) {
@@ -80,6 +89,7 @@ public class GenerationCreationService {
         if (idempotencyKey.strip().length() > 255) throw problem(HttpStatus.BAD_REQUEST, MISSING_IDEMPOTENCY_KEY);
         if (request == null || request.productUploadId() == null) throw problem(HttpStatus.BAD_REQUEST, PRODUCT_UPLOAD_MISSING);
         if (properties.isAdmissionPaused()) throw problem(HttpStatus.SERVICE_UNAVAILABLE, ADMISSION_PAUSED);
+        if (!providerAvailable) throw problem(HttpStatus.SERVICE_UNAVAILABLE, GENERATION_PROVIDER_UNAVAILABLE);
         ResolvedAvatar avatar = resolveCurrentAvatar(userId);
         String key = idempotencyKey.strip();
         String fingerprint = fingerprint(userId, avatar.imageId(), request.productUploadId());

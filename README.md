@@ -71,7 +71,7 @@ The generation-temp bucket is a storage-domain boundary with scheduled deletion:
 Clean checkout (do not edit tracked Compose files):
 
 1. Copy `.env.example` to an untracked `.env`.
-2. Set `LOCALSTACK_AUTH_TOKEN` and `POSTGRES_PASSWORD` in `.env`. Do not add `DB_PASSWORD` to `.env.example`. The backend additionally requires `FASHN_API_KEY` and `FIREBASE_PROJECT_ID` at startup (VaultEnvironmentValidator rejects blanks); set real or placeholder values in `.env` for local runs.
+2. Set `LOCALSTACK_AUTH_TOKEN` and `POSTGRES_PASSWORD` in `.env`. Do not add `DB_PASSWORD` to `.env.example`. The backend requires `FIREBASE_PROJECT_ID` at startup (VaultEnvironmentValidator rejects blanks); set a value in `.env` for local runs. `FASHN_API_KEY` is no longer required at startup: with a blank or absent key no provider is registered and the default provider is honestly unavailable, and a generation POST is refused with `GENERATION_PROVIDER_UNAVAILABLE` before any reservation, image transfer, outbox row or provider call. Set a real key to admit generation. On ECS the key arrives by ARN selector against an empty secret body (infra/terraform/ecs.tf:47, :118; infra/terraform/secrets.tf:3-7), so an empty secret fails at secret resolution upstream of the JVM — an operator must put a non-blank sentinel in the secret out-of-band.
 3. `docker compose up -d`
 4. Verify PostgreSQL and LocalStack readiness.
 5. Launch the host-run backend: `python scripts/run_backend.py`
