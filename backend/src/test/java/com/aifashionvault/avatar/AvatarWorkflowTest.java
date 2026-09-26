@@ -4,6 +4,8 @@ import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.lang.reflect.Method;
+import java.lang.reflect.ParameterizedType;
+import java.lang.reflect.Type;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -31,6 +33,7 @@ import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.FactoryBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -325,7 +328,7 @@ class AvatarWorkflowTest {
 	}
 
 	@Test
-	void concurrentCreateRaceCompensatesClaimedPersistentObject() throws Exception {
+	void concurrentCreateRacePreservesClaimedPersistentObjectForReconciliation() throws Exception {
 		UserId userId = insertUser();
 		UploadId uploadId = new UploadId(UUID.randomUUID());
 		objectStore.put(staging(userId, uploadId, UploadPurpose.AVATAR), texturedJpeg());
@@ -337,16 +340,20 @@ class AvatarWorkflowTest {
 			() -> racingWorkflow.create(userId, uploadId),
 			AvatarProblemCode.AVATAR_CONFLICT);
 
+		// The mutation outcome is AMBIGUOUS, so the claimed AVATAR object must be
+		// preserved, not deleted: the commit may still have landed and a delete here
+		// would destroy a live image. AvatarMediaCleanup.reconcilePersistentOrphans
+		// reaps it once it is provably unreferenced past the orphan age.
 		ObjectRef claimed = claimedPersistentObject();
-		assertThat(objectStore.deleted()).contains(claimed);
-		assertThatThrownBy(() -> objectStore.head(claimed))
-			.isInstanceOf(ObjectStoreExceptions.StagedObjectMissingException.class);
+		assertThat(objectStore.deleted()).doesNotContain(claimed);
+		assertThat(objectStore.head(claimed)).isNotNull();
 		assertThat(store.findByUser(userId)).isEmpty();
+		assertThat(store.findByStorageKey(new StorageKey(claimed.objectKey()))).isEmpty();
 		assertThat(store.isUploadConsumed(userId, uploadId)).isFalse();
 	}
 
 	@Test
-	void replaceCommitRaceCompensatesClaimedPersistentObjectAndPreservesStaleProblem() throws Exception {
+	void replaceCommitRacePreservesClaimedPersistentObjectAndPreservesStaleProblem() throws Exception {
 		UserId userId = insertUser();
 		UploadId first = new UploadId(UUID.randomUUID());
 		UploadId second = new UploadId(UUID.randomUUID());
@@ -361,10 +368,11 @@ class AvatarWorkflowTest {
 			() -> racingWorkflow.replace(userId, created.id(), created.revision(), second),
 			AvatarProblemCode.AVATAR_STALE_REVISION);
 
+		// Same rule as create: the stale-revision commit failed, so the newly claimed
+		// object is an unreferenced orphan left for reconciliation, not deleted now.
 		ObjectRef claimed = claimedPersistentObject();
-		assertThat(objectStore.deleted()).contains(claimed);
-		assertThatThrownBy(() -> objectStore.head(claimed))
-			.isInstanceOf(ObjectStoreExceptions.StagedObjectMissingException.class);
+		assertThat(objectStore.deleted()).doesNotContain(claimed);
+		assertThat(objectStore.head(claimed)).isNotNull();
 		assertThat(store.findByUser(userId).orElseThrow().primaryImageId()).isEqualTo(created.primaryImageId());
 		assertThat(store.isUploadConsumed(userId, second)).isFalse();
 	}
@@ -383,8 +391,11 @@ class AvatarWorkflowTest {
 			() -> racingWorkflow.create(userId, uploadId),
 			AvatarProblemCode.AVATAR_CONFLICT);
 
+		// Persistent deletes are known to fail here. The workflow attempts none, so
+		// the orphan survives for reconciliation and the caller still sees the
+		// original AVATAR_CONFLICT rather than a masked compensation error.
 		ObjectRef orphan = claimedPersistentObject();
-		assertThat(objectStore.deleted()).contains(orphan);
+		assertThat(objectStore.deleted()).doesNotContain(orphan);
 		assertThat(objectStore.head(orphan)).isNotNull();
 		assertThat(store.findByStorageKey(new StorageKey(orphan.objectKey()))).isEmpty();
 		assertThat(store.isUploadConsumed(userId, uploadId)).isFalse();
@@ -557,9 +568,12 @@ class AvatarWorkflowTest {
 		Configuration configuration = AvatarConfiguration.class.getAnnotation(Configuration.class);
 		assertThat(configuration).isNotNull();
 		assertThat(configuration.proxyBeanMethods()).isFalse();
+		// A FactoryBean<T> @Bean method produces T, not FactoryBean. Reading the raw
+		// return type collapsed every deferred bean to FactoryBean, which both
+		// failed contains() and made doesNotContain(ObjectStore) vacuously true.
 		Set<Class<?>> beanTypes = java.util.Arrays.stream(AvatarConfiguration.class.getDeclaredMethods())
 			.filter(method -> method.getAnnotation(Bean.class) != null)
-			.map(Method::getReturnType)
+			.map(AvatarWorkflowTest::beanProductType)
 			.collect(Collectors.toSet());
 		assertThat(beanTypes)
 			.contains(
@@ -601,6 +615,20 @@ class AvatarWorkflowTest {
 
 	private static ObjectRef staging(UserId userId, UploadId uploadId, UploadPurpose purpose) {
 		return new ObjectRef(StorageDomain.TEMP, StorageKeys.stagingKey(userId, uploadId, purpose).value());
+	}
+
+	private static Class<?> beanProductType(Method beanMethod) {
+		Class<?> returnType = beanMethod.getReturnType();
+		if (!FactoryBean.class.equals(returnType)) {
+			return returnType;
+		}
+		Type generic = beanMethod.getGenericReturnType();
+		if (generic instanceof ParameterizedType parameterized
+				&& parameterized.getActualTypeArguments().length == 1
+				&& parameterized.getActualTypeArguments()[0] instanceof Class<?> product) {
+			return product;
+		}
+		return returnType;
 	}
 
 	private AvatarWorkflow workflow(JdbcAvatarStore avatarStore) {
