@@ -55,6 +55,18 @@ class PrivacyServiceTest {
 		assertThatThrownBy(() -> service.exportUserData(USER)).isInstanceOf(IllegalStateException.class);
 	}
 
+	@Test
+	void exportRejectsRawObjectStorageKeys() {
+		RecordingResources resources = new RecordingResources();
+		PrivacyService service = service(resources);
+		for (String storageKey : List.of("storage_key", "storageKey", "temp_storage_key")) {
+			resources.export = export(USER, Map.of("avatars", List.of(Map.of(storageKey, "vault/1111/photo.jpg"))));
+			assertThatThrownBy(() -> service.exportUserData(USER))
+					.isInstanceOf(IllegalStateException.class)
+					.hasMessage("export contains forbidden field");
+		}
+	}
+
 	private static PrivacyService service(RecordingResources resources) {
 		AccountDeletionWorkflow workflow = new AccountDeletionWorkflow() {
 			@Override public AccountDeletionStatus request(UserId userId) { return null; }
