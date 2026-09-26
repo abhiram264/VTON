@@ -86,8 +86,10 @@ public final class SafeImportHttpClient implements AutoCloseable, ImportHttpFetc
 		SafeHttpUri.requireSafe(target);
 		// Resolve + validate every A/AAAA record once; the dial below pins to
 		// one of these addresses so a short-TTL rebind between check and
-		// connect is impossible.
-		ImportDns.ResolvedTarget resolved = dns.resolveHost(target);
+		// connect is impossible. The lookup is budget-bound: the budgeted
+		// overload, never the unbounded one, so a black-holing resolver
+		// cannot park this thread past the total resolution deadline.
+		ImportDns.ResolvedTarget resolved = dns.resolveHost(target, dnsBudgetNanos(deadline));
 		InetAddress pinned = resolved.addresses()[0];
 		String host = target.getHost();
 		int port = SafeHttpUri.effectivePort(target);
@@ -123,6 +125,15 @@ public final class SafeImportHttpClient implements AutoCloseable, ImportHttpFetc
 			}
 			throw new ImportHttpFetcher.TransportException(classifyIo(ex), "transport failure");
 		}
+	}
+	/**
+	 * Remaining resolution budget for the point-of-use DNS lookup. The caller's
+	 * deadline wins, clamped to the project ceiling; a caller that supplies no
+	 * deadline still gets a bound rather than an unbounded native getaddrinfo.
+	 */
+	private static long dnsBudgetNanos(Instant deadline) {
+		long ceiling = ImportResolverLimits.TOTAL_RESOLUTION_TIMEOUT.toNanos();
+		return deadline == null ? ceiling : Math.min(ceiling, Duration.between(Instant.now(), deadline).toNanos());
 	}
 
 	private static void writeRequest(Connection connection, URI target) throws IOException {

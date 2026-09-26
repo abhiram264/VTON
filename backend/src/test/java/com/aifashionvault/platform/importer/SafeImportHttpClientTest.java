@@ -28,6 +28,8 @@ class SafeImportHttpClientTest {
 
 	private static final String HOST = "shop.example.test";
 	private static final URI TARGET = URI.create("https://" + HOST + "/item");
+	/** Resolution budget handed to the transport; the fake resolver stalls far longer. */
+	private static final long BUDGET_MILLIS = 250;
 
 	private final FakeDns dns = new FakeDns();
 	private final FakeConnections connections = new FakeConnections();
@@ -148,16 +150,80 @@ class SafeImportHttpClientTest {
 	@Test
 	void expiredDeadlineAbortsTheFetchMidReadAsTimeout() {
 		dns.answer = Fakes.publicV4();
-		// a fully valid response is available, but the total budget is already
-		// spent: the deadline guard must abort on the read itself — without it
-		// (budget checked only between hops) this fetch would succeed
+		// a fully valid response is available, but the origin stalls past the
+		// deadline: DNS is instant so the budget gate passes, and only the
+		// read guard can abort this fetch — with the budget checked only
+		// between hops it would succeed
 		connections.respondWith("HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello");
+		connections.stallBodyBeforeRead(BUDGET_MILLIS * 4);
 
-		assertThatThrownBy(() -> client().get(TARGET, 1024, java.time.Instant.now().minusSeconds(1)))
+		assertThatThrownBy(() -> client().get(TARGET, 1024, java.time.Instant.now().plusMillis(BUDGET_MILLIS)))
 			.isInstanceOf(ImportHttpFetcher.TransportException.class)
 			.extracting(ex -> ((ImportHttpFetcher.TransportException) ex).failure())
 			.isEqualTo(ImportHttpFetcher.TransportFailure.TIMEOUT);
 	}
+
+	// --- Point-of-use DNS must run under the total resolution budget ---
+
+	/**
+	 * The transport resolves DNS itself, so bounding that resolution is the
+	 * client's own responsibility. With the unbounded 1-arg lookup the calling
+	 * thread is held for the resolver's entire stall and the fetch continues
+	 * past the deadline before the read guard notices. The point-of-use lookup
+	 * must instead abandon a stalled resolver as TIMEOUT, well inside the
+	 * budget, and never reach a dial.
+	 */
+	@Test
+	void stalledResolverIsAbortedInsideTheResolutionBudget() {
+		BlockingDns blocking = new BlockingDns();
+		SafeImportHttpClient client = new SafeImportHttpClient(blocking, connections);
+
+		long startedAt = System.nanoTime();
+		assertThatThrownBy(() -> client.get(TARGET, 1024, java.time.Instant.now().plusMillis(BUDGET_MILLIS)))
+			.isInstanceOf(ImportNetworkException.class)
+			.extracting(ex -> ((ImportNetworkException) ex).kind())
+			.isEqualTo(FailureKind.TIMEOUT);
+		long heldMillis = (System.nanoTime() - startedAt) / 1_000_000;
+
+		// an unbounded lookup holds the caller for the whole stall; the budget
+		// must abort far inside it (13x headroom keeps this off the CI knife edge)
+		assertThat(heldMillis).isLessThan(BlockingDns.STALL_MILLIS / 2);
+		assertThat(connections.dialed).isEmpty();
+	}
+
+	/**
+	 * A resolver that stalls well past any resolution budget before answering —
+	 * the black-holing resolver case. The unbounded 1-arg lookup would simply
+	 * block the calling thread for the full stall and then fetch anyway; the
+	 * budgeted overload must abandon it as TIMEOUT before any dial.
+	 */
+	private static final class BlockingDns extends ImportDns {
+
+		private static final long STALL_MILLIS = 3_000;
+
+		BlockingDns() {
+			super(hostname -> {
+				stall();
+				return new InetAddress[] {Fakes.publicV4()};
+			});
+		}
+
+		@Override
+		public ResolvedTarget resolveHost(URI httpUri) {
+			stall();
+			return new ResolvedTarget(httpUri.getHost(), new InetAddress[] {Fakes.publicV4()});
+		}
+
+		private static void stall() {
+			try {
+				Thread.sleep(STALL_MILLIS);
+			}
+			catch (InterruptedException ex) {
+				Thread.currentThread().interrupt();
+			}
+		}
+	}
+
 
 	@Test
 	void connectionRefusedIsTransportFailure() {
@@ -196,6 +262,19 @@ class SafeImportHttpClientTest {
 			}
 			return new ResolvedTarget(host, new InetAddress[] {chosen});
 		}
+
+		/**
+		 * The client resolves DNS itself, so it calls this budgeted overload;
+		 * the fake must answer it or every stubbed fetch would hit the real
+		 * resolver. Same answer semantics as the unbounded overload.
+		 */
+		@Override
+		ResolvedTarget resolveHost(URI httpUri, long timeoutNanos) {
+			if (timeoutNanos <= 0) {
+				throw new ImportNetworkException(FailureKind.TIMEOUT, "dns budget exhausted");
+			}
+			return resolveHost(httpUri);
+		}
 	}
 
 	/** Connection seam recording every dial; serves a canned raw response. */
@@ -204,6 +283,7 @@ class SafeImportHttpClientTest {
 		final List<Recording> dialed = new ArrayList<>();
 		private byte[] cannedResponse = new byte[0];
 		private IOException failure;
+		private long bodyStallMillis;
 
 		void respondWith(String rawResponse) {
 			this.cannedResponse = rawResponse.getBytes(StandardCharsets.ISO_8859_1);
@@ -211,6 +291,11 @@ class SafeImportHttpClientTest {
 
 		void failWith(IOException failure) {
 			this.failure = failure;
+		}
+
+		/** Makes the origin stall past the deadline before any byte is served. */
+		void stallBodyBeforeRead(long millis) {
+			this.bodyStallMillis = millis;
 		}
 
 		@Override
@@ -221,7 +306,7 @@ class SafeImportHttpClientTest {
 			}
 			Recording recording = new Recording(address, port, host, tls, connectTimeout, readTimeout);
 			dialed.add(recording);
-			return new FakeConnection(recording, new ByteArrayInputStream(cannedResponse));
+			return new FakeConnection(recording, new StallingInputStream(cannedResponse, bodyStallMillis));
 		}
 	}
 	private static final class Recording {
@@ -307,6 +392,37 @@ class SafeImportHttpClientTest {
 		@Override
 		public void close() {
 			closed = true;
+		}
+	}
+
+	/**
+	 * Origin body that stalls before serving its first byte, standing in for a
+	 * slow-trickling origin. Only the client's read guard can end such a fetch:
+	 * nothing in the transport ever gives up on the socket itself.
+	 */
+	private static final class StallingInputStream extends InputStream {
+
+		private final InputStream delegate;
+		private final long stallMillis;
+		private boolean stalled;
+
+		StallingInputStream(byte[] cannedResponse, long stallMillis) {
+			this.delegate = new ByteArrayInputStream(cannedResponse);
+			this.stallMillis = stallMillis;
+		}
+
+		@Override
+		public int read() throws IOException {
+			if (!stalled) {
+				stalled = true;
+				try {
+					Thread.sleep(stallMillis);
+				}
+				catch (InterruptedException ex) {
+					Thread.currentThread().interrupt();
+				}
+			}
+			return delegate.read();
 		}
 	}
 }
