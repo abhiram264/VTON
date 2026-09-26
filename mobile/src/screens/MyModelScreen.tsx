@@ -23,6 +23,9 @@ import type { AvatarResource, LocalPhoto } from '../features/my-model/types';
 
 const CAMERA_NOTICE =
   'Camera access is off. Enable it in Settings, or choose a photo instead.';
+
+const NO_PHOTO_NOTICE =
+  'No photo was selected. Photo selection may be unavailable. Try again.';
 const STALE_REVISION_CODE = 'AVATAR_STALE_REVISION';
 const MAX_REFRESH_DELAY_MS = 2_147_483_647;
 
@@ -201,6 +204,7 @@ export default function MyModelScreen({
     try {
       const photo = await source();
       if (!photo) {
+        setNotice(NO_PHOTO_NOTICE);
         return;
       }
       await submit(photo);
