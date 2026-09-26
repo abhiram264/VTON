@@ -52,9 +52,21 @@ public final class ShareImportService {
 		String key = requireKey(rawKey);
 		Parsed parsed = parse(request);
 		ImportCommand command = new ImportCommand(owner, key, parsed.kind, parsed.sourceUrl, parsed.uploadId);
-		Optional<JdbcShareImportStore.CreateResult> replay = store.arbitrateCreate(command);
-		if (replay.isPresent()) {
-			return handleCreateResult(replay.get(), parsed.uploadId, false);
+		Optional<JdbcShareImportStore.CreateResult> arbitration = store.arbitrateCreate(command);
+		if (arbitration.isPresent()) {
+			JdbcShareImportStore.CreateResult decided = arbitration.get();
+			// A fingerprint conflict is a key-reuse verdict and nothing else:
+			// it is decided from the stored request alone, so it must not be
+			// re-labelled by the media state of this request (unchanged).
+			if (decided instanceof JdbcShareImportStore.FingerprintConflict) {
+				throw ShareImportProblem.keyReused();
+			}
+			// A replay still revalidates staging before it resolves: the
+			// earlier successful claim consumed that upload, so the media
+			// is no longer claimable and replaying it would answer forever
+			// (docs/API_CONTRACTS.md:48, F05).
+			requireClaimableUpload(owner, parsed.uploadId);
+			return handleCreateResult(decided, parsed.uploadId, false);
 		}
 		requireClaimableUpload(owner, parsed.uploadId);
 		return handleCreateResult(store.create(command), parsed.uploadId, true);
