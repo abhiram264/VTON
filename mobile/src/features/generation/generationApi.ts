@@ -139,6 +139,14 @@ export function createIdempotencyKey(): string {
 // Canonical status is the only truth. Push notifications may set
 // `hint.current = true` to skip one wait; a lost, late, duplicated, or
 // reordered push never stops polling.
+// A poll is always finite. Without a bound the loop's only exits are an
+// undefined bound or a caller-supplied signal, so a generation that never
+// reaches a terminal status pins the caller's busy lock for the life of the
+// process. Same two values GenerateScreen already passes (deadlineMs and
+// maxAttempts), now applied by default instead of per call site.
+const POLL_DEADLINE_MS = 60_000;
+const POLL_MAX_ATTEMPTS = 15;
+
 export async function pollGeneration(options: {
   get: (id: string) => Promise<GenerationResource>;
   id: string;
@@ -182,12 +190,11 @@ export async function pollGeneration(options: {
       throw new Error('Aborted');
     }
     if (
-      options.deadlineMs !== undefined &&
-      Date.now() - startedAt >= options.deadlineMs
+      (options.deadlineMs ?? POLL_DEADLINE_MS) - (Date.now() - startedAt) <= 0
     ) {
       throw new Error('Generation polling deadline exceeded');
     }
-    if (options.maxAttempts !== undefined && attempts >= options.maxAttempts) {
+    if (attempts >= (options.maxAttempts ?? POLL_MAX_ATTEMPTS)) {
       throw new Error('Generation polling maximum attempts exceeded');
     }
     attempts += 1;
