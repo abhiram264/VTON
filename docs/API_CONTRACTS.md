@@ -42,12 +42,30 @@ remains the PR backlog; its route examples are requirements to specify, not exis
 
 ## Known gaps (not contract changes)
 
-Several mounted contracts cannot complete end-to-end today, and mobile API clients
-default to `baseUrl: ''` at eight mounts (F02). These are backlog defects owned by their
-tickets — upload completion cannot succeed with the default scanner (F15, PR-05), a
-resolved share cannot become a saved item (F04, PR-08/PR-11), import replay is arbitrated
-after staging is required (F05, PR-07), and the item response carries no image read
-capability (F06, PR-06/PR-11).
+Several mounted contracts cannot complete end-to-end today, and eight sites in `mobile/src`
+set `baseUrl: ''` with a null or throwing access token (F02):
+`features/generation/generationApi.ts:126`, `features/generation/productUpload.ts:83`,
+`features/looks/looksApi.ts:68`, `features/my-model/avatarApi.ts:150`,
+`features/studio/studioApi.ts:12`, `features/vault/collectionApi.ts:21`,
+`features/vault/vaultApi.ts:23`, and `screens/share-import/apiConfig.ts:8`, whose
+`getAccessToken` throws `Share import API is not configured` (`:9-10`) instead of
+returning a null token — the one site of the eight that fails closed at the point of use,
+throwing before the URL is ever built. The seven null-token sites omit the `Authorization`
+header (`mobile/src/features/my-model/http.ts:48`) and then send the bare relative path
+that the empty base collapses to (`mobile/src/features/my-model/http.ts:52`), so they read
+as indistinguishable from being offline rather than as an authentication failure.
+These are backlog defects owned by their tickets — upload completion cannot succeed with
+the default scanner, which returns `null` for both the camera and the library picker
+(F15, PR-05; `mobile/src/features/my-model/photoSource.ts:24-30`); a resolved share cannot
+become a saved item, because the share import contract stops at an import id and no mobile
+call turns one into a vault item (F04, PR-08/PR-11;
+`mobile/src/features/vault/vaultFallback.ts:42`,
+`backend/src/main/java/com/aifashionvault/platform/web/SharesController.java:39-72`); import
+replay is arbitrated before the verified-upload requirement is applied (F05, PR-07;
+`backend/src/main/java/com/aifashionvault/platform/web/ShareImportService.java:55-59`); and
+the item response carries no image read capability (F06, PR-06/PR-11;
+`backend/src/main/java/com/aifashionvault/platform/web/VaultItemResponse.java:7-8`,
+`mobile/src/features/vault/vaultApi.ts:5`).
 
 ## Change process
 
