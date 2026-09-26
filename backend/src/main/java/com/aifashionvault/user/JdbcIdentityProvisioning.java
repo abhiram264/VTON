@@ -32,6 +32,7 @@ public final class JdbcIdentityProvisioning implements IdentityProvisioning {
 	private final JdbcTemplate jdbc;
 	private final TransactionTemplate transactions;
 	private final Clock clock;
+	private final List<AccountMediaPurge> mediaPurges;
 
 	public JdbcIdentityProvisioning(DataSource dataSource) {
 		this(dataSource, Clock.systemUTC());
@@ -60,6 +61,7 @@ public final class JdbcIdentityProvisioning implements IdentityProvisioning {
 		}
 		this.jdbc = new JdbcTemplate(dataSource);
 		this.transactions = new TransactionTemplate(new DataSourceTransactionManager(dataSource));
+		this.mediaPurges = mediaPurges;
 		this.clock = clock;
 	}
 
@@ -105,6 +107,9 @@ public final class JdbcIdentityProvisioning implements IdentityProvisioning {
 			return user;
 		}
 		User deleted = UserDeletion.markDeleted(user, deletedAt);
+		for (AccountMediaPurge purge : this.mediaPurges) {
+			purge.purgeForUser(userId);
+		}
 		jdbc.update(
 			"UPDATE users SET deleted_at = ?, updated_at = ? WHERE id = ?",
 			Timestamp.from(deleted.deletedAt()),
