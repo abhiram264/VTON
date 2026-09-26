@@ -96,8 +96,6 @@ async function resolveGeneration(
   delay?: (ms: number) => Promise<void>,
   hint?: { current: boolean },
   signal?: AbortSignal,
-  deadlineMs?: number,
-  maxAttempts?: number,
 ): Promise<CreateLookOutcome> {
   const final = await pollGeneration({
     get: api.get,
@@ -106,8 +104,6 @@ async function resolveGeneration(
     delay,
     hint,
     signal,
-    deadlineMs,
-    maxAttempts,
   });
   if (final.status !== 'COMPLETED' || final.lookId == null) {
     clearActiveGeneration();
@@ -131,8 +127,6 @@ export async function createLook(input: {
   hint?: { current: boolean };
   photo?: LocalPhoto;
   signal?: AbortSignal;
-  deadlineMs?: number;
-  maxAttempts?: number;
 }): Promise<CreateLookOutcome> {
   if (input.signal?.aborted) {
     throw new Error('Aborted');
@@ -147,8 +141,6 @@ export async function createLook(input: {
         input.delay,
         input.hint,
         input.signal,
-        input.deadlineMs,
-        input.maxAttempts,
       );
     } catch (error) {
       if (
@@ -189,8 +181,6 @@ export async function createLook(input: {
       input.delay,
       input.hint,
       input.signal,
-      input.deadlineMs,
-      input.maxAttempts,
     );
   } catch (error) {
     if (
