@@ -125,7 +125,7 @@ class FcmDeliveryTest {
 		Seed seed = seedLookReady();
 		fcm.enqueue(200, null, LOOK_READY_MESSAGE);
 
-		assertThat(worker.processNext(clock.instant())).isTrue();
+		assertThat(processNextOnFrozenClock(worker)).isTrue();
 
 		assertThat(fcm.requests).hasSize(1);
 		CapturedSend send = fcm.requests.getFirst();
@@ -149,7 +149,7 @@ class FcmDeliveryTest {
 		Seed seed = seedGenerationFailed();
 		fcm.enqueue(200, null, FAILED_MESSAGE);
 
-		assertThat(worker.processNext(clock.instant())).isTrue();
+		assertThat(processNextOnFrozenClock(worker)).isTrue();
 
 		CapturedSend send = fcm.requests.getFirst();
 		assertThat(send.data().keySet()).containsExactly("type", "generationId");
@@ -168,8 +168,8 @@ class FcmDeliveryTest {
 		fcm.enqueue(200, null, LOOK_READY_MESSAGE);
 		fcm.enqueue(200, null, LOOK_READY_MESSAGE);
 
-		assertThat(worker.processNext(clock.instant())).isTrue();
-		assertThat(worker.processNext(clock.instant())).isFalse();
+		assertThat(processNextOnFrozenClock(worker)).isTrue();
+		assertThat(processNextOnFrozenClock(worker)).isFalse();
 
 		assertThat(fcm.requests).hasSize(1);
 		Integer rows = jdbc.queryForObject(
@@ -186,24 +186,24 @@ class FcmDeliveryTest {
 		fcm.enqueue(429, "45", "");
 		fcm.enqueue(200, null, LOOK_READY_MESSAGE);
 
-		assertThat(worker.processNext(clock.instant())).isTrue();
+		assertThat(processNextOnFrozenClock(worker)).isTrue();
 		DeviceDelivery waiting = store.findDelivery(seed.eventId(), DEVICE).orElseThrow();
 		assertThat(waiting.status()).isEqualTo(DeviceDelivery.PENDING);
 		assertThat(waiting.nextAttemptAt()).isEqualTo(NOW.plusSeconds(45));
 		assertThat(fcm.requests).hasSize(1);
 
 		clock.set(NOW.plusSeconds(10));
-		assertThat(worker.processNext(clock.instant())).isFalse();
+		assertThat(processNextOnFrozenClock(worker)).isFalse();
 		assertThat(fcm.requests).hasSize(1);
 
 		clock.set(NOW.plusSeconds(45));
-		assertThat(worker.processNext(clock.instant())).isTrue();
+		assertThat(processNextOnFrozenClock(worker)).isTrue();
 		assertThat(fcm.requests).hasSize(2);
 		assertThat(store.findDelivery(seed.eventId(), DEVICE).orElseThrow().acceptedForDelivery()).isTrue();
 
 		Seed second = seedLookReady();
 		fcm.enqueue(429, "2", "");
-		assertThat(worker.processNext(clock.instant())).isTrue();
+		assertThat(processNextOnFrozenClock(worker)).isTrue();
 		assertThat(store.findDelivery(second.eventId(), DEVICE).orElseThrow().nextAttemptAt())
 			.isEqualTo(clock.instant().plusSeconds(10));
 	}
@@ -215,11 +215,11 @@ class FcmDeliveryTest {
 		fcm.enqueue(503, null, "");
 		fcm.enqueue(200, null, LOOK_READY_MESSAGE);
 
-		assertThat(worker.processNext(clock.instant())).isTrue();
+		assertThat(processNextOnFrozenClock(worker)).isTrue();
 		clock.set(store.findDelivery(seed.eventId(), DEVICE).orElseThrow().nextAttemptAt());
-		assertThat(worker.processNext(clock.instant())).isTrue();
+		assertThat(processNextOnFrozenClock(worker)).isTrue();
 		clock.set(store.findDelivery(seed.eventId(), DEVICE).orElseThrow().nextAttemptAt());
-		assertThat(worker.processNext(clock.instant())).isTrue();
+		assertThat(processNextOnFrozenClock(worker)).isTrue();
 
 		assertThat(fcm.requests).hasSize(3);
 		assertThat(store.findDelivery(seed.eventId(), DEVICE).orElseThrow().acceptedForDelivery()).isTrue();
@@ -233,7 +233,7 @@ class FcmDeliveryTest {
 		}
 
 		for (int i = 0; i < 10; i++) {
-			assertThat(worker.processNext(clock.instant())).isTrue();
+			assertThat(processNextOnFrozenClock(worker)).isTrue();
 			DeviceDelivery delivery = store.findDelivery(seed.eventId(), DEVICE).orElseThrow();
 			if (delivery.nextAttemptAt() != null) {
 				clock.set(delivery.nextAttemptAt());
@@ -245,7 +245,7 @@ class FcmDeliveryTest {
 		assertThat(exhausted.status()).isEqualTo(DeviceDelivery.FAILED);
 		assertThat(exhausted.attemptCount()).isEqualTo(10);
 		assertThat(exhausted.terminalResult()).isEqualTo(DeviceDelivery.ATTEMPTS_EXHAUSTED);
-		assertThat(worker.processNext(clock.instant())).isFalse();
+		assertThat(processNextOnFrozenClock(worker)).isFalse();
 		assertThat(fcm.requests).hasSize(10);
 	}
 
@@ -260,7 +260,7 @@ class FcmDeliveryTest {
 			List.of(DEVICE));
 		fcm.enqueue(200, null, LOOK_READY_MESSAGE);
 
-		assertThat(worker.processNext(clock.instant())).isTrue();
+		assertThat(processNextOnFrozenClock(worker)).isTrue();
 
 		assertThat(fcm.requests).isEmpty();
 		assertThat(store.findDelivery(eventId, DEVICE).orElseThrow().terminalResult())
@@ -272,7 +272,7 @@ class FcmDeliveryTest {
 		Seed seed = seedLookReady();
 		fcm.enqueue(200, null, LOOK_READY_MESSAGE);
 
-		assertThat(worker.processNext(clock.instant())).isTrue();
+		assertThat(processNextOnFrozenClock(worker)).isTrue();
 		observations.assertThat().hasSingleObservationThat()
 			.hasNameEqualTo(ObservationFacade.NOTIFICATION_SEND)
 			.hasLowCardinalityKeyValue("outcome", "ACCEPTED")
@@ -298,7 +298,7 @@ class FcmDeliveryTest {
 		seedLookReady();
 		fcm.enqueue(429, "45", "");
 
-		assertThat(worker.processNext(clock.instant())).isTrue();
+		assertThat(processNextOnFrozenClock(worker)).isTrue();
 		observations.assertThat().hasSingleObservationThat()
 			.hasNameEqualTo(ObservationFacade.NOTIFICATION_SEND)
 			.hasLowCardinalityKeyValue("outcome", "RETRY_SCHEDULED")
@@ -316,7 +316,7 @@ class FcmDeliveryTest {
 		seedLookReady();
 		fcm.enqueue(400, null, "");
 
-		assertThat(worker.processNext(clock.instant())).isTrue();
+		assertThat(processNextOnFrozenClock(worker)).isTrue();
 		observations.assertThat().hasSingleObservationThat()
 			.hasNameEqualTo(ObservationFacade.NOTIFICATION_SEND)
 			.hasLowCardinalityKeyValue("outcome", "PERMANENT_FAILURE")
@@ -337,7 +337,7 @@ class FcmDeliveryTest {
 		}
 
 		for (int i = 0; i < 10; i++) {
-			assertThat(worker.processNext(clock.instant())).isTrue();
+			assertThat(processNextOnFrozenClock(worker)).isTrue();
 			if (i < 9) {
 				clock.set(store.findDelivery(seed.eventId(), DEVICE).orElseThrow().nextAttemptAt());
 			}
@@ -375,7 +375,7 @@ class FcmDeliveryTest {
 			List.of(DEVICE));
 		fcm.enqueue(200, null, LOOK_READY_MESSAGE);
 
-		assertThat(worker.processNext(clock.instant())).isTrue();
+		assertThat(processNextOnFrozenClock(worker)).isTrue();
 
 		assertThat(fcm.requests).isEmpty();
 		observations.assertThat().doesNotHaveAnyObservation();
@@ -392,7 +392,7 @@ class FcmDeliveryTest {
 			seed.eventId());
 		fcm.enqueue(200, null, LOOK_READY_MESSAGE);
 
-		assertThat(worker.processNext(clock.instant())).isTrue();
+		assertThat(processNextOnFrozenClock(worker)).isTrue();
 
 		assertThat(fcm.requests).isEmpty();
 		observations.assertThat().doesNotHaveAnyObservation();
@@ -406,7 +406,7 @@ class FcmDeliveryTest {
 		Seed seed = seedLookReady();
 		FcmDeliveryWorker brokenToken = workerWithBlankAccessToken();
 
-		assertThatThrownBy(() -> brokenToken.processNext(clock.instant()))
+		assertThatThrownBy(() -> processNextOnFrozenClock(brokenToken))
 			.isInstanceOf(IllegalStateException.class)
 			.hasMessage("access token is required");
 
@@ -423,7 +423,7 @@ class FcmDeliveryTest {
 		fcm.enqueue(200, null, LOOK_READY_MESSAGE);
 		FcmDeliveryWorker instrumented = workerWith(FailingHandlers.onStart());
 
-		assertThat(instrumented.processNext(clock.instant())).isTrue();
+		assertThat(processNextOnFrozenClock(instrumented)).isTrue();
 
 		assertThat(fcm.requests).hasSize(1);
 		assertAcceptedExactlyOnce(seed);
@@ -435,7 +435,7 @@ class FcmDeliveryTest {
 		AtomicInteger errorCallbacks = new AtomicInteger();
 		FcmDeliveryWorker instrumented = workerWith(FailingHandlers.onError(errorCallbacks), blankTokenClient());
 
-		assertThatThrownBy(() -> instrumented.processNext(clock.instant()))
+		assertThatThrownBy(() -> processNextOnFrozenClock(instrumented))
 			.isInstanceOf(IllegalStateException.class)
 			.hasMessage("access token is required");
 
@@ -452,7 +452,7 @@ class FcmDeliveryTest {
 		fcm.enqueue(200, null, LOOK_READY_MESSAGE);
 		FcmDeliveryWorker instrumented = workerWith(FailingHandlers.onStop());
 
-		assertThat(instrumented.processNext(clock.instant())).isTrue();
+		assertThat(processNextOnFrozenClock(instrumented)).isTrue();
 
 		assertThat(fcm.requests).hasSize(1);
 		assertAcceptedExactlyOnce(seed);
@@ -464,7 +464,7 @@ class FcmDeliveryTest {
 		fcm.enqueue(429, "45", "");
 		FcmDeliveryWorker instrumented = workerWith(FailingHandlers.onStop());
 
-		assertThat(instrumented.processNext(clock.instant())).isTrue();
+		assertThat(processNextOnFrozenClock(instrumented)).isTrue();
 
 		assertThat(fcm.requests).hasSize(1);
 		DeviceDelivery waiting = store.findDelivery(seed.eventId(), DEVICE).orElseThrow();
@@ -479,7 +479,7 @@ class FcmDeliveryTest {
 		fcm.enqueue(400, null, "");
 		FcmDeliveryWorker instrumented = workerWith(FailingHandlers.onStop());
 
-		assertThat(instrumented.processNext(clock.instant())).isTrue();
+		assertThat(processNextOnFrozenClock(instrumented)).isTrue();
 
 		assertThat(fcm.requests).hasSize(1);
 		DeviceDelivery terminal = store.findDelivery(seed.eventId(), DEVICE).orElseThrow();
@@ -555,6 +555,18 @@ class FcmDeliveryTest {
 
 	private FcmDeliveryWorker newWorker() {
 		return new FcmDeliveryWorker(store, newClient(() -> ACCESS_TOKEN), config, zeroJitter(), meters, observations);
+	}
+
+	/**
+	 * Delivers one due notification with the frozen {@link #clock} governing both the
+	 * claim instant and the completion instant, via the package-private clock seam.
+	 * The production scheduler uses the same seam with a single consistent clock
+	 * ({@code NotificationConfiguration}); calling the public one-arg overload instead
+	 * would stamp the completion with the real wall clock, which is far past the seeded
+	 * TTL and would make every send a DEADLINE_EXCEEDED.
+	 */
+	private boolean processNextOnFrozenClock(FcmDeliveryWorker target) {
+		return target.processNext(clock.instant(), clock.instant());
 	}
 
 	private Seed seedLookReady() {
@@ -696,7 +708,7 @@ class FcmDeliveryTest {
 				}
 
 				@Override
-				public void onEvent(Observation.Event event, Observation.Context context) {
+				public void onError(Observation.Context context) {
 					if (stage == FailingStage.ON_ERROR) {
 						if (callbacks != null) {
 							callbacks.incrementAndGet();
