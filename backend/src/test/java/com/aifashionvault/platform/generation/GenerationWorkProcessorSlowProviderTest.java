@@ -27,6 +27,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BooleanSupplier;
 import java.util.regex.Pattern;
 
@@ -201,13 +202,19 @@ class GenerationWorkProcessorSlowProviderTest {
 	}
 
 	/**
-	 * A provider call that stays in flight across several real visibility
-	 * windows (~170s of InferHub latency, compressed to milliseconds) must see
-	 * its lease visibility extended, must not be reaped mid-flight, and must
-	 * dispatch exactly once and complete when the call finally returns.
+	 * A provider call that stays in flight LONGER THAN ONE VISIBILITY WINDOW must be kept
+	 * visible by the RECURRING heartbeat, not merely by the one-shot pre-extension at
+	 * process(). The block deliberately outlasts {@code VISIBILITY_EXTENSION} so that a
+	 * missing or mis-sized heartbeat lets the modeled deadline lapse — which the fake queue
+	 * observes as a re-delivery — while the correct heartbeat keeps pushing the deadline
+	 * ahead (beats at t=45/90/135, each an absolute window of t_beat+90s).
+	 *
+	 * <p>Mutation power: commenting out the {@code heartbeat.scheduleAtFixedRate} block
+	 * leaves only the t=0 extension, the deadline lapses, and this test fails on both
+	 * {@code extensions()} and {@code lapses()}.
 	 */
 	@Test
-	void slowProviderCallStaysExtendedDispatchesOnceAndCompletes() throws Exception {
+	void slowProviderCallSurvivesMoreThanOneVisibilityWindowWithoutRedelivery() throws Exception {
 		CountDownLatch releaseProvider = new CountDownLatch(1);
 		provider.beforeSubmit(() -> {
 			try {
@@ -219,16 +226,27 @@ class GenerationWorkProcessorSlowProviderTest {
 		});
 		generationStore.insertJob(queuedJob());
 
+		// Outlast one full extension window so only the recurring heartbeat can cover the call.
+		long blockMillis = GenerationWorkProcessor.VISIBILITY_EXTENSION.toMillis() + 15_000L;
+
 		ExecutorService pool = Executors.newSingleThreadExecutor();
 		try {
 			Future<?> work = pool.submit(() -> processor.process(lease));
 
 			awaitTrue(() -> provider.submitCount() == 1);
 
-			// In flight: visibility was extended so the message cannot become
-			// visible again mid-call, nothing reaped the lease, nothing
-			// completed the job.
-			assertThat(queue.extensions()).isGreaterThanOrEqualTo(1);
+			long until = System.currentTimeMillis() + blockMillis;
+			while (System.currentTimeMillis() < until) {
+				queue.observeLapse();
+				Thread.sleep(25L);
+			}
+			queue.observeLapse();
+
+			// The recurring heartbeat ran (one-shot + at least one beat) and the modeled
+			// visibility never lapsed: no re-delivery while the call was in flight.
+			assertThat(queue.extensions()).as("one-shot extension plus recurring heartbeat beats")
+				.isGreaterThanOrEqualTo(2);
+			assertThat(queue.lapses()).as("visibility deadline must never lapse mid-call").isZero();
 			assertThat(queue.deleted()).isEmpty();
 			assertThat(generationStore.findJob(JOB_ID).orElseThrow().completedAt()).isNull();
 
@@ -1348,6 +1366,14 @@ class GenerationWorkProcessorSlowProviderTest {
 		}
 	}
 
+	/**
+	 * Models SQS visibility as an ABSOLUTE deadline: {@code extendVisibility} pushes the
+	 * deadline to now+extension (changeMessageVisibility is absolute, not additive), and a
+	 * lapse is recorded whenever the deadline passes while the lease is still held. That is
+	 * what makes the recurring heartbeat load-bearing: with only the one-shot pre-extension
+	 * the deadline lapses mid-call, so a missing heartbeat turns into an observed lapse
+	 * (a re-delivery in SQS terms) rather than a silently green test.
+	 */
 	private static final class InMemoryQueue implements GenerationWorkQueue {
 		private final List<GenerationWorkLease> deleted = new CopyOnWriteArrayList<>();
 		private final List<String> operations;
@@ -1356,6 +1382,26 @@ class GenerationWorkProcessorSlowProviderTest {
 			this.operations = operations;
 		}
 		private boolean throwOnExtend;
+
+		private final AtomicLong deadlineNanos = new AtomicLong();
+		private final AtomicInteger lapses = new AtomicInteger();
+
+		/** True while the modeled message would be visible again (a re-delivery). */
+		private boolean lapsed() {
+			long deadline = deadlineNanos.get();
+			return deadline != 0 && System.nanoTime() > deadline;
+		}
+
+		/** Samples the modeled deadline once; call repeatedly while a call is in flight. */
+		private void observeLapse() {
+			if (lapsed()) {
+				lapses.incrementAndGet();
+			}
+		}
+
+		private int lapses() {
+			return lapses.get();
+		}
 
 		@Override
 		public void send(UUID generationJobId) {
@@ -1369,6 +1415,7 @@ class GenerationWorkProcessorSlowProviderTest {
 		@Override
 		public void extendVisibility(GenerationWorkLease lease, Duration extension) {
 			extensions.incrementAndGet();
+			deadlineNanos.set(System.nanoTime() + extension.toNanos());
 			if (throwOnExtend) {
 				throw new RuntimeException("visibility extension failed");
 			}

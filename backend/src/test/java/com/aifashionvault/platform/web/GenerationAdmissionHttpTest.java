@@ -139,10 +139,11 @@ class GenerationAdmissionHttpTest {
 		assertThat(problem.code()).isEqualTo(GenerationCreationService.CREATE_OUTCOME_UNKNOWN);
 		assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM generation_job WHERE client_request_id = ?", Integer.class,
 			"commit-delegate-throw")).isEqualTo(1);
-		// The single-item create path (JdbcGenerationStore.createSingleItem) writes job/outbox only; it
-		// never inserts generation_quota_reservation, so the durable quota row is 0 even though the
-		// commit outcome is unknown. The durable admission record is generation_admission_reservation,
-		// asserted on the next line.
+		// PINNED ABSENCE, NOT ENFORCEMENT: the single-item create path
+		// (JdbcGenerationStore.createSingleItem) writes job/outbox only and never inserts
+		// generation_quota_reservation, so the quota row is 0 here by construction even
+		// though the commit outcome is unknown. The durable admission record that actually
+		// binds is generation_admission_reservation, asserted on the next line.
 		assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM generation_quota_reservation WHERE released_at IS NULL", Integer.class)).isZero();
 		assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM generation_admission_reservation WHERE committed_at IS NOT NULL AND released_at IS NULL", Integer.class)).isEqualTo(3);
 		assertThat(jdbc.queryForList("SELECT count FROM generation_admission_counter", Long.class))
@@ -207,7 +208,7 @@ class GenerationAdmissionHttpTest {
 	}
 
 	@Test
-	void invalidUploadsDoNotConsumeQuotaAndAcceptedCreationCommitsAdmission() throws Exception {
+	void invalidUploadsConsumeNoQuotaAndAcceptedCreationCommitsAdmissionWithoutQuota() throws Exception {
 		Owner owner = seedOwner(true);
 		for (int attempt = 0; attempt < 6; attempt++) {
 			mockMvc.perform(post("/generations").header(HttpHeaders.AUTHORIZATION, bearer(owner.token()))
@@ -230,10 +231,15 @@ class GenerationAdmissionHttpTest {
 			.andExpect(status().isAccepted());
 		assertThat(jdbc.queryForList("SELECT count FROM generation_admission_counter WHERE count <> 0", Long.class))
 			.containsExactlyInAnyOrder(1L, 1L, 1L);
-		// An accepted single-item create consumes NO quota reservation: the table is only written by
-		// createAccepted (the LooksController path). OPEN PRODUCT QUESTION: createSingleItem performs no
-		// rolling-24h check, so JdbcGenerationStore's ROLLING_LIMIT does not gate this path at all; a
-		// per-user rolling quota for single-item generations remains unresolved product scope.
+		// PINNED ABSENCE, NOT ENFORCEMENT: an accepted single-item create consumes NO quota
+		// reservation, because createSingleItem writes job/outbox only and the sole writer of
+		// generation_quota_reservation is createAccepted (the LooksController path). This
+		// assertion therefore cannot fail on this endpoint by construction; what it pins is
+		// that no quota row is fabricated here. The binding admission evidence is the
+		// generation_admission_reservation row asserted below. OPEN PRODUCT QUESTION:
+		// createSingleItem performs no rolling-24h check, so JdbcGenerationStore's
+		// ROLLING_LIMIT does not gate this path at all; whether single-item generations
+		// should carry a rolling per-user quota remains unresolved product scope.
 		assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM generation_quota_reservation", Integer.class)).isZero();
 		assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM generation_admission_reservation WHERE committed_at IS NOT NULL AND released_at IS NULL", Integer.class)).isEqualTo(3);
 		assertThat(controlledMediaStore().preflightCalls).isEqualTo(7);
