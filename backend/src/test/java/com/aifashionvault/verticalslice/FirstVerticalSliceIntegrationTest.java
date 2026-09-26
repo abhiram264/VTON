@@ -239,11 +239,10 @@ class FirstVerticalSliceIntegrationTest {
 	static class Fakes {
 		@Bean @Primary ExternalTokenVerifier verifier() { return InProcessJwtFixture.verifier(); }
 		@Bean @Primary ObjectStore objects() { return mock(ObjectStore.class); }
-		@Bean @Primary GenerationMediaStore generationMediaStore() {
+		@Bean GenerationMediaStore stubGenerationMediaStore() {
 			GenerationMediaStore mediaStore = mock(GenerationMediaStore.class);
 			when(mediaStore.claimProductInput(any())).thenReturn(new ClaimResult.Copied());
 			return mediaStore;
 		}
-		@Bean JdbcLookStore jdbcLookStore(DataSource dataSource) { return new JdbcLookStore(dataSource); }
 	}
 }

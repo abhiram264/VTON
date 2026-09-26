@@ -275,7 +275,7 @@ class GenerationAdmissionHttpTest {
     @TestConfiguration
     static class Configuration {
         @Bean @Primary ExternalTokenVerifier verifier() { return InProcessJwtFixture.verifier(); }
-		@Bean @Primary GenerationMediaStore generationMediaStore() { return new ControlledGenerationMediaStore(); }
+		@Bean GenerationMediaStore stubGenerationMediaStore() { return new ControlledGenerationMediaStore(); }
 	}
 
 	static final class ControlledGenerationMediaStore implements GenerationMediaStore {

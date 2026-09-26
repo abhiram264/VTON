@@ -406,6 +406,7 @@ class UploadsApiTest {
 		}
 
 		@Bean
+		@Primary
 		FakeUploadStore fakeUploadStore() {
 			return new FakeUploadStore();
 		}
