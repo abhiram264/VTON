@@ -872,6 +872,10 @@ class ShareImportHttpTest {
 			ImportMediaAccess.VerifiedImage upload,
 			StorageKey destination
 		) {
+			// A successful claim copies staging into the owner's Vault, so the
+			// destination is an existing object — recorded the same way the
+			// URL-fetch path records its publish.
+			published.add(destination);
 			return ImportMediaAccess.ClaimOutcome.CLAIMED;
 		}
 
@@ -936,11 +940,20 @@ class ShareImportHttpTest {
 
 		@Override
 		public ResolutionResult resolve(SourceReference source) {
-			if (media.findVerifiedUpload(null, source.verifiedUploadId()).isEmpty()) {
+			ImportMediaAccess.VerifiedImage verified = media.findVerifiedUpload(null, source.verifiedUploadId())
+				.orElse(null);
+			if (verified == null) {
 				return unsupported();
 			}
-			return new ResolutionResult(ResolutionStatus.RESOLVED,
-				new StorageKey("imports/fake/" + UUID.randomUUID()), source.url(), null, null, null);
+			// Mirror SharedImageResolver: the claim is the step that creates the
+			// owner's Vault object (ObjectStoreImportMediaAccess#claimVerifiedUpload).
+			// Fabricating a storage key without claiming made a created object
+			// unobservable, so the recovery path's publish assertion was unrepresentable.
+			StorageKey destination = new StorageKey("imports/fake/" + UUID.randomUUID());
+			if (media.claimVerifiedUpload(null, verified, destination) != ImportMediaAccess.ClaimOutcome.CLAIMED) {
+				return unsupported();
+			}
+			return new ResolutionResult(ResolutionStatus.RESOLVED, destination, source.url(), null, null, null);
 		}
 	}
 
