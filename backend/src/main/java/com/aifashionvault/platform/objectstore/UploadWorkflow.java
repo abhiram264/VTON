@@ -14,16 +14,25 @@ public final class UploadWorkflow {
 	private final MalwareScanner malwareScanner;
 	private final Supplier<UUID> uploadIds;
 
-	public UploadWorkflow(ObjectStore store, ImageInspector inspector) {
-		this(store, inspector, (bytes, type) -> new MalwareScanResult(MalwareVerdict.CLEAN, "clean"));
+	/**
+	 * Test-only factory. The permissive scanner it installs must never be reachable from a
+	 * production call site, so it is confined to this explicitly named entry point instead of
+	 * a public constructor. Production wiring must pass a real {@link MalwareScanner}.
+	 */
+	public static UploadWorkflow forTesting(ObjectStore store, ImageInspector inspector) {
+		return forTesting(store, inspector, UUID::randomUUID);
+	}
+
+	public static UploadWorkflow forTesting(ObjectStore store, ImageInspector inspector, Supplier<UUID> uploadIds) {
+		return new UploadWorkflow(store, inspector, alwaysClean(), uploadIds);
+	}
+
+	private static MalwareScanner alwaysClean() {
+		return (bytes, type) -> new MalwareScanResult(MalwareVerdict.CLEAN, "clean");
 	}
 
 	public UploadWorkflow(ObjectStore store, ImageInspector inspector, MalwareScanner malwareScanner) {
 		this(store, inspector, malwareScanner, UUID::randomUUID);
-	}
-
-	public UploadWorkflow(ObjectStore store, ImageInspector inspector, Supplier<UUID> uploadIds) {
-		this(store, inspector, (bytes, type) -> new MalwareScanResult(MalwareVerdict.CLEAN, "clean"), uploadIds);
 	}
 
 	public UploadWorkflow(
