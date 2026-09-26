@@ -8,6 +8,7 @@ import {
 import {productContentType} from '../generation/productUpload';
 import {releaseStagedImage} from './shareHandoff';
 import type {AvatarApiConfig} from '../my-model/types';
+import { productionApiConfig } from '../../config/apiConfig';
 import type {
   ShareImportRequest,
   ShareImportResolver,
@@ -150,7 +151,7 @@ async function readStagedImage(
 }
 
 export function createShareImportResolver(
-  config: AvatarApiConfig,
+  config: AvatarApiConfig = productionApiConfig,
   deps: ShareImportClientDeps = {},
 ): ShareImportResolver {
   const release =

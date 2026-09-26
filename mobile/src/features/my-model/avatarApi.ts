@@ -5,6 +5,7 @@ import type {
   LocalPhoto,
 } from './types';
 import { apiRequest, rejectDataUri, requireOk, uploadMedia } from './http';
+import { productionApiConfig } from '../../config/apiConfig';
 
 function matchHeader(revision: number): string {
   return `"${revision}"`;
@@ -146,7 +147,4 @@ export function createAvatarApi(config: AvatarApiConfig): AvatarApi {
   };
 }
 
-export const avatarApi = createAvatarApi({
-  baseUrl: '',
-  getAccessToken: () => null,
-});
+export const avatarApi = createAvatarApi(productionApiConfig);
