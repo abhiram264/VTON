@@ -142,10 +142,12 @@ export function createIdempotencyKey(): string {
 // A poll is always finite. Without a bound the loop's only exits are an
 // undefined bound or a caller-supplied signal, so a generation that never
 // reaches a terminal status pins the caller's busy lock for the life of the
-// process. Same two values GenerateScreen already passes (deadlineMs and
-// maxAttempts), now applied by default instead of per call site.
-const POLL_DEADLINE_MS = 60_000;
-const POLL_MAX_ATTEMPTS = 15;
+// process. Default bound applies to every production call site; the
+// InferHub adapter's read timeout is >=300s per generation, so the client
+// bound must be at least that or long generations fail client-side while
+// succeeding server-side. 150 attempts = 300s at the 2000ms interval.
+export const POLL_DEADLINE_MS = 300_000;
+export const POLL_MAX_ATTEMPTS = 150;
 
 export async function pollGeneration(options: {
   get: (id: string) => Promise<GenerationResource>;

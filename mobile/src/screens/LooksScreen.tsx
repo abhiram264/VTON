@@ -88,8 +88,6 @@ export default function LooksScreen({ onModify, onOpenLook, onProfile, pollDelay
         get: generationApi.get,
         id: generationId,
         delay: pollDelay,
-        deadlineMs: 60_000,
-        maxAttempts: 15,
         onUpdate: generation => rememberGeneration(sourceLookId, generation),
       });
       acceptedGenerations.current.delete(sourceLookId);

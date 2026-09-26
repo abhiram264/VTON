@@ -146,8 +146,6 @@ export default function GenerateScreen({
           api,
           photo: retryPhoto,
           signal: controller.signal,
-          deadlineMs: 60_000,
-          maxAttempts: 15,
           onUpdate: generation => {
             if (isCurrent()) setPhase(generation.phase);
           },
