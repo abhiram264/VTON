@@ -229,7 +229,7 @@ export default function ShareImportScreen({
           !rebound &&
           next.view === 'READY'
         ) {
-          setNotice('Item confirmed. Add it to your Vault from there.');
+          setNotice('Item is ready. Saving it to your Vault is not available yet.')
         }
       }
     } catch (error) {
@@ -340,7 +340,7 @@ export default function ShareImportScreen({
           <View accessible accessibilityLiveRegion="polite">
             <Text accessibilityRole="header" style={styles.title}>Shared item ready</Text>
             <Text style={styles.body}>
-              Confirm this item to keep it for your Vault.
+              Check this item again, or wait for Vault saving to become available.
             </Text>
           </View>
           <View style={styles.actions}>
