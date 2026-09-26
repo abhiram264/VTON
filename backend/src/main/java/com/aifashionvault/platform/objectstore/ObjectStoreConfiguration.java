@@ -35,6 +35,8 @@ public class ObjectStoreConfiguration {
 
 	private static final Logger log = LoggerFactory.getLogger(ObjectStoreConfiguration.class);
 
+	static final String NO_SCANNING_ENGINE_REASON = "no malware scanning engine configured; upload cannot be inspected";
+
 	@Bean(destroyMethod = "close")
 	S3Client s3Client(VaultEnvironmentProperties properties) {
 		return createS3Client(wiring(properties));
@@ -66,7 +68,10 @@ public class ObjectStoreConfiguration {
 	}
 	@Bean
 	MalwareScanner malwareScanner() {
-		return (bytes, contentType) -> new MalwareScanResult(MalwareVerdict.UNAVAILABLE, "scanner unavailable");
+		return (bytes, contentType) -> {
+			log.warn("malware scan unavailable: {}", NO_SCANNING_ENGINE_REASON);
+			return new MalwareScanResult(MalwareVerdict.UNAVAILABLE, NO_SCANNING_ENGINE_REASON);
+		};
 	}
 
 
