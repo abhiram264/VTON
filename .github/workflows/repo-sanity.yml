@@ -166,6 +166,30 @@ jobs:
               docker compose -f compose.yaml config >/dev/null
           fi
 
+      # F02/F15 gate. The backend (backend-init.yml) and mobile (mobile-init.yml)
+      # suites are already PR-gated, but every suite passes while a client is
+      # mounted with no API base URL / no token, or while the production malware
+      # scanner is hardcoded to answer UNAVAILABLE. These are greps over the
+      # product source: no credential, no service, no network.
+      - name: Runtime config is not stubbed (F02/F15)
+        shell: bash
+        run: |
+          set -euo pipefail
+          die() { echo "repo-sanity: $*" >&2; exit 1; }
+
+          mobile_scope=(-- 'mobile/src/*.ts' 'mobile/src/*.tsx'
+                        ':(exclude)**/*.test.ts' ':(exclude)**/*.test.tsx')
+
+          if git grep -nE "baseUrl: *['\"]['\"]" -- "${mobile_scope[@]}"; then
+            die "F02: a mobile client is mounted with an empty API baseUrl; it must read a real base URL at runtime"
+          fi
+          if git grep -nE "getAccessToken: *\(\) *=?> *null" -- "${mobile_scope[@]}"; then
+            die "F02: a mobile client is mounted with a null access token; an absent token must be a visible refusal, not a null default"
+          fi
+          if git grep -nE "new MalwareScanResult\(MalwareVerdict\.UNAVAILABLE" -- backend/src/main/java; then
+            die "F15: the production malware scanner is hardcoded to answer UNAVAILABLE; wire a real scanner or fail the upload closed"
+          fi
+
       - name: Local-dev init test
         shell: bash
         run: |
