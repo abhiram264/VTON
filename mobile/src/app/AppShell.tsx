@@ -9,6 +9,11 @@ import RootNavigator, {
   type RootStackParamList,
 } from '../navigation/RootNavigator';
 import { startShareLinkHandling } from '../features/share/linkHandler';
+import { initializeFirebase } from '../config/firebase';
+
+// Module scope is total and never throws; the surface module memoizes, so no
+// provider/effect is needed and the auth surface resolves before navigation.
+initializeFirebase();
 
 const initialMetrics = {
   frame: { x: 0, y: 0, width: 0, height: 0 },
@@ -38,7 +43,7 @@ export default function AppShell() {
     if (pendingDeepLinks.length === 0) return;
     let cancelled = false;
     let attempts = 0;
-    let timer: number | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const drain = () => {
       if (cancelled) return;
       if (!navigationRef.isReady()) {
