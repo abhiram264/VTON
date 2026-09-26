@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Image, Pressable, Share, StyleSheet, Text, View } from 'react-native';
+import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { looksApi } from '../features/looks/looksApi';
 import { generationApi, pollGeneration } from '../features/generation/generationApi';
@@ -88,6 +88,8 @@ export default function LooksScreen({ onModify, onOpenLook, onProfile, pollDelay
         get: generationApi.get,
         id: generationId,
         delay: pollDelay,
+        deadlineMs: 60_000,
+        maxAttempts: 15,
         onUpdate: generation => rememberGeneration(sourceLookId, generation),
       });
       acceptedGenerations.current.delete(sourceLookId);
@@ -100,22 +102,6 @@ export default function LooksScreen({ onModify, onOpenLook, onProfile, pollDelay
       }
     } catch {
       if (isCurrent()) setActionError(acceptedGenerations.current.has(sourceLookId) ? 'Could not check the accepted generation. Tap Resume regeneration to retry without starting another one.' : 'Could not start regeneration. Check the connection before trying again.');
-    } finally {
-      operationLocked.current = false;
-      if (mounted.current) setBusy(false);
-    }
-  }
-
-  async function share() {
-    const lookId = selected;
-    if (!lookId || operationLocked.current) return;
-    operationLocked.current = true;
-    setBusy(true);
-    setActionError(null);
-    try {
-      await Share.share({ message: await looksApi.share(lookId) });
-    } catch {
-      if (screenActive.current && selectedRef.current === lookId) setActionError('Could not share this Look.');
     } finally {
       operationLocked.current = false;
       if (mounted.current) setBusy(false);
@@ -136,8 +122,7 @@ export default function LooksScreen({ onModify, onOpenLook, onProfile, pollDelay
     {recentGeneration ? <View accessibilityLiveRegion="polite"><Text accessibilityLabel={`Generation ${recentGeneration.generation.id}, ${recentGeneration.generation.status}${recentGeneration.generation.failureCode ? `, ${recentGeneration.generation.failureCode}` : ''}`}>Generation {recentGeneration.generation.id}: {recentGeneration.generation.status}{recentGeneration.generation.failureCode ? ` (${recentGeneration.generation.failureCode})` : ''}</Text>{recentGeneration.generation.lookId ? <Action label="Open generated Look" onPress={() => onOpenLook(recentGeneration.generation.lookId!)} /> : null}</View> : <Text>No recent generations yet.</Text>}
     <Action label={resumeSelected ? 'Resume regeneration' : 'Regenerate'} onPress={regenerate} disabled={disabled} busy={busy} />
     <Action label="Modify" onPress={() => selected && onModify(selected)} disabled={disabled} />
-    <Action label="Share" onPress={share} disabled={disabled} busy={busy} />
-    {!selected ? <Text>Select a Look to regenerate, modify, or share it.</Text> : null}
+    {!selected ? <Text>Select a Look to regenerate or modify it.</Text> : null}
   </View>;
 }
 

@@ -57,9 +57,12 @@ test('each workspace exposes its required accessible surface', async () => {
   await screen.findByRole('header', { name: 'Looks' });
   expect(await screen.findByText('No saved Looks yet.')).toBeTruthy();
   expect(screen.getByText('No recent generations yet.')).toBeTruthy();
-  for (const action of ['Regenerate', 'Modify', 'Share']) {
+  for (const action of ['Regenerate', 'Modify']) {
     expect(screen.getByRole('button', { name: action })).toBeDisabled();
   }
+  // The share affordance was removed: sharing minted a bearer-free presigned
+  // read URL for the user's private Look image, so no such control may exist.
+  expect(screen.queryByRole('button', { name: 'Share' })).toBeNull();
 });
 
 test('profile and settings is a stack destination that preserves the tab', async () => {

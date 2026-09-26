@@ -1,11 +1,18 @@
-import { render, screen } from '@testing-library/react-native';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import LooksScreen from '../src/screens/LooksScreen';
 import { looksApi } from '../src/features/looks/looksApi';
-import type { LookResource } from '../src/features/generation/types';
-
+import type { GenerationResource, LookResource } from '../src/features/generation/types';
+import { generationApi } from '../src/features/generation/generationApi';
+import { Share } from 'react-native';
 jest.mock('../src/features/looks/looksApi', () => ({
   looksApi: { list: jest.fn(), regenerate: jest.fn(), share: jest.fn() },
+}));
+// `pollGeneration` stays real so the bound under test is the real one; only the
+// network client is faked, and it is faked per test by clearAllMocks.
+jest.mock('../src/features/generation/generationApi', () => ({
+  generationApi: { get: jest.fn() },
+  pollGeneration: jest.requireActual('../src/features/generation/generationApi').pollGeneration,
 }));
 
 const noop = () => undefined;
@@ -30,7 +37,19 @@ const secondLook: LookResource = {
   },
 };
 
+const queuedGeneration: GenerationResource = {
+  id: 'g-1',
+  status: 'GENERATING',
+  phase: 'GENERATING',
+  statusVersion: 1,
+  createdAt: '2026-08-30T10:00:00Z',
+  updatedAt: '2026-08-30T10:00:00Z',
+};
+
 beforeEach(() => jest.clearAllMocks());
+// Unmount between tests: a screen left mounted keeps the focus effect active and
+// blurs the next test's screen, which is a harness artefact, not a product bug.
+afterEach(cleanup);
 
 async function renderLooksScreen() {
   await render(
@@ -64,4 +83,80 @@ test('shows an honest empty state when no Looks are saved', async () => {
 
   expect(await screen.findByText('No saved Looks yet.')).toBeTruthy();
   expect(screen.queryAllByRole('image')).toHaveLength(0);
+});
+
+test('no Look share URL is ever produced or handed to the OS share sheet', async () => {
+  jest.mocked(looksApi.list).mockResolvedValue([firstLook, secondLook]);
+  await renderLooksScreen();
+
+  // The affordance itself is gone: no control a user could press to share.
+  expect(screen.queryByRole('button', { name: 'Share' })).toBeNull();
+  expect(screen.queryByText(/share it/i)).toBeNull();
+
+  // And the capability is unreachable, not merely hidden: acting on a selected
+  // Look must never issue the share-link request that mints the presigned URL,
+  // and must never hand anything to the OS share sheet. Regeneration and
+  // modification are the user's real actions on a selected Look.
+  jest.mocked(looksApi.regenerate).mockResolvedValue(queuedGeneration);
+  jest.mocked(generationApi.get).mockResolvedValue(queuedGeneration);
+  const shareSpy = jest.spyOn(Share, 'share');
+
+  await fireEvent.press(await screen.findByRole('button', { name: `Look ${firstLook.id}` }));
+  await screen.findByRole('button', { name: 'Regenerate' });
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name: 'Modify' }).props.accessibilityState.disabled).toBe(
+      false,
+    ),
+  );
+  await fireEvent.press(screen.getByRole('button', { name: 'Modify' }));
+  await fireEvent.press(screen.getByRole('button', { name: 'Regenerate' }));
+  await waitFor(() => expect(looksApi.regenerate).toHaveBeenCalled());
+
+  // No share URL is minted, and nothing reaches the share sheet.
+  expect(jest.mocked(looksApi.share)).not.toHaveBeenCalled();
+  expect(shareSpy).not.toHaveBeenCalled();
+  shareSpy.mockRestore();
+});
+
+test('a poll that never settles is bounded, releases the busy lock, and shows an honest failure', async () => {
+  jest.mocked(looksApi.list).mockResolvedValue([firstLook]);
+  await renderLooksScreen();
+
+  jest.mocked(looksApi.regenerate).mockResolvedValue(queuedGeneration);
+  // Never terminal: the generation is still GENERATING on every single poll.
+  jest.mocked(generationApi.get).mockResolvedValue(queuedGeneration);
+
+  await fireEvent.press(await screen.findByRole('button', { name: `Look ${firstLook.id}` }));
+  await screen.findByRole('button', { name: 'Regenerate' });
+  await waitFor(() =>
+    expect(
+      screen.getByRole('button', { name: 'Regenerate' }).props.accessibilityState.disabled,
+    ).toBe(false),
+  );
+  await fireEvent.press(screen.getByRole('button', { name: 'Regenerate' }));
+
+  // (a) the call TERMINATES instead of looping forever. The poll is bounded, so
+  // a generation that never settles is given up on rather than polled endlessly.
+  await waitFor(() =>
+    expect(
+      screen.getByRole('button', { name: 'Resume regeneration' }).props.accessibilityState.disabled,
+    ).toBe(false),
+  );
+
+  // (c) and the failure is VISIBLE and HONEST: the accepted generation is kept
+  // for a resume, and the user is told the check failed rather than shown a
+  // fabricated success.
+  expect(
+    await screen.findByText(
+      'Could not check the accepted generation. Tap Resume regeneration to retry without starting another one.',
+    ),
+  ).toBeTruthy();
+  expect(screen.queryByText(/COMPLETED/)).toBeNull();
+
+  // (b) the busy lock was RELEASED: the previously-locked control is pressable
+  // again, so the user is not locked out of every action until an app restart.
+  fireEvent.press(screen.getByRole('button', { name: 'Resume regeneration' }));
+  // The resume polls the SAME accepted generation: no second one is started.
+  await waitFor(() => expect(jest.mocked(generationApi.get).mock.calls.length).toBeGreaterThan(0));
+  expect(jest.mocked(looksApi.regenerate).mock.calls).toHaveLength(1);
 });
