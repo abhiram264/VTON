@@ -5,6 +5,7 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.function.Function;
 import java.util.function.LongSupplier;
@@ -30,6 +31,7 @@ public class ExternalTokenVerifierConfiguration {
 
 		static final long REFRESH_INTERVAL_NANOS = Duration.ofHours(1).toNanos();
 		static final long FORCED_REFRESH_INTERVAL_NANOS = Duration.ofMinutes(1).toNanos();
+		static final int MAX_JWKS_BYTES = 512 * 1024;
 
 		private final URI uri;
 		private final LongSupplier nanoSource;
@@ -90,16 +92,18 @@ public class ExternalTokenVerifierConfiguration {
 				HttpClient client = HttpClient.newBuilder()
 					.connectTimeout(Duration.ofSeconds(5))
 					.build();
-				HttpResponse<String> response = client.send(
+				HttpResponse<byte[]> response = client.send(
 					HttpRequest.newBuilder(uri)
 						.timeout(Duration.ofSeconds(5))
 						.GET()
 						.build(),
-					HttpResponse.BodyHandlers.ofString());
-				if (response.statusCode() != 200 || response.body() == null || response.body().isBlank()) {
+					HttpResponse.BodyHandlers.ofByteArray());
+				byte[] body = response.body();
+				if (response.statusCode() != 200 || body == null || body.length == 0
+						|| body.length > MAX_JWKS_BYTES) {
 					throw new IllegalStateException("jwks");
 				}
-				return response.body();
+				return new String(body, StandardCharsets.UTF_8);
 			}
 			catch (InterruptedException ex) {
 				Thread.currentThread().interrupt();
