@@ -1,4 +1,5 @@
 import { apiRequest, requireOk } from '../my-model/http';
+import { productionApiConfig } from '../../config/apiConfig';
 import { createIdempotencyKey } from '../generation/generationApi';
 import type { AvatarApiConfig } from '../my-model/types';
 import type {
@@ -65,7 +66,7 @@ function parseGeneration(value: unknown): GenerationResource {
       : { failureCode: String(row.failureCode) }),
   };
 }
-const defaultConfig: AvatarApiConfig = { baseUrl: '', getAccessToken: () => null };
+const defaultConfig: AvatarApiConfig = productionApiConfig;
 
 export function createLooksApi(config: AvatarApiConfig = defaultConfig) {
   return {
