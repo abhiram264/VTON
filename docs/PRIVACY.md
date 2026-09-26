@@ -54,19 +54,31 @@ remains the backlog; PR-17 owns the deletion rework.
 
 ## Pending — not implemented
 
-- **F16: the mounted deletion path is not the durable workflow, and does not purge at
-  all.** `user/JdbcIdentityProvisioning.beginDeletion`
-  (`:92-114`) only loads the user (`:100`), marks them deleted (`:107`) and issues one
-  `UPDATE users SET deleted_at` (`:108-112`). The `AccountMediaPurge` list it accepts
-  (`:51-64`) is never stored or invoked — the constructor null-checks the argument
-  (`:58-60`) and discards it, so **no media is purged on the mounted path at all**, and
-  deletion is mark-only, not purge-first. The passing tests
-  `AccountDeletionOrchestratorTest.beginDeletionPurgesMediaBeforeMarkingDeleted`
-  (`src/test/java/com/aifashionvault/platform/AccountDeletionOrchestratorTest.java:75-89`)
-  and `factoryBeanBeginDeletionInvokesRegisteredPurgeBeforeDeletedAt` (`:140-158`) assert
-  a purge that production does not perform; those assertions would fail against
-  `JdbcIdentityProvisioning` as written and are evidence of the defect, not of the
-  behaviour. PR-17 owns this.
+- **F16: the mounted deletion path is not the durable workflow, and is now
+  purge-first.** `user/JdbcIdentityProvisioning.beginDeletion`
+  (`user/JdbcIdentityProvisioning.java:95-119`) loads the user (`:102`), returns
+  unchanged if already deleted (`:106-108`), then runs every registered
+  `AccountMediaPurge.purgeForUser` (`:110-112`) **before** issuing
+  `UPDATE users SET deleted_at` (`:113-117`). The purge list is stored, not discarded:
+  the field is declared at `:35`, assigned at `:64`, resolved from the injected
+  `ObjectProvider` by `orderedPurges` (`:189-194`), and supplied in production by
+  `IdentityProvisioningFactoryBean.getObject`
+  (`user/IdentityProvisioningConfiguration.java:37-42`), which registers three purges —
+  `avatar/AvatarConfiguration.java:54-62`,
+  `importer/ImporterConfiguration.java:30-33` and
+  `platform/generation/GenerationProcessorConfiguration.java:307-317`. Purge-first means
+  a failing purge leaves the account **undeleted** for retry: the exception escapes
+  `beginDeletion` before the `UPDATE`, and
+  `AccountDeletionOrchestratorTest.beginDeletionWithThrowingPurgeLeavesDeletedAtNull`
+  (`src/test/java/com/aifashionvault/platform/AccountDeletionOrchestratorTest.java:92-106`)
+  asserts exactly that — the purge propagates and `deleted_at` stays null. The ordering
+  itself is asserted by `beginDeletionPurgesMediaBeforeMarkingDeleted` (`:75-89`) and
+  `factoryBeanBeginDeletionInvokesRegisteredPurgeBeforeDeletedAt` (`:140-158`), each of which
+  observes `deleted_at` still null at the moment the purge runs; those tests now match the
+  production behaviour rather than contradicting it. Deletion completeness is **still not**
+  established: a purge that returns normally is trusted, and a crash between the purge loop
+  and the `UPDATE` leaves media erased but the account not marked deleted. PR-17 owns the
+  rest of the rework.
 - **Export is not mounted.** `PrivacyService.exportUserData`
   (`DefaultPrivacyService.java:48-63`) is unreachable in production; there is no
   production `PrivacyResourcePort` and no export endpoint. No user can obtain an export.
@@ -78,11 +90,17 @@ remains the backlog; PR-17 owns the deletion rework.
   before processing; that requirement stands.
 - Deletion completeness is therefore **not** established today: nothing in this tree
   proves complete erasure.
-- Per-object delete suppression remains real for the object-store sweep itself:
-  `platform/objectstore/S3ObjectStore.purgePrefix` (`:472-490`) calls `deleteQuietly`
-  (`:485`), which swallows every `RuntimeException` (`:505-512`, comment
-  "Per-object delete failures must not stop the sweep"). On the mounted path this is
-  currently unreachable because no purge runs.
+- **Per-object delete suppression now applies only to the temp-retention sweep.** The
+  account-erasure path has its own delete: `purgePrefix`
+  (`platform/objectstore/S3ObjectStore.java:476-494`) calls `deleteForErasure` (`:489`),
+  which logs an `error` naming the undeleted bucket and key
+  (`platform/objectstore/S3ObjectStore.java:509-518`, message at `:514`) and then throws
+  `ObjectStoreUnavailableException` (`:515-516`). The temp sweep remains best-effort:
+  `reconcile` (`:496-507`) calls `deleteQuietly` (`:505`), which logs and swallows every
+  `RuntimeException` (`:520-529`) because a later sweep retries the object. A single
+  object's delete can therefore still fail — **erasure is not infallible** — but on the
+  erasure path that failure is now reported rather than hidden, and it aborts
+  `beginDeletion` before the account is marked deleted.
 - **F10 is stale.** The JWKS document is now bounded: `LazyJwksDocument` re-fetches after
   a 1-hour interval (`platform/security/ExternalTokenVerifierConfiguration.java:31`,
   `:58`, `:63`), and `JwtExternalTokenVerifier` refreshes parsed keys after 1 hour and
@@ -98,8 +116,9 @@ remains the backlog; PR-17 owns the deletion rework.
   by the existence of the controls above.
 - No claim that temporary-media deletion occurs at exactly 24 hours.
 - No claim that account deletion is durable, resumable, or complete today.
-- No claim that the mounted `DELETE /me` path purges any media: it sets `deleted_at` only
-  (`JdbcIdentityProvisioning.java:108-112`).
+- No claim that erasure is infallible: an individual object delete can fail. On the
+  erasure path that failure is logged and rethrown, leaving the account undeleted; on the
+  temp-retention sweep it is logged and swallowed until a later sweep retries.
 - No claim that a user can obtain a data export or that consent is recorded or enforced:
   neither has a production writer.
 
