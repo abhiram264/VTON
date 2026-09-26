@@ -1,17 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import App from '../App';
 
-// Auth gating changed the precondition for this file's intent (tab order,
-// deep links, share entry — not auth): inject a signed-in session while
-// leaving the real firebase surface module in play.
-jest.mock('../src/config/firebase', () => ({
-  ...jest.requireActual('../src/config/firebase'),
-  subscribeToAuthSession: (listener: (session: unknown) => void) => {
-    listener({ status: 'signed-in', uid: 'test-uid', getIdToken: async () => 'test-token' });
-    return () => {};
-  },
-}));
-
 jest.mock('../src/features/my-model/photoSource', () => ({
   choosePhoto: jest.fn().mockResolvedValue(null),
   takePhoto: jest.fn().mockResolvedValue(null),

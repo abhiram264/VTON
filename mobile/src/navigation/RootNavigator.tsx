@@ -89,10 +89,26 @@ function useAuthSession(): AuthSession {
 // The gate controls WHICH SCREEN IS PRESENTED, never WHICH ROUTES EXIST:
 // every route stays registered on the navigation ref so AppShell's by-name
 // pushes (`Look`, `ShareImport`) always land, even while signed out.
+//
+// `signed-out` and `unavailable` are deliberately different states. Only
+// `signed-out` walls the app behind sign-in: auth is configured and the user
+// can actually pass the wall. An `unavailable` surface means NO auth provider
+// is configured at all, so there is nothing to sign in to — walling the app
+// behind a screen the user can never pass would make the app permanently
+// unusable (and with no env-injection mechanism in this repo, `unavailable`
+// is the only state a local run can reach).
+//
+// SECURITY RATIONALE: passing the app through on `unavailable` is a local-dev
+// RENDERING decision only, never an auth bypass. Every API call still fails
+// closed through the token seam — apiConfig.getAccessToken throws when the
+// surface is unavailable (and when nobody is signed in), so NO request can
+// ever leave the app without a token, regardless of which screen is
+// presented. rootNavigatorGating.test.tsx pins that rejection so the two
+// guarantees cannot drift apart.
 function SessionGate({ session, signedIn }: { session: AuthSession; signedIn?: ReactNode }) {
-  if (session.status === 'signed-in') return <>{signedIn ?? null}</>;
   if (session.status === 'loading') return <View style={styles.holding} testID="auth-holding" />;
-  return <SignInScreen />;
+  if (session.status === 'signed-out') return <SignInScreen />;
+  return <>{signedIn ?? null}</>;
 }
 
 export default function RootNavigator({ session: injectedSession }: { session?: AuthSession } = {}) {
@@ -114,11 +130,7 @@ export default function RootNavigator({ session: injectedSession }: { session?: 
         {({ route }) => <SessionGate session={session} signedIn={<LookScreen lookId={route.params.lookId} />} />}
       </Stack.Screen>
       <Stack.Screen name="ShareImport">
-        {({ route }) => (
-          session.status === 'signed-in'
-            ? <ShareImportScreen payload={route.params.payload} />
-            : <SessionGate session={session} />
-        )}
+        {({ route }) => <SessionGate session={session} signedIn={<ShareImportScreen payload={route.params.payload} />} />}
       </Stack.Screen>
     </Stack.Navigator>
   );
