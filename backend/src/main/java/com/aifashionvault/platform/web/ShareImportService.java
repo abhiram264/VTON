@@ -134,6 +134,23 @@ public final class ShareImportService {
 		};
 	}
 
+	/**
+	 * Confirms a resolved import into the owner's persistent Vault. The import
+	 * must be READY and owner-visible: the lookup is the same owner-scoped
+	 * claim the read and delete paths use, so another owner's import is
+	 * indistinguishable from a missing one (never weakened). The saved item
+	 * carries the import's own source reference, so provenance survives
+	 * confirmation; a repeated confirmation returns the same saved item.
+	 */
+	public VaultItemResponse confirm(UserId owner, String importId) {
+		ShareImportId id = parseImportId(importId);
+		return store.confirm(owner, id)
+			.map(item -> new VaultItemResponse(item.itemId().toString(), item.sourceReferenceId().toString(),
+				null, null, null, null, null, null, null, item.createdAt()))
+			.orElseThrow(ShareImportProblem::notFound);
+	}
+
+
 	private void deleteObject(com.aifashionvault.shared.StorageKey key) {
 		if (key == null) {
 			return;

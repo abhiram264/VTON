@@ -77,6 +77,17 @@ public class SharesController {
 		}
 	}
 
+	@PostMapping("/{importId}/confirm")
+	public ResponseEntity<VaultItemResponse> confirm(
+		@AuthenticationPrincipal UserId userId,
+		@PathVariable String importId
+	) {
+		return ResponseEntity.status(HttpStatus.CREATED)
+			.contentType(MediaType.APPLICATION_JSON)
+			.body(service().confirm(userId, importId));
+	}
+
+
 	@ExceptionHandler(ShareImportProblem.class)
 	ResponseEntity<ShareImportProblemResponse> problem(ShareImportProblem ex) {
 		return ResponseEntity.status(ex.status())
