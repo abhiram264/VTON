@@ -1,5 +1,12 @@
 /**
- * Firebase auth session surface (ADR-007 option A).
+ * Firebase auth session surface.
+ *
+ * ADR-007 decides the AUTHENTICATOR, not this integration: "Use Firebase
+ * Authentication for external authentication", with the backend mapping the
+ * external issuer and subject to an application-owned user UUID and Firebase
+ * UID explicitly NOT becoming domain identity. That is why nothing here keys
+ * domain data on `uid`. ADR-007 lists no SDK options; choosing the JS SDK
+ * (@firebase/app + @firebase/auth) is this run's mandate, not an ADR option.
  *
  * (a) Firebase *client* configuration is public by design. The apiKey and
  *     authDomain below ship inside the app bundle and are not a secret; the
@@ -142,8 +149,23 @@ export function getAuthSurface(): AuthSurface {
 
 /**
  * On an unavailable surface this emits exactly one `unavailable` session.
- * On an available surface the leading `loading` is what stops a restored
- * session from flashing the sign-in screen before Firebase reports it.
+ *
+ * PERSISTENCE: the session is IN-MEMORY on React Native, so a process or
+ * device restart signs the user out and there is no restored session to
+ * recover. `getAuth(app)` is called with no deps, and the SDK then builds an
+ * empty persistence hierarchy (`hierarchy = deps?.persistence || []`) whose
+ * user manager falls back to in-memory storage. The React Native entry DOES
+ * export `getReactNativePersistence`, but it is never constructed unless a
+ * caller passes a storage adapter, and that adapter would be
+ * @react-native-async-storage/async-storage - an OPTIONAL peer of
+ * @firebase/auth that this app deliberately does not install. In-memory
+ * persistence is therefore a chosen consequence of taking no storage
+ * dependency, not an oversight; add that package and pass the persistence
+ * explicitly if a durable session is ever required.
+ *
+ * The leading `loading` still earns its place: even in-memory, the SDK
+ * resolves its initial auth state asynchronously, so without it a
+ * already-signed-in user would flash the sign-in screen for one frame.
  */
 export function subscribeToAuthSession(
   listener: (session: AuthSession) => void,
