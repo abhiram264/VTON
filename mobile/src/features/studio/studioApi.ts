@@ -1,4 +1,5 @@
 import { apiRequest, requireOk } from '../my-model/http';
+import { productionApiConfig } from '../../config/apiConfig';
 
 export type StudioState = { sessionId: string; avatarProfileId?: string; itemIds: string[] };
 
@@ -9,7 +10,7 @@ function parseState(value: unknown): StudioState {
   return { sessionId: row.sessionId, itemIds: row.itemIds as string[], ...(typeof row.avatarProfileId === 'string' ? { avatarProfileId: row.avatarProfileId } : {}) };
 }
 
-const config = { baseUrl: '', getAccessToken: () => null };
+const config = productionApiConfig;
 
 export const studioApi = {
   async get(sessionId: string): Promise<StudioState> {

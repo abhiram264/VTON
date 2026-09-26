@@ -1,5 +1,6 @@
 import type { GenerationApiConfig, ProductUploader } from './types';
 import { rejectDataUri, uploadMedia } from '../my-model/http';
+import { productionApiConfig } from '../../config/apiConfig';
 
 // Advisory client-side mirror of the server ImageMediaPolicy. The server
 // inspection remains authoritative; these checks only fail spend early.
@@ -79,7 +80,4 @@ export function createProductUploader(
   };
 }
 
-export const productUploader = createProductUploader({
-  baseUrl: '',
-  getAccessToken: () => null,
-});
+export const productUploader = createProductUploader(productionApiConfig);
