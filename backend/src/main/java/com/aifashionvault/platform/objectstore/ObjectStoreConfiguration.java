@@ -8,6 +8,7 @@ import org.slf4j.LoggerFactory;
 import java.util.concurrent.TimeUnit;
 
 import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.annotation.EnableScheduling;
@@ -36,6 +37,19 @@ public class ObjectStoreConfiguration {
 	private static final Logger log = LoggerFactory.getLogger(ObjectStoreConfiguration.class);
 
 	static final String NO_SCANNING_ENGINE_REASON = "no malware scanning engine configured; upload cannot be inspected";
+	static final String SYNTHETIC_DEVELOPMENT_SCANNER_REASON =
+		"synthetic development scanner: no inspection performed; test and local use only";
+
+	/**
+	 * Development-only, and it inspects nothing. It exists so a developer can drive the
+	 * upload completion path locally without selecting a malware-scanning vendor, which this
+	 * run deliberately does not do. It is NOT a real engine: every result names itself
+	 * synthetic, and it is unreachable in staging and production.
+	 */
+	private static final MalwareScanner SYNTHETIC_DEVELOPMENT_SCANNER =
+		(bytes, contentType) -> new MalwareScanResult(
+			MalwareVerdict.CLEAN,
+			SYNTHETIC_DEVELOPMENT_SCANNER_REASON);
 
 	@Bean(destroyMethod = "close")
 	S3Client s3Client(VaultEnvironmentProperties properties) {
@@ -66,8 +80,45 @@ public class ObjectStoreConfiguration {
 	ImageInspector imageInspector() {
 		return new ImageInspector();
 	}
+	/**
+	 * F15 profile scoping. There is exactly ONE {@link MalwareScanner} bean, so no profile
+	 * can produce a NoUniqueBeanDefinitionException - the failure class that reddens 31
+	 * backend test classes at the baseline. A second {@code @Profile} bean of this type would
+	 * reproduce it, so the switch lives inside this one method and reads the environment the
+	 * rest of this file already switches on ({@code AppEnv.development}, the same predicate
+	 * {@link #wiring} and {@link #credentialsProvider} use) rather than a Spring profile that
+	 * no configuration in this repository ever sets.
+	 *
+	 * <p>staging and production: no scanning engine is selected, so the scanner fails CLOSED
+	 * with a named reason and {@code UploadWorkflow} rejects every upload. This is the
+	 * guarantee. It is not a stub to be deleted.
+	 *
+	 * <p>development: installs an explicitly SYNTHETIC scanner that performs no inspection, so
+	 * the local upload path is reachable without selecting a vendor. It is not a real engine
+	 * and says so in every result.
+	 *
+	 * <p>Neither branch wires a provider or a vendor.
+	 */
 	@Bean
+	@ConditionalOnMissingBean(MalwareScanner.class)
+	MalwareScanner malwareScanner(VaultEnvironmentProperties properties) {
+		if (properties.env() == AppEnv.development) {
+			log.warn("malware scan: installing the SYNTHETIC development scanner; it inspects nothing");
+			return SYNTHETIC_DEVELOPMENT_SCANNER;
+		}
+		return failClosedScanner();
+	}
+
+	/**
+	 * The fail-closed default, callable with no arguments so the guarantee stays directly
+	 * assertable. Every non-development profile resolves to exactly this scanner, and so does
+	 * the zero-argument call in the fail-closed tests.
+	 */
 	MalwareScanner malwareScanner() {
+		return failClosedScanner();
+	}
+
+	private MalwareScanner failClosedScanner() {
 		return (bytes, contentType) -> {
 			log.warn("malware scan unavailable: {}", NO_SCANNING_ENGINE_REASON);
 			return new MalwareScanResult(MalwareVerdict.UNAVAILABLE, NO_SCANNING_ENGINE_REASON);
