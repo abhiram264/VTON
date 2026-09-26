@@ -1,6 +1,7 @@
 package com.aifashionvault.platform.web;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
@@ -13,6 +14,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Bean;
@@ -74,6 +76,53 @@ class AppIntegrityBoundaryTest {
         verifier.verdict = new AppIntegrityVerdict(AppIntegrityVerdictStatus.INDETERMINATE, AppIntegrityFailureReason.PROVIDER_UNAVAILABLE);
         assertBlocked("/looks/" + UUID.randomUUID() + "/regenerate", null, "secret");
     }
+
+    @Test void requiredIntegrityRejectsInProcessRegenerateWithNoRequestAsForbidden() {
+        GenerationApiProperties enabled = new GenerationApiProperties();
+        enabled.setAttestationRequired(true);
+
+        // No servlet request means no evidence, so the gate must answer its own 403 +
+        // APP_INTEGRITY_REQUIRED rather than dereferencing null into a 500. Nothing below
+        // the boundary is reached: the look lookup would raise NotFound instead.
+        AppIntegrityBoundary.Problem blocked = catchIntegrityProblem(() ->
+            new LooksController(emptyProviders(), emptyProviders(), emptyProviders(), emptyProviders(), verifier, enabled)
+                .regenerate(new com.aifashionvault.shared.UserId(UUID.randomUUID()), UUID.randomUUID().toString(), "key"));
+        assertThat(blocked).isNotNull();
+        assertThat(blocked.status()).isEqualTo(org.springframework.http.HttpStatus.FORBIDDEN);
+        assertThat(blocked.code()).isEqualTo("APP_INTEGRITY_REQUIRED");
+
+        // With the flag off the boundary is a no-op, so the same call falls past the gate
+        // and fails in the controller's own look lookup instead. That difference is what
+        // proves the 403 above came from the gate and not from a missing look.
+        assertThatThrownBy(() ->
+            new LooksController(emptyProviders(), emptyProviders(), emptyProviders(), emptyProviders(), verifier,
+                new GenerationApiProperties())
+                .regenerate(new com.aifashionvault.shared.UserId(UUID.randomUUID()), UUID.randomUUID().toString(), "key"))
+            .isNotInstanceOf(AppIntegrityBoundary.Problem.class)
+            .isInstanceOf(RuntimeException.class);
+    }
+
+    private static <T> ObjectProvider<T> emptyProviders() {
+        @SuppressWarnings("unchecked")
+        ObjectProvider<T> provider = org.mockito.Mockito.mock(ObjectProvider.class);
+        org.mockito.Mockito.when(provider.getIfAvailable()).thenReturn(null);
+        return provider;
+    }
+
+    private static AppIntegrityBoundary.Problem catchIntegrityProblem(Runnable call) {
+        try {
+            call.run();
+            return null;
+        }
+        catch (AppIntegrityBoundary.Problem ex) {
+            return ex;
+        }
+        catch (RuntimeException ex) {
+            throw new AssertionError("expected the integrity 403, but the call threw " + ex, ex);
+        }
+    }
+
+
 
     @Test void verifiedAvatarReplaceProceedsPastIntegrityBoundaryWithoutExposure() throws Exception {
         verifier.verdict = new AppIntegrityVerdict(AppIntegrityVerdictStatus.VERIFIED, AppIntegrityFailureReason.NONE);

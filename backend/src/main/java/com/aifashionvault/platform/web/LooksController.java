@@ -160,14 +160,19 @@ public class LooksController {
 	}
 
 	/**
-	 * In-process entry point for callers with no servlet request. The boundary is
-	 * constructed with attestation disabled for this path, so it stays a no-op; HTTP
-	 * callers always go through {@link #regenerate(UserId, String, String, HttpServletRequest)},
-	 * which is the one that enforces the gate.
+	 * In-process entry point for callers with no servlet request to attest against. It
+	 * delegates to the same gated method with a null request, so it is the SAME gate, not
+	 * a disabled one. While the flag is false the boundary returns immediately. Once the
+	 * flag is true the null request reaches the platform-header read inside the boundary's
+	 * try block, whose RuntimeException catch treats it as unusable evidence and rejects
+	 * with 403 APP_INTEGRITY_REQUIRED. Verified by
+	 * requiredIntegrityRejectsInProcessRegenerateWithNoRequestAsForbidden, which fails
+	 * loudly if that rejection ever stops happening.
 	 */
 	ResponseEntity<GenerationResponse> regenerate(UserId ownerId, String id, String idempotencyKey) {
 		return regenerate(ownerId, id, idempotencyKey, null);
 	}
+
 
 	@DeleteMapping("/{id}")
 	@ResponseStatus(HttpStatus.NO_CONTENT)
