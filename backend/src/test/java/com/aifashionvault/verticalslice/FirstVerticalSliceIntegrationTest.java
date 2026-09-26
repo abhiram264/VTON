@@ -239,6 +239,10 @@ class FirstVerticalSliceIntegrationTest {
 	static class Fakes {
 		@Bean @Primary ExternalTokenVerifier verifier() { return InProcessJwtFixture.verifier(); }
 		@Bean @Primary ObjectStore objects() { return mock(ObjectStore.class); }
+		// RULE: never reuse a production bean name for a test bean. A name collision throws
+		// BeanDefinitionOverrideException at registration and kills the context, and @Primary
+		// does not prevent it. Renamed from generationMediaStore; the product bean is @Primary
+		// and delegates to this stub, so the request path still uses the double.
 		@Bean GenerationMediaStore stubGenerationMediaStore() {
 			GenerationMediaStore mediaStore = mock(GenerationMediaStore.class);
 			when(mediaStore.claimProductInput(any())).thenReturn(new ClaimResult.Copied());

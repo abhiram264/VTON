@@ -58,7 +58,7 @@ class GenerationAdmissionHttpTest {
 	@Autowired JdbcTemplate jdbc;
 	@Autowired GenerationApiProperties properties;
 
-	@Autowired GenerationMediaStore mediaStore;
+	@Autowired ControlledGenerationMediaStore mediaStore;
 
 	@DynamicPropertySource
 	static void datasource(DynamicPropertyRegistry registry) {
@@ -129,7 +129,7 @@ class GenerationAdmissionHttpTest {
 			@Override public void release(GenerationRateLimiter.Reservation reservation) { delegate.release(reservation); }
 		};
 		GenerationCreationService service = new GenerationCreationService(
-			new JdbcGenerationStore(jdbc.getDataSource()), jdbc, properties, Clock.systemUTC(), controlledStore, commitThenThrow);
+			new JdbcGenerationStore(jdbc.getDataSource()), jdbc, properties, Clock.systemUTC(), mediaStore, commitThenThrow);
 
 		GenerationCreationService.Problem problem = org.junit.jupiter.api.Assertions.assertThrows(
 			GenerationCreationService.Problem.class,
@@ -143,9 +143,9 @@ class GenerationAdmissionHttpTest {
 		assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM generation_admission_reservation WHERE committed_at IS NOT NULL AND released_at IS NULL", Integer.class)).isEqualTo(3);
 		assertThat(jdbc.queryForList("SELECT count FROM generation_admission_counter", Long.class))
 			.containsExactlyInAnyOrder(1L, 1L, 1L);
-		assertThat(controlledStore.retainedProductInputs).containsExactly(owner.uploadId());
-		assertThat(controlledStore.claimCalls).isEqualTo(1);
-		assertThat(controlledStore.releaseCalls).isZero();
+		assertThat(controlledMediaStore().retainedProductInputs).containsExactly(owner.uploadId());
+		assertThat(controlledMediaStore().claimCalls).isEqualTo(1);
+		assertThat(controlledMediaStore().releaseCalls).isZero();
 	}
 
 	@Test
@@ -228,8 +228,8 @@ class GenerationAdmissionHttpTest {
 			.containsExactlyInAnyOrder(1L, 1L, 1L);
 		assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM generation_quota_reservation", Integer.class)).isEqualTo(1);
 		assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM generation_admission_reservation WHERE committed_at IS NOT NULL AND released_at IS NULL", Integer.class)).isEqualTo(3);
-		assertThat(controlledStore.preflightCalls).isEqualTo(7);
-		assertThat(controlledStore.claimCalls).isEqualTo(1);
+		assertThat(controlledMediaStore().preflightCalls).isEqualTo(7);
+		assertThat(controlledMediaStore().claimCalls).isEqualTo(1);
 		assertThat(controlledStore.releaseCalls).isZero();
 	}
 
@@ -265,7 +265,7 @@ class GenerationAdmissionHttpTest {
 	}
 
 	private ControlledGenerationMediaStore controlledMediaStore() {
-		return (ControlledGenerationMediaStore) mediaStore;
+		return mediaStore;
 	}
 
 	private static String body(UUID uploadId) { return "{\"productUploadId\":\"" + uploadId + "\"}"; }
@@ -275,6 +275,13 @@ class GenerationAdmissionHttpTest {
     @TestConfiguration
     static class Configuration {
         @Bean @Primary ExternalTokenVerifier verifier() { return InProcessJwtFixture.verifier(); }
+		// RULE: a test bean must never reuse a PRODUCTION bean name. A name collision fails at
+		// registration with BeanDefinitionOverrideException and takes the whole context down, and
+		// @Primary does NOT save it: overriding is a name-level check that runs before any
+		// primary/fallback type resolution. Rename the bean (stubGenerationMediaStore) rather than
+		// enabling spring.main.allow-bean-definition-overriding, which would mask the real graph.
+		// The product generationMediaStore is @Primary and delegates to this bean, so this double
+		// is what the request path actually exercises.
 		@Bean GenerationMediaStore stubGenerationMediaStore() { return new ControlledGenerationMediaStore(); }
 	}
 
