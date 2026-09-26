@@ -166,6 +166,10 @@ public final class InferHubMapper {
             return new Mapped(new GenerationSubmission.Rejected(
                 failure(ProviderFailureCategory.PROTOCOL_VIOLATION, false, "OUTPUT_MISSING")), null);
         }
+        if (!dataUri.strip().toLowerCase(Locale.ROOT).startsWith("data:")) {
+            return new Mapped(new GenerationSubmission.Rejected(
+                failure(ProviderFailureCategory.PROTOCOL_VIOLATION, false, "OUTPUT_URL")), null);
+        }
         String jobId = newJobId();
         return new Mapped(new GenerationSubmission.Accepted(new ProviderJobId(jobId), Optional.empty()), dataUri);
     }
@@ -221,13 +225,9 @@ public final class InferHubMapper {
             if (url == null || url.isBlank()) {
                 return null;
             }
-            String lower = url.strip().toLowerCase(Locale.ROOT);
-            if (lower.startsWith("http://") || lower.startsWith("https://")) {
-                throw new InferHubProviderException(failure(ProviderFailureCategory.PROTOCOL_VIOLATION, false, "OUTPUT_URL"));
-            }
-            if (!lower.startsWith("data:")) {
-                return null;
-            }
+            // A non-data scheme is a URL, not the inline image the wire contract promises.
+            // It is returned rather than thrown so mapRun classifies it as a permanent
+            // OUTPUT_URL rejection instead of escaping into submission-indeterminate.
             return url;
         }
         return null;
@@ -241,7 +241,11 @@ public final class InferHubMapper {
         if (choices == null || !choices.isArray() || choices.isEmpty()) {
             return null;
         }
-        JsonNode message = choices.get(0).get("message");
+        JsonNode first = choices.get(0);
+        if (!first.isObject()) {
+            return null;
+        }
+        JsonNode message = first.get("message");
         if (message == null || !message.isObject()) {
             return null;
         }
