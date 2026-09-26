@@ -1,7 +1,7 @@
 import { act, render, screen } from '@testing-library/react-native';
 import { NavigationContainer, StackActions, createNavigationContainerRef } from '@react-navigation/native';
 import RootNavigator, { type RootStackParamList } from '../src/navigation/RootNavigator';
-import { NOT_CONFIGURED_MESSAGE } from '../src/screens/SignInScreen';
+import { productionApiConfig } from '../src/config/apiConfig';
 import type { AuthSession } from '../src/config/firebase';
 import type { SharePayload } from '../src/features/share/types';
 
@@ -54,11 +54,24 @@ test('signed-out renders the sign-in screen and not MainTabs', async () => {
   expect(screen.queryByTestId('auth-holding')).toBeNull();
 });
 
-test('unavailable renders the not-configured notice and not MainTabs', async () => {
+test('unavailable passes through to the app: MainTabs, not the sign-in wall', async () => {
   await render(<Harness session={{ status: 'unavailable' }} />);
-  expect(screen.getByText(NOT_CONFIGURED_MESSAGE)).toBeTruthy();
-  expect(screen.queryByRole('tab', { name: /HOME/ })).toBeNull();
+  expect(await screen.findByRole('tab', { name: /HOME/ })).toBeTruthy();
+  expect(screen.queryByRole('header', { name: 'Sign In' })).toBeNull();
   expect(screen.queryByTestId('auth-holding')).toBeNull();
+});
+
+// The honest half of the unavailable pass-through: rendering opens up, the
+// token seam does not. If anyone weakens apiConfig.getAccessToken, the
+// pass-through above would become a real bearer-less path — this fails first.
+test('getAccessToken still rejects when the surface is unavailable', async () => {
+  await expect(productionApiConfig.getAccessToken()).rejects.toThrow('Access token is not configured');
+});
+
+test('signed-out and unavailable genuinely diverge: only signed-out walls the app', async () => {
+  await render(<Harness session={{ status: 'signed-out' }} />);
+  expect(screen.getByRole('header', { name: 'Sign In' })).toBeTruthy();
+  expect(screen.queryByRole('tab', { name: /HOME/ })).toBeNull();
 });
 
 test('signed-in renders MainTabs and not the sign-in screen', async () => {
@@ -76,6 +89,23 @@ test('loading to signed-in never shows the sign-in screen at any committed state
   expect(states).not.toContain('sign-in');
   expect(states[0]).toBe('holding');
   expect(states[states.length - 1]).toBe('main-tabs');
+});
+
+test('a share pushed while unavailable reaches the Share Import screen with the payload', async () => {
+  receivedPayloads.length = 0;
+  const utils = await render(<Harness session={{ status: 'unavailable' }} />);
+
+  const payload: SharePayload = { kind: 'url', url: 'https://example.com/item/2' };
+  await act(async () => {
+    for (let i = 0; i < 100 && !navigationRef.isReady(); i += 1) {
+      await Promise.resolve();
+    }
+    navigationRef.dispatch(StackActions.push('ShareImport', { payload }));
+  });
+
+  // The unavailable pass-through must not strand the payload behind a null.
+  expect(receivedPayloads).toEqual([payload]);
+  utils.unmount();
 });
 
 test('a share pushed while signed-out is not consumed and survives to sign-in', async () => {
