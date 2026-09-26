@@ -37,19 +37,27 @@ own source file). The only other HTTP surface is actuator `health` and `metrics`
 | `CollectionsController` | `POST /collections` :35 · `GET /collections` :42 · `GET /collections/{id}` :43 · `PATCH /collections/{id}` :45 · `DELETE /collections/{id}` :51 · `POST /collections/{id}/items` :56 · `DELETE /collections/{id}/items/{vaultItemId}` :69 |
 | `AvatarsController` | `POST /avatars` :86 · `GET /avatars` :97 · `GET /avatars/{id}` :102 · `PATCH /avatars/{id}` :113 · `DELETE /avatars/{id}` :127 |
 | `MeController` | `GET /me` :28 · `DELETE /me` :33 |
-| `GenerationsController` | `POST /generations` :66 · `GET /generations/{generationId}` :82 · `POST /generations/{generationId}/cancel` :90 |
-| `GenerationCallbackController` | `POST /generation-callbacks/{token}` :44 |
+| `GenerationsController` | `POST /generations` :67 · `GET /generations/{generationId}` :83 · `POST /generations/{generationId}/cancel` :91 |
+| `GenerationCallbackController` | `POST /generation-callbacks/{token}` :47 |
 | `FeatureFlagController` | `GET /feature-flags` :17 |
 
-Counts: 5 + 3 + 5 + 4 + 7 + 5 + 2 + 3 + 1 + 1 = **36**. `GET /me` returns
+Counts at the pinned baseline 3b6af1f: 5 + 3 + 5 + 4 + 7 + 5 + 2 + 3 + 1 + 1 = **36**
+(10 `@RestController` classes; the tenth, `FeatureFlagController`, sits outside
+`platform/web`, so a `platform/web`-only glob finds nine). `GET /me` returns
 `MeResponse(String id)` — the wire field is `id`, not `userId` (MeResponse.java:3); `GET /feature-flags` is an operational snapshot surface
 with a mobile caller at `mobile/src/config/featureFlags.ts:91`. One mapping is
-conditional on infrastructure rather than on a feature flag:
-`POST /generation-callbacks/{token}` requires a `CallbackInboxStore` bean
-(GenerationCallbackController.java:22). The callback processing beans are
-gated `@ConditionalOnBean({DataSource.class, ObjectStore.class})`
-(GenerationProcessorConfiguration.java:45) — both the database and the object
-store must be present, not the database alone.
+conditional on infrastructure rather than on a feature flag, but on the store
+at request time rather than on bean definition: `POST /generation-callbacks/{token}`
+(GenerationCallbackController.java:47) is mounted unconditionally — the
+controller carries no `@ConditionalOnBean` and resolves the store through an
+`ObjectProvider` constructor (GenerationCallbackController.java:42-45), answering
+503 when the store is absent (GenerationCallbackController.java:52-54). The
+store itself is produced by a late-binding `FactoryBean<CallbackInboxStore>`
+(GenerationProcessorConfiguration.java:163) that resolves to no bean
+(`null`) when the `DataSource` is absent
+(GenerationProcessorConfiguration.java:168-171); the generation processing
+graph is registered the same way, so both the database and the object store
+must be present for processing, not the database alone.
 
 ### 2.1 profile
 
@@ -114,9 +122,11 @@ store must be present, not the database alone.
   table.
 - Mobile callers: `features/share/importClient.ts:185,:207` and
   `screens/share-import/recoveryClient.ts:76`.
-- Current missing connection: replay is arbitrated after staging is required
-  (F05), and `READY` is not a confirmable saved item (F04). Owning tickets:
-  F05 -> PR-07; F04 -> PR-08 and PR-11 (plan:70). The minimal
+- Current missing connection: replay is arbitrated before the staging
+  requirement is checked (F05, closed — `store.arbitrateCreate(command)` at
+  ShareImportService.java:55, re-checked at :68 before resolving at :69), and
+  `READY` is not a confirmable saved item (F04). Owning tickets:
+  F05 -> PR-07 (closed); F04 -> PR-08 and PR-11 (plan:70). The minimal
   import-confirmation endpoint is **PROPOSED** (PR-08).
 
 ### 2.4 item / collection
@@ -288,7 +298,7 @@ is in §7 (F02).
 |---|------|------------------|------------------|---------------|------------------------------|----------------------------|---------------|
 | 1 | profile | `POST/GET/GET{id}/PATCH/DELETE /avatars` (AvatarsController.java:86,:97,:102,:113,:127) → `AvatarResourceResponse` | `avatar_profile` V002 + `avatar_consumed_upload` V011:27 via `avatar/JdbcAvatarStore.java` | `features/my-model/avatarApi.ts:66,:81,:96,:107` (mount at :117 — UNCONFIGURED mount (baseUrl '' + null token, F02)) | `vault.avatar.*` buckets (`S3_AVATAR_BUCKET`, application.yaml:33), `vault.avatar.attestation-required` (:48-49) | null photo source (F01); unavailable scanner (F15) | PR-05; identity PR-03 |
 | 2 | verified upload | `POST /uploads`, `POST /uploads/{id}/complete`, `DELETE /uploads/{id}` (UploadsController.java:42,:60,:75) → `CreateUploadResponse(id, method, url, headers, expiresAt)` | object-store staging; `avatar_consumed_upload` V011:27 (JdbcAvatarStore.java:456-457,:137-138) records avatar-consumed uploads | `features/my-model/http.ts:91,:112` | `vault.s3.temp-bucket` (`S3_TEMP_BUCKET`, application.yaml:36) | completion cannot succeed with the default scanner (F15) | PR-05 |
-| 3 | import | `POST/GET/PUT/DELETE /share/imports…` (SharesController.java:39,:51,:59,:72) → `ShareImportResponse(importId, status, reason, recoveryActions)` | `share_import` V003:1/V019 via `importer/JdbcShareImportStore.java` | `features/share/importClient.ts:185,:207`; `screens/share-import/recoveryClient.ts:76` (via apiConfig.ts:8 — UNCONFIGURED mount (baseUrl '' + null token, F02)) | `vault.s3.vault-bucket` (`S3_VAULT_BUCKET`, application.yaml:34) | replay after staging (F05); no confirm-to-item contract (F04) | F05 -> PR-07; F04 -> PR-08, PR-11 |
+| 3 | import | `POST/GET/PUT/DELETE /share/imports…` (SharesController.java:39,:51,:59,:72) → `ShareImportResponse(importId, status, reason, recoveryActions)` | `share_import` V003:1/V019 via `importer/JdbcShareImportStore.java` | `features/share/importClient.ts:185,:207`; `screens/share-import/recoveryClient.ts:76` (via apiConfig.ts:8 — UNCONFIGURED mount (baseUrl '' + null token, F02)) | `vault.s3.vault-bucket` (`S3_VAULT_BUCKET`, application.yaml:34) | replay arbitrated before the staging check, which it revalidates (F05, closed; ShareImportService.java:55,:68); no confirm-to-item contract (F04) | F05 -> PR-07 (closed); F04 -> PR-08, PR-11 |
 | 4 | item / collection | `/vault/items` ×5 (VaultController.java:24-32); `/collections` ×7 (CollectionsController.java:35,:42,:43,:45,:51,:56,:69) | `vault_item` V004:9 + `source_reference` V004:1 (`vault/JdbcVaultStore.java:56,:68`); `collection` V005:1 (`collection/JdbcCollectionStore.java`) | `features/vault/vaultApi.ts:28,:51` (mount at :23 — UNCONFIGURED mount (baseUrl '' + null token, F02)); `features/vault/collectionApi.ts:21` (same) | `vault.s3.vault-bucket` (`S3_VAULT_BUCKET`, application.yaml:34) | no image read capability in the item response (F06) | PR-06, PR-11 |
 | 5 | studio | **none mounted** (PROPOSED: PR-12/PR-13); mobile targets `/studio/sessions/**` (studioApi.ts:16,:19,:22) | `studio_item` V006:11 exists, read-only in-use guard (`JdbcVaultStore.java:97,:103`), no writer | `features/studio/studioApi.ts:16,:19,:22` (mount at :12 — UNCONFIGURED mount (baseUrl '' + null token, F02)) | none mounted; `vault.env` (`APP_ENV`, application.yaml:17) | no persisted session; readiness from route params (F03) | PR-12, PR-13, PR-16 |
 | 6 | generation | `POST /generations`, `GET /generations/{id}`, `POST /generations/{id}/cancel` (GenerationsController.java:66,:82,:90) + `POST /generation-callbacks/{token}` (GenerationCallbackController.java:44) | `JdbcGenerationStore`, outbox, capacity lease (V013:324), rate limiter (V022:1,:11), callback inbox | `features/generation/generationApi.ts:100,:111` (mount at :126 — UNCONFIGURED mount (baseUrl '' + null token, F02)); `productUpload.ts:83` (same) | `vault.sqs.generation-queue-url` (`SQS_GENERATION_QUEUE_URL`, application.yaml:31), `vault.s3.look-bucket` (:35), `vault.generation.multi-item-enabled`/`admission-paused` | FASHN provider built unconditionally and `FASHN_API_KEY` is a mandatory startup property (FashnConfig.java:41-42,:46-47; VaultEnvironmentValidator.java:25-26) — honest no-provider behavior is not implemented yet | PR-02/PR-14/PR-15/PR-16 |
@@ -394,7 +404,7 @@ All seventeen findings are recorded, with their owning tickets (plan:64-97):
 | F02 | Mounted API clients default to `baseUrl: ''` | PR-04 |
 | F03 | Studio cannot build the requested outfit | PR-12, PR-13, PR-16 |
 | F04 | A resolved share cannot become a saved item | PR-08, PR-11 |
-| F05 | Import replay checks consumed staging before idempotency | PR-07 |
+| F05 | **CLOSED** — import replay revalidates staging before it resolves: `store.arbitrateCreate(command)` runs first (ShareImportService.java:55) and the replay branch re-checks claimability (ShareImportService.java:68) before resolving at :69; the fresh path re-checks at :71 | PR-07 (closed) |
 | F06 | Vault is a text list, not an image library | PR-06, PR-11 |
 | F07 | Publication stores a mode string as render-plan JSON | PR-14 |
 | F08 | Baseline image validation is presented as quality PASS | PR-02, PR-25 |
@@ -410,8 +420,8 @@ All seventeen findings are recorded, with their owning tickets (plan:64-97):
 
 The F02 count is source-verified: eight `baseUrl: ''` mounts exist under
 `mobile/src` (`features/generation/generationApi.ts:126`,
-`features/generation/productUpload.ts:83`, `features/looks/looksApi.ts:13`,
-`features/my-model/avatarApi.ts:117`, `features/studio/studioApi.ts:12`,
+`features/generation/productUpload.ts:83`, `features/looks/looksApi.ts:68`,
+`features/my-model/avatarApi.ts:150`, `features/studio/studioApi.ts:12`,
 `features/vault/collectionApi.ts:21`, `features/vault/vaultApi.ts:23`,
 `screens/share-import/apiConfig.ts:8`).
 
