@@ -16,6 +16,7 @@ import com.aifashionvault.shared.UploadId;
 import com.aifashionvault.shared.UserId;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class GenerationOrphanSweeperTest {
 
@@ -66,6 +67,94 @@ class GenerationOrphanSweeperTest {
 		assertThat(sweeper.sweep()).isEqualTo(1);
 		assertThat(objects.contains(orphanLook)).isFalse();
 		assertThat(objects.deleted()).containsExactly(orphanLook);
+	}
+
+	/**
+	 * A reference check that cannot answer must ABORT the sweep, never report
+	 * "not referenced". sweepBoundary treats false as delete-now, so swallowing the
+	 * error would turn an outage into a mass delete of live user Looks. This pins
+	 * the class as fail-SAFE: the throw propagates and nothing is deleted.
+	 */
+	@Test
+	void aThrowingReferenceCheckAbortsTheSweepWithEveryObjectUndeleted() {
+		FakeObjectStore objects = new FakeObjectStore();
+		ObjectRef liveLook = new ObjectRef(StorageDomain.LOOK, "users/user/looks/live.jpg");
+		ObjectRef alsoLive = new ObjectRef(StorageDomain.LOOK, "users/user/looks/also-live.png");
+		objects.put(liveLook, NOW.minus(Duration.ofHours(5)));
+		objects.put(alsoLive, NOW.minus(Duration.ofHours(5)));
+
+		GenerationOrphanSweeper sweeper = new GenerationOrphanSweeper(
+			objects,
+			ref -> { throw new IllegalStateException("reference store unavailable"); },
+			CLOCK,
+			SAFE_AGE);
+
+		assertThatThrownBy(sweeper::sweep)
+			.isInstanceOf(IllegalStateException.class)
+			.hasMessage("reference store unavailable");
+		assertThat(objects.deleted()).isEmpty();
+		assertThat(objects.contains(liveLook)).isTrue();
+		assertThat(objects.contains(alsoLive)).isTrue();
+	}
+
+	/**
+	 * An ObjectStore that does not override list() must fail loudly. Reporting an
+	 * empty list would make the sweeper return 0 deleted and look perfectly healthy
+	 * while reaping nothing, so a wiring mistake would never surface.
+	 */
+	@Test
+	void aStoreThatCannotEnumerateFailsInsteadOfReportingAnEmptySweep() {
+		ObjectStore nonEnumerating = new ObjectStore() {
+			@Override
+			public UploadCapability presignStagingPut(UserId u, UploadId i, MediaDeclaration d) {
+				throw new UnsupportedOperationException();
+			}
+
+			@Override
+			public ObjectMetadata head(ObjectRef o) {
+				throw new UnsupportedOperationException();
+			}
+
+			@Override
+			public byte[] readBounded(ObjectRef o, String v, int m) {
+				throw new UnsupportedOperationException();
+			}
+
+			@Override
+			public void delete(ObjectRef o) {
+				throw new UnsupportedOperationException();
+			}
+
+			@Override
+			public ClaimResult claim(ClaimCommand c) {
+				throw new UnsupportedOperationException();
+			}
+
+			@Override
+			public void purgeUserObjects(UserId u) {
+				throw new UnsupportedOperationException();
+			}
+
+			@Override
+			public void cleanupTemp() {
+				throw new UnsupportedOperationException();
+			}
+
+			@Override
+			public PresignedAccess presignGet(ObjectRef o, Duration t) {
+				throw new UnsupportedOperationException();
+			}
+		};
+
+		GenerationOrphanSweeper sweeper = new GenerationOrphanSweeper(
+			nonEnumerating,
+			ref -> false,
+			CLOCK,
+			SAFE_AGE);
+
+		assertThatThrownBy(sweeper::sweep)
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("cannot list");
 	}
 
 	private static final class FakeObjectStore implements ObjectStore {
