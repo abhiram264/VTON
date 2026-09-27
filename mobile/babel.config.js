@@ -40,10 +40,20 @@ const publicEnv = readPublicEnv(__dirname);
 module.exports = {
   presets: ['module:@react-native/babel-preset'],
   plugins: [
-    function inlineExpoPublicEnv({types: t}) {
+    function inlineExpoPublicEnv(api) {
+      const {types: t} = api;
+      // Under jest the env seam is owned by the tests at runtime (they assign
+      // and delete process.env.EXPO_PUBLIC_* — see apiConfig.ts globalThis
+      // fallback); inlining there would freeze the literal and break
+      // fail-closed tests. babel-jest declares caller name 'babel-jest'
+      // (node_modules/babel-jest/build/index.js); Metro declares 'metro'.
+      const isJest = api.caller(c => c != null && c.name === 'babel-jest');
       return {
         visitor: {
           MemberExpression(nodePath) {
+            if (isJest) {
+              return;
+            }
             const node = nodePath.node;
             // Match process.env.EXPO_PUBLIC_*
             if (!t.isIdentifier(node.object, {name: 'process'})) {
