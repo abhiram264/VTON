@@ -4,13 +4,22 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Configuration;
 
+/**
+ * Bound configuration for the capability flags ({@code vault.feature-flags.*}).
+ *
+ * <p>Defaults mirror the release posture required by C22: unsupported capabilities
+ * default OFF. The binding surface stays fail-closed — {@link #isEnabled} returns
+ * false for an unsupported capability even if a configuration value (environment
+ * variable, properties file or remote override) sets it to true, and
+ * {@link #setEnabled} refuses to turn one on.
+ */
 @ConfigurationProperties(prefix = "vault.feature-flags")
 public class FeatureFlagProperties {
 
-	private boolean multiItem = true;
-	private boolean naturalLanguageStudio = true;
+	private boolean multiItem = false;
+	private boolean naturalLanguageStudio = false;
 	private boolean tryonMax = true;
-	private boolean hdGeneration = true;
+	private boolean hdGeneration = false;
 	private boolean shareImportAndroid = true;
 	private boolean shareImportIos = true;
 	private boolean newQualityGate = false;
@@ -71,8 +80,12 @@ public class FeatureFlagProperties {
 		this.newQualityGate = newQualityGate;
 	}
 
+	/**
+	 * Effective value from bound configuration. Unsupported capabilities fail closed
+	 * and are never reported enabled, whatever the bound value says.
+	 */
 	public boolean isEnabled(FeatureFlagName name) {
-		if (name == null) {
+		if (name == null || !name.isSupported()) {
 			return false;
 		}
 		return switch (name) {
@@ -86,9 +99,18 @@ public class FeatureFlagProperties {
 		};
 	}
 
+	/**
+	 * Programmatic binding surface. Disabling any capability is allowed; enabling an
+	 * unsupported one is refused so a flag source cannot turn on a capability the
+	 * release cannot serve.
+	 */
 	public void setEnabled(FeatureFlagName name, boolean enabled) {
 		if (name == null) {
 			return;
+		}
+		if (enabled && !name.isSupported()) {
+			throw new UnsupportedOperationException(
+				"feature flag " + name + " is not supported by this release and cannot be enabled");
 		}
 		switch (name) {
 			case MULTI_ITEM -> this.multiItem = enabled;

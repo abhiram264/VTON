@@ -15,6 +15,17 @@ import {
 import { ApiProblemError } from '../features/my-model/http';
 import { avatarApi } from '../features/my-model/avatarApi';
 import {
+  CONSENT_PURPOSES,
+  consentApi,
+  isGrantStale,
+  isPurposeActive,
+  purposeState,
+} from '../features/consent/consentApi';
+import type {
+  ConsentPurpose,
+  ConsentSnapshot,
+} from '../features/consent/consentApi';
+import {
   choosePhoto,
   isCameraPermissionDenied,
   takePhoto,
@@ -28,6 +39,30 @@ const NO_PHOTO_NOTICE =
   'No photo was selected. Photo selection may be unavailable. Try again.';
 const STALE_REVISION_CODE = 'AVATAR_STALE_REVISION';
 const MAX_REFRESH_DELAY_MS = 2_147_483_647;
+
+// Plain-language names for the two purposes the server enumerates. These are
+// the user-facing surface of C06: the purpose literals themselves are wire
+// values and are never shown.
+const CONSENT_LABELS: Record<ConsentPurpose, { title: string; detail: string }> = {
+  body_image_processing: {
+    title: 'Body-image processing',
+    detail:
+      'Creating or replacing My Model processes a photo of your body. Nothing is uploaded until you grant this.',
+  },
+  third_party_ai_transfer: {
+    title: 'Third-party AI transfer',
+    detail:
+      'Generating a Look sends your My Model photo and the garment image to a third-party AI provider.',
+  },
+};
+
+const CONSENT_RETENTION =
+  'You can withdraw a consent at any time, and withdrawing pauses new processing for it. Deleting My Model or your account removes the stored photo.';
+
+type ConsentLoad =
+  | { status: 'loading' }
+  | { status: 'ready'; snapshot: ConsentSnapshot }
+  | { status: 'unavailable' };
 
 type LoadState = 'loading' | 'ready' | 'failed';
 
@@ -46,6 +81,75 @@ export default function MyModelScreen({
   const pickerLock = useRef(false);
   const mutationLock = useRef(false);
   const deletePromptOpen = useRef(false);
+  const [consent, setConsent] = useState<ConsentLoad>({ status: 'loading' });
+  const [consentAttempt, setConsentAttempt] = useState(0);
+  const [consentBusy, setConsentBusy] = useState<ConsentPurpose | null>(null);
+  const [consentNotice, setConsentNotice] = useState<string | null>(null);
+
+  // Consent is read from the server, never assumed. A failed or unparseable
+  // read is UNAVAILABLE, which blocks new processing rather than being
+  // treated as consent.
+  useEffect(() => {
+    let cancelled = false;
+    setConsent({ status: 'loading' });
+    void consentApi.get().then(
+      snapshot => {
+        if (!cancelled) {
+          setConsent({ status: 'ready', snapshot });
+        }
+      },
+      () => {
+        if (!cancelled) {
+          setConsent({ status: 'unavailable' });
+        }
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [consentAttempt]);
+
+  const bodyConsentActive =
+    consent.status === 'ready' &&
+    isPurposeActive(consent.snapshot, 'body_image_processing');
+
+  async function toggleConsent(purpose: ConsentPurpose, next: boolean) {
+    if (consentBusy !== null) {
+      return;
+    }
+    setConsentBusy(purpose);
+    setConsentNotice(null);
+    try {
+      const state = next
+        ? await consentApi.grant(purpose)
+        : await consentApi.withdraw(purpose);
+      setConsent(current => {
+        if (current.status !== 'ready') {
+          return current;
+        }
+        const known = current.snapshot.purposes.some(
+          existing => existing.purpose === purpose,
+        );
+        return {
+          status: 'ready',
+          snapshot: {
+            policyVersion: current.snapshot.policyVersion,
+            purposes: known
+              ? current.snapshot.purposes.map(existing =>
+                  existing.purpose === purpose ? state : existing,
+                )
+              : [...current.snapshot.purposes, state],
+          },
+        };
+      });
+    } catch {
+      // The server is authoritative and nothing changed locally, so the
+      // surface must not pretend it did.
+      setConsentNotice('Could not update consent. Nothing was changed.');
+    } finally {
+      setConsentBusy(null);
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -152,6 +256,18 @@ export default function MyModelScreen({
 
   async function submit(photo: LocalPhoto) {
     if (mutationLock.current) {
+      return;
+    }
+    // Consent gate. Adding or replacing My Model processes a photo of the
+    // user's body, so the photo is not uploaded at all while that consent is
+    // not an explicit active grant. "Could not ask" is not consent either, so
+    // an unreadable consent state blocks just the same and says why.
+    if (!bodyConsentActive) {
+      setNotice(
+        consent.status === 'unavailable'
+          ? 'Consent settings could not be loaded, so new body-image processing is paused. Retry the consent settings below.'
+          : 'Grant consent for body-image processing before adding or replacing My Model.',
+      );
       return;
     }
     mutationLock.current = true;
@@ -316,6 +432,86 @@ export default function MyModelScreen({
       <Text accessibilityRole="header" style={styles.title}>
         My Model
       </Text>
+      <View style={styles.consentBlock}>
+        <Text accessibilityRole="header" style={styles.heading}>
+          Consent
+        </Text>
+        {consent.status === 'loading' ? (
+          <Text accessibilityLiveRegion="polite" style={styles.body}>
+            Loading consent settings…
+          </Text>
+        ) : consent.status === 'unavailable' ? (
+          <>
+            <Text accessibilityLiveRegion="polite" style={styles.notice}>
+              Consent settings are unavailable, so new body-image processing is
+              paused.
+            </Text>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityState={{ disabled: consentBusy !== null }}
+              disabled={consentBusy !== null}
+              onPress={() => setConsentAttempt(value => value + 1)}
+              style={[styles.button, styles.secondary]}
+            >
+              <Text style={styles.secondaryLabel}>Retry consent settings</Text>
+            </Pressable>
+          </>
+        ) : (
+          <>
+            <Text style={styles.body}>
+              Policy version {consent.snapshot.policyVersion}.
+            </Text>
+            {CONSENT_PURPOSES.map(purpose => {
+              const state = purposeState(consent.snapshot, purpose);
+              const active = state?.active === true;
+              const stale = isGrantStale(consent.snapshot, purpose);
+              const label = CONSENT_LABELS[purpose];
+              const grantedLine =
+                active && state !== null
+                  ? state.version === null
+                    ? `Granted. The current policy is ${state.policyVersion}.`
+                    : stale
+                      ? `Granted under policy ${state.version}. The current policy is ${state.policyVersion}, so review it.`
+                      : `Granted under policy ${state.version}.`
+                  : 'Not granted. New processing for this purpose is paused.';
+              return (
+                <View key={purpose} style={styles.copy}>
+                  <Text style={styles.heading}>{label.title}</Text>
+                  <Text style={styles.body}>{label.detail}</Text>
+                  <Text accessibilityLiveRegion="polite" style={styles.body}>
+                    {grantedLine}
+                  </Text>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityState={{ disabled: consentBusy !== null }}
+                    disabled={consentBusy !== null}
+                    onPress={() => void toggleConsent(purpose, !active)}
+                    style={[
+                      styles.button,
+                      active ? styles.quiet : styles.secondary,
+                      consentBusy !== null && styles.disabled,
+                    ]}
+                  >
+                    <Text
+                      style={active ? styles.quietLabel : styles.secondaryLabel}
+                    >
+                      {active
+                        ? `Withdraw ${label.title}`
+                        : `Grant ${label.title}`}
+                    </Text>
+                  </Pressable>
+                </View>
+              );
+            })}
+            <Text style={styles.body}>{CONSENT_RETENTION}</Text>
+          </>
+        )}
+        {consentNotice ? (
+          <Text accessibilityLiveRegion="polite" style={styles.notice}>
+            {consentNotice}
+          </Text>
+        ) : null}
+      </View>
       {loadState === 'loading' && !ready ? (
         <Text accessibilityLiveRegion="polite">Loading My Model…</Text>
       ) : loadState === 'failed' && !ready ? (
@@ -527,6 +723,18 @@ const styles = StyleSheet.create({
     color: ink,
     fontSize: 20,
     fontWeight: '600',
+  },
+  heading: {
+    color: ink,
+    fontSize: 17,
+    fontWeight: '600',
+  },
+  consentBlock: {
+    borderColor: '#d8d3cc',
+    borderRadius: 8,
+    borderWidth: 1,
+    gap: 12,
+    padding: 12,
   },
   stack: {
     gap: 16,

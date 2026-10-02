@@ -65,7 +65,7 @@ class FeatureFlagHttpContractTest {
 	}
 
 	@Test
-	void authenticatedGetReturnsExactS3ObjectWithDefaultsAndEmptyOverrides() throws Exception {
+	void authenticatedGetReturnsExactS3ObjectWithSupportedCapabilitiesAndEmptyOverrides() throws Exception {
 		this.mockMvc.perform(get("/feature-flags")
 				.header(HttpHeaders.AUTHORIZATION, "Bearer " + InProcessJwtFixture.bearerToken()))
 			.andExpect(status().isOk())
@@ -73,10 +73,10 @@ class FeatureFlagHttpContractTest {
 			.andExpect(content().json("""
 				{
 				  "flags": {
-				    "MULTI_ITEM": true,
-				    "NATURAL_LANGUAGE_STUDIO": true,
+				    "MULTI_ITEM": false,
+				    "NATURAL_LANGUAGE_STUDIO": false,
 				    "TRYON_MAX": true,
-				    "HD_GENERATION": true,
+				    "HD_GENERATION": false,
 				    "SHARE_IMPORT_ANDROID": true,
 				    "SHARE_IMPORT_IOS": true,
 				    "NEW_QUALITY_GATE": false
@@ -88,7 +88,7 @@ class FeatureFlagHttpContractTest {
 
 	@Test
 	void authenticatedGetWithActiveOverrideReturnsExactS3ObjectAndActiveOverrideOnly() throws Exception {
-		this.featureFlags.override(FeatureFlagName.HD_GENERATION, false);
+		this.featureFlags.override(FeatureFlagName.TRYON_MAX, false);
 
 		this.mockMvc.perform(get("/feature-flags")
 				.header(HttpHeaders.AUTHORIZATION, "Bearer " + InProcessJwtFixture.bearerToken()))
@@ -97,16 +97,16 @@ class FeatureFlagHttpContractTest {
 			.andExpect(content().json("""
 				{
 				  "flags": {
-				    "MULTI_ITEM": true,
-				    "NATURAL_LANGUAGE_STUDIO": true,
-				    "TRYON_MAX": true,
+				    "MULTI_ITEM": false,
+				    "NATURAL_LANGUAGE_STUDIO": false,
+				    "TRYON_MAX": false,
 				    "HD_GENERATION": false,
 				    "SHARE_IMPORT_ANDROID": true,
 				    "SHARE_IMPORT_IOS": true,
 				    "NEW_QUALITY_GATE": false
 				  },
 				  "overrides": {
-				    "HD_GENERATION": false
+				    "TRYON_MAX": false
 				  }
 				}
 				""", true));

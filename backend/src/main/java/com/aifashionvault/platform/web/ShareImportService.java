@@ -87,6 +87,27 @@ public final class ShareImportService {
 		return map(requireOwned(owner, importId));
 	}
 
+	/**
+	 * Owner-scoped preview of a resolved import. The lookup is the same
+	 * owner-scoped claim the read/delete/confirm paths use, so another owner's
+	 * import is indistinguishable from a missing one. Only a READY import with
+	 * a resolved object has a preview; anything else is a state conflict. The
+	 * capability itself is minted by the media seam and is short-lived, so a
+	 * stale URL is refreshed by calling this route again.
+	 */
+	public ShareImportPreviewResponse preview(UserId owner, String importId) {
+		ShareImportId id = parseImportId(importId);
+		ShareImport current = requireOwned(owner, importId);
+		if (current.state() != ShareImportState.READY || current.storageKey() == null) {
+			throw ShareImportProblem.stateConflict();
+		}
+		com.aifashionvault.platform.objectstore.PresignedAccess access = media
+			.presignPreview(owner, current.storageKey())
+			.orElseThrow(ShareImportProblem::dependencyUnavailable);
+		return new ShareImportPreviewResponse(id.value().toString(), access.uri().toString(),
+			access.expiresAt(), current.sourceTitle(), current.sourceSiteName());
+	}
+
 	public AttachOutcome attach(UserId owner, String importId, String rawKey, AttachShareImageRequest request) {
 		String key = requireKey(rawKey);
 		ShareImportId id = parseImportId(importId);

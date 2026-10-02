@@ -49,6 +49,16 @@ const REJECTION_NOTICES: Record<string, string> = {
   IMAGE_TOO_LARGE: 'That image is too large. Use an image up to 30 MB.',
 };
 
+// C14: a retry that re-enters the generation flow is a NEW request, so it is
+// disclosed as one. A Vault-only retry re-sends the same photo and starts no
+// new request, and says so instead. Neither copy promises a credit, a price or
+// a completion time, because the app cannot observe any of those.
+const RETRY_CHARGE_NOTICE =
+  'Trying again starts a new try-on request. It may use another generation credit.';
+const RETRY_SAVE_NOTICE =
+  'Retrying saves the same photo to your Vault. It does not start a new try-on request.';
+const ACTION_RETRY_TRY_ON = 'Try-on again';
+
 type Props = {
   picker?: ProductPicker;
   onCreateLook?: (lookId: string) => void;
@@ -428,17 +438,40 @@ export default function GenerateScreen({
                 {ACTION_CHOOSE_ANOTHER_PHOTO}
               </Text>
             </Pressable>
+            <Text accessibilityLiveRegion="polite" style={styles.retryNote}>
+              {RETRY_CHARGE_NOTICE}
+            </Text>
           </>
         ) : outageState === 'save_failed' ? (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityState={{ disabled: busy, busy }}
-            disabled={busy}
-            onPress={() => start(retainedPhoto ?? undefined, true)}
-            style={[styles.button, styles.primary, busy && styles.disabled]}
-          >
-            <Text style={styles.primaryLabel}>{ACTION_TRY_AGAIN}</Text>
-          </Pressable>
+          <>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityState={{ disabled: busy, busy }}
+              disabled={busy}
+              onPress={() => start(retainedPhoto ?? undefined, true)}
+              style={[styles.button, styles.primary, busy && styles.disabled]}
+            >
+              <Text style={styles.primaryLabel}>{ACTION_TRY_AGAIN}</Text>
+            </Pressable>
+            <Text accessibilityLiveRegion="polite" style={styles.retryNote}>
+              {RETRY_SAVE_NOTICE}
+            </Text>
+          </>
+        ) : outageState === 'saved' ? (
+          <>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityState={{ disabled: busy, busy }}
+              disabled={busy}
+              onPress={() => start(retainedPhoto ?? undefined)}
+              style={[styles.button, styles.primary, busy && styles.disabled]}
+            >
+              <Text style={styles.primaryLabel}>{ACTION_RETRY_TRY_ON}</Text>
+            </Pressable>
+            <Text accessibilityLiveRegion="polite" style={styles.retryNote}>
+              {RETRY_CHARGE_NOTICE}
+            </Text>
+          </>
         ) : (
           <Pressable
             accessibilityRole="button"
@@ -505,6 +538,11 @@ const styles = StyleSheet.create({
     color: '#8a2f2b',
     fontSize: 14,
     lineHeight: 20,
+  },
+  retryNote: {
+    color: muted,
+    fontSize: 13,
+    lineHeight: 18,
   },
   outageBlock: {
     gap: 8,
