@@ -5,6 +5,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.function.Consumer;
 
 import javax.sql.DataSource;
 
@@ -33,6 +34,11 @@ public class NotificationConfiguration {
 	@Bean
 	FactoryBean<JdbcNotificationEventStore> jdbcNotificationEventStore(ObjectProvider<DataSource> dataSources) {
 		return factory(dataSources, JdbcNotificationEventStore.class, JdbcNotificationEventStore::new);
+	}
+
+	@Bean
+	FactoryBean<JdbcDeviceRegistrationStore> jdbcDeviceRegistrationStore(ObjectProvider<DataSource> dataSources) {
+		return factory(dataSources, JdbcDeviceRegistrationStore.class, JdbcDeviceRegistrationStore::new);
 	}
 
 	/**
@@ -85,6 +91,7 @@ public class NotificationConfiguration {
 		ObjectProvider<FcmClient> clients,
 		ObjectProvider<NotificationEventStore> stores,
 		ObjectProvider<NotificationDeliveryConfiguration> configs,
+		ObjectProvider<DeviceRegistrationStore> registrationStores,
 		ObjectProvider<MeterRegistry> meterRegistries,
 		ObjectProvider<ObservationRegistry> observationRegistries
 	) {
@@ -98,13 +105,18 @@ public class NotificationConfiguration {
 				if (client == null || store == null || config == null) {
 					return null;
 				}
+				DeviceRegistrationStore registrations = registrationStores.getIfAvailable();
+				Consumer<String> invalidTokenPruner = registrations == null
+					? token -> {}
+					: registrations::prune;
 				return new FcmDeliveryWorker(
 					store,
 					client,
 					config,
 					ThreadLocalRandom.current(),
 					meterRegistries.getIfAvailable(),
-					observationRegistries.getIfAvailable());
+					observationRegistries.getIfAvailable(),
+					invalidTokenPruner);
 			}
 
 			@Override

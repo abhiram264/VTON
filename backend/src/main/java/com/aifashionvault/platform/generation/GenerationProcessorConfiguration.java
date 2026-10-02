@@ -140,10 +140,15 @@ public class GenerationProcessorConfiguration {
 	) {
 		return factory(PrivacyApprovedInputTransfer.class, () -> {
 			ObjectStore objectStore = objectStores.getIfAvailable();
-			return objectStore == null
+			ConsentService consents = consentServices.getIfAvailable();
+			// A missing consent service is a REFUSAL, not an unchecked transfer: the
+			// transfer component is what enforces "no third-party body-image transfer
+			// without an active consent", so without it there is no generation
+			// processor at all (the worker factory null-checks this bean) rather than
+			// one that would move body images with no consent boundary.
+			return objectStore == null || consents == null
 				? null
-				: new PrivacyApprovedInputTransfer(privacyTransferPolicy, objectStore,
-					consentServices.getIfAvailable());
+				: new PrivacyApprovedInputTransfer(privacyTransferPolicy, objectStore, consents);
 		});
 	}
 
@@ -194,6 +199,20 @@ public class GenerationProcessorConfiguration {
 		return factory(JdbcGenerationCapacityLeaseStore.class, () -> {
 			DataSource dataSource = dataSources.getIfAvailable();
 			return dataSource == null ? null : new JdbcGenerationCapacityLeaseStore(dataSource);
+		});
+	}
+
+	/**
+	 * Product-lifecycle analytics sink (C22). Late-binding like the metrics bean: it
+	 * exists only once a MeterRegistry is present, so slim contexts stay loadable and
+	 * the processor's optional dependency simply resolves to null.
+	 */
+	@Bean
+	@ConditionalOnMissingBean(com.aifashionvault.analytics.ProductMetrics.class)
+	FactoryBean<com.aifashionvault.analytics.ProductMetrics> productMetrics(ObjectProvider<MeterRegistry> registries) {
+		return factory(com.aifashionvault.analytics.ProductMetrics.class, () -> {
+			MeterRegistry registry = registries.getIfAvailable();
+			return registry == null ? null : new com.aifashionvault.analytics.MicrometerProductMetrics(registry);
 		});
 	}
 
@@ -263,6 +282,7 @@ public class GenerationProcessorConfiguration {
 		ObjectProvider<WorkOutboxStore> workOutboxes,
 		ObjectProvider<CallbackInboxStore> callbackInboxes,
 		ObjectProvider<GenerationMetrics> metrics,
+		ObjectProvider<com.aifashionvault.analytics.ProductMetrics> productMetrics,
 		ObjectProvider<GenerationCapacityLeaseStore> capacityLeases,
 		ObjectProvider<NotificationEventStore> notificationEvents,
 		ObjectProvider<GlobalCostCircuitBreaker> costCircuitBreakers,
@@ -309,7 +329,8 @@ public class GenerationProcessorConfiguration {
 				notificationEvents.getIfAvailable(),
 				null,
 				costCircuitBreaker,
-				providerHealthGates.getIfAvailable(this::providerHealthGate));
+				providerHealthGates.getIfAvailable(this::providerHealthGate),
+				productMetrics.getIfAvailable());
 		});
 	}
 

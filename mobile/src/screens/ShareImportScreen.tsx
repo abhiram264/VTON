@@ -15,6 +15,8 @@ import type {
   ShareImportResponse,
 } from '../features/share/importTypes';
 import CollectionsPicker from '../features/collections/CollectionsPicker';
+import {createCollectionsApi} from '../features/collections/collectionsApi';
+import type {CollectionsApi} from '../features/collections/collectionsApi';
 import {apiConfig, type ShareImportApiConfig} from './share-import/apiConfig';
 import {attachRecoveryImage} from './share-import/recoveryClient';
 import type {SharePayload} from '../features/share/types';
@@ -171,7 +173,11 @@ export default function ShareImportScreen({
     api: ShareImportApiConfig;
     confirmer?: ShareImportConfirmer;
     previewLoader?: ShareImportPreviewLoader;
-    resolved: { confirmer: ShareImportConfirmer; previewLoader: ShareImportPreviewLoader };
+    resolved: {
+      confirmer: ShareImportConfirmer;
+      previewLoader: ShareImportPreviewLoader;
+      collections: CollectionsApi;
+    };
   } | null>(null);
   if (
     clientsRef.current === null ||
@@ -186,11 +192,16 @@ export default function ShareImportScreen({
       resolved: {
         confirmer: confirmer ?? createShareImportConfirmer(api),
         previewLoader: previewLoader ?? createShareImportPreviewLoader(api),
+        // The picker must read through the SAME config as the rest of this
+        // screen: its own module-level default would resolve a different API
+        // base URL and silently fail to load.
+        collections: createCollectionsApi(api),
       },
     };
   }
   const activeConfirmer = clientsRef.current.resolved.confirmer;
   const activePreviewLoader = clientsRef.current.resolved.previewLoader;
+  const activeCollectionsApi = clientsRef.current.resolved.collections;
   const [preview, setPreview] = useState<ShareImportPreview | null>(null);
   const [name, setName] = useState('');
   const [category, setCategory] = useState<string | null>(null);
@@ -534,6 +545,7 @@ export default function ShareImportScreen({
           </Pressable>
           {showCollections ? (
             <CollectionsPicker
+              api={activeCollectionsApi}
               onChange={ids => setSelectedCollectionId(ids[ids.length - 1] ?? null)}
               selectedIds={
                 selectedCollectionId === null ? [] : [selectedCollectionId]
