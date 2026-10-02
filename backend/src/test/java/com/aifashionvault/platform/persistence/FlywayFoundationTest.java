@@ -168,21 +168,25 @@ class FlywayFoundationTest {
 	}
 
 	@Test
-    void flywayAppliesV001ThroughV024OnEmptyDatabase() {
+    void flywayAppliesV001ThroughV025OnEmptyDatabase() {
         List<Map<String, Object>> history = jdbc.queryForList(
             "SELECT version, success FROM flyway_schema_history WHERE version IS NOT NULL ORDER BY installed_rank");
-        assertThat(history).hasSize(24);
+        assertThat(history).hasSize(25);
         assertThat(history).extracting(row -> Integer.parseInt(row.get("version").toString()))
-            .containsExactly(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24);
+            .containsExactly(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25);
         assertThat(history).extracting(row -> row.get("success")).containsOnly(true);
+		// The V024 migration is V024__notification_fencing_and_provider_constraints__contract.sql.
+		// Flyway derives the description by replacing each underscore with a space, so the
+		// DOUBLE underscore lands as two spaces. The old expectation collapsed it to one,
+		// which no Flyway version does - the file is append-only and its name is
+		// load-bearing, so renaming it to make the assertion prettier would be the wrong
+		// direction.
 		assertThat(jdbc.queryForObject(
 			"SELECT description FROM flyway_schema_history WHERE version = '024'",
 			String.class)).isEqualTo("notification fencing and provider constraints  contract");
-		// The migration is V024__notification_fencing_and_provider_constraints__contract.sql. Flyway
-		// derives the description by replacing each underscore with a space, so the DOUBLE
-		// underscore lands as two spaces. The old expectation collapsed it to one, which no
-		// Flyway version does - the file is append-only and its name is load-bearing, so renaming
-		// it to make the assertion prettier would be the wrong direction.
+		assertThat(jdbc.queryForObject(
+			"SELECT description FROM flyway_schema_history WHERE version = '025'",
+			String.class)).isEqualTo("device registration");
     }
 
 	@Test
@@ -334,7 +338,7 @@ class FlywayFoundationTest {
 		List<Map<String, Object>> original = jdbc.queryForList(
 			"SELECT version, checksum FROM flyway_schema_history "
 				+ "WHERE version IS NOT NULL ORDER BY installed_rank");
-            assertThat(original).hasSize(24);
+            assertThat(original).hasSize(25);
 
 		try (PostgreSQLContainer second = newPostgres()) {
 			second.start();
@@ -352,7 +356,7 @@ class FlywayFoundationTest {
 				"SELECT version, checksum FROM flyway_schema_history "
 					+ "WHERE version IS NOT NULL ORDER BY installed_rank");
 
-            assertThat(replayed).hasSize(24);
+            assertThat(replayed).hasSize(25);
 			assertThat(replayed)
 				.usingRecursiveFieldByFieldElementComparator()
 				.containsExactlyElementsOf(original);
@@ -360,7 +364,7 @@ class FlywayFoundationTest {
 	}
 
 	@Test
-    void publishedV002ValidatesAndUpgradesToV024WithoutChecksumRepair() throws Exception {
+    void publishedV002ValidatesAndUpgradesToV025WithoutChecksumRepair() throws Exception {
 		Path publishedMigrations = Files.createTempDirectory("flyway-published-v002-");
 		try (PostgreSQLContainer legacy = newPostgres()) {
 			byte[] currentV002 = migrationBytes("V002__create_avatar_profiles.sql");
@@ -424,7 +428,7 @@ class FlywayFoundationTest {
 				"SELECT version FROM flyway_schema_history "
 					+ "WHERE version IS NOT NULL ORDER BY installed_rank",
 				String.class))
-                .containsExactly("001", "002", "003", "004", "005", "006", "007", "008", "009", "010", "011", "012", "013", "014", "015", "016", "017", "018", "019", "020", "021", "022", "023", "024");
+                .containsExactly("001", "002", "003", "004", "005", "006", "007", "008", "009", "010", "011", "012", "013", "014", "015", "016", "017", "018", "019", "020", "021", "022", "023", "024", "025");
 			assertThat(upgraded.queryForMap(
 				"SELECT revision, lifecycle_state, warnings::text AS warnings, "
 					+ "source_upload_id, preflight_policy_version "
@@ -743,7 +747,7 @@ class FlywayFoundationTest {
 	}
 
 	@Test
-    void v012BaselineMigratesToV024WithoutDataLoss() {
+    void v012BaselineMigratesToV025WithoutDataLoss() {
 		try (PostgreSQLContainer legacy = newPostgres()) {
 			legacy.start();
 			Flyway.configure()
@@ -880,7 +884,7 @@ class FlywayFoundationTest {
 				"SELECT version, success FROM flyway_schema_history "
 					+ "WHERE version IS NOT NULL ORDER BY installed_rank"))
 				.extracting(row -> Integer.parseInt(row.get("version").toString()))
-                .containsExactly(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24);
+                .containsExactly(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25);
 			assertThat(upgraded.queryForObject(
 				"SELECT COUNT(*) FROM generation_job",
 				Integer.class)).isEqualTo(4);
