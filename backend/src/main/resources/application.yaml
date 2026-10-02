@@ -95,6 +95,19 @@ vault:
     # See the NOT YET ENFORCING note above; true today = 403 on all generation
     # writes, including POST /looks/{id}/regenerate.
     attestation-required: false
+    # Approved generation spend caps (C19). These were previously hard-coded
+    # constants in GenerationProcessorConfiguration; they are launch
+    # configuration now, so the approved budget is visible and set per
+    # environment rather than compiled in. The defaults below reproduce the
+    # previous source values (USD 500 global / 25 per user / 250 per provider
+    # per day). The per-provider ceiling applies to the provider the registry
+    # selects at runtime. Set the env variables to an approved budget.
+    spend:
+      global-ceiling: ${GENERATION_SPEND_GLOBAL_CEILING:500.00}
+      per-user-ceiling: ${GENERATION_SPEND_PER_USER_CEILING:25.00}
+      provider-ceiling: ${GENERATION_SPEND_PROVIDER_CEILING:250.00}
+      currency: ${GENERATION_SPEND_CURRENCY:USD}
+      window: ${GENERATION_SPEND_WINDOW:1d}
     # Queue sizing is NOT application configuration. SQS visibility timeout, long
     # poll, message retention and redrive are provisioned with the queue itself
     # (infra/terraform/queue.tf, infra/docker/localstack_ready.py), and the

@@ -1,7 +1,6 @@
 package com.aifashionvault.platform.generation;
 
 import java.time.Clock;
-import java.math.BigDecimal;
 import java.time.Duration;
 import java.util.Map;
 import java.util.Set;
@@ -12,6 +11,7 @@ import javax.sql.DataSource;
 import org.springframework.beans.factory.FactoryBean;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.scheduling.TaskScheduler;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
@@ -60,13 +60,8 @@ import io.micrometer.core.instrument.MeterRegistry;
  * the prerequisites exist. Bean names and product types are unchanged.
  */
 @Configuration(proxyBeanMethods = false)
+@EnableConfigurationProperties(GenerationSpendProperties.class)
 public class GenerationProcessorConfiguration {
-
-	static final String MVP_GLOBAL_SPEND_CEILING = "500.00";
-	static final String MVP_PER_USER_SPEND_CEILING = "25.00";
-	static final String MVP_PROVIDER_SPEND_CEILING = "250.00";
-	static final String MVP_BUDGET_CURRENCY = "USD";
-	static final Duration MVP_BUDGET_WINDOW = Duration.ofDays(1);
 
 	@Bean
 	@ConditionalOnMissingBean(Clock.class)
@@ -204,7 +199,8 @@ public class GenerationProcessorConfiguration {
 	FactoryBean<GlobalCostCircuitBreaker> globalCostCircuitBreaker(
 		ObjectProvider<GenerationCostMetrics> costMetrics,
 		ObjectProvider<FashnVtonProvider> fashnProviders,
-		ObjectProvider<ProviderRegistry> providerRegistries
+		ObjectProvider<ProviderRegistry> providerRegistries,
+		GenerationSpendProperties spendProperties
 	) {
 		return factory(GlobalCostCircuitBreaker.class, () -> {
 			GenerationCostMetrics metrics = costMetrics.getIfAvailable();
@@ -218,13 +214,22 @@ public class GenerationProcessorConfiguration {
 			String providerKey = provider.providerKey().value();
 			return new AggregateBackedCostCircuitBreaker(
 				metrics,
-				new AbuseBudgetPolicy(
-					new BigDecimal(MVP_GLOBAL_SPEND_CEILING),
-					new BigDecimal(MVP_PER_USER_SPEND_CEILING),
-					Map.of(providerKey, new BigDecimal(MVP_PROVIDER_SPEND_CEILING)),
-					MVP_BUDGET_CURRENCY,
-					MVP_BUDGET_WINDOW));
+				abuseBudgetPolicy(spendProperties, providerKey));
 		});
+	}
+
+	/**
+	 * Approved spend caps (C19) come from {@code vault.generation.spend} rather
+	 * than compiled constants; the per-provider ceiling applies to the provider
+	 * the registry selects at runtime.
+	 */
+	static AbuseBudgetPolicy abuseBudgetPolicy(GenerationSpendProperties properties, String providerKey) {
+		return new AbuseBudgetPolicy(
+			properties.getGlobalCeiling(),
+			properties.getPerUserCeiling(),
+			Map.of(providerKey, properties.getProviderCeiling()),
+			properties.getCurrency(),
+			properties.getWindow());
 	}
 
 	/**
