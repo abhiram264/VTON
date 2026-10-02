@@ -10,20 +10,18 @@ package com.aifashionvault.featureflag;
  * unsupported capability reports disabled and cannot be enabled through
  * {@link FeatureFlags#override} or {@link FeatureFlagProperties#setEnabled}.
  *
- * <p>Unsupported today: natural-language Studio (C21) is incomplete, HD generation
- * is advertised without a consumer, and the new quality gate (C18) is a future,
- * externally blocked capability.
+ * <p>Unsupported today: HD generation is advertised without a consumer, and the
+ * new quality gate (C18) is a future, externally blocked capability.
  *
- * <p>{@code MULTI_ITEM} IS supported: the C12 create path is implemented
- * ({@code POST /generations/multi}, admission-gated, frozen-intent tested) and its
- * real switch is the server-side {@code vault.generation.multi-item-enabled}
- * property, which ships OFF. The advertised flag therefore defaults OFF while
- * remaining controllable by the backend — conservative posture, backend
- * authoritative.
+ * <p>{@code MULTI_ITEM} (C12) and {@code NATURAL_LANGUAGE_STUDIO} (C21) ARE
+ * supported: both have a mounted, admission-gated backing path, so their real
+ * switch is the server-side property, which ships OFF. The advertised flags
+ * therefore default OFF while remaining backend-controllable — conservative
+ * posture, backend authoritative.
  */
 public enum FeatureFlagName {
 	MULTI_ITEM(true),
-	NATURAL_LANGUAGE_STUDIO(false),
+	NATURAL_LANGUAGE_STUDIO(true),
 	TRYON_MAX(true),
 	HD_GENERATION(false),
 	SHARE_IMPORT_ANDROID(true),

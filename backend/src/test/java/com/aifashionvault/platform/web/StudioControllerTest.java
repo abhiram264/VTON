@@ -213,6 +213,9 @@ class StudioControllerTest {
 		StudioController controller = new StudioController(
 			factory.getBeanProvider(JdbcStudioStore.class),
 			factory.getBeanProvider(StudioDraftCloner.class),
+			factory.getBeanProvider(com.aifashionvault.studio.agent.StudioAgentTools.class),
+			factory.getBeanProvider(com.aifashionvault.studio.agent.StudioCommandPlanner.class),
+			factory.getBeanProvider(com.aifashionvault.featureflag.FeatureFlags.class),
 			factory.getBeanProvider(Clock.class));
 		assertThatThrownBy(() -> controller.get(new UserId(UUID.randomUUID()), UUID.randomUUID().toString()))
 			.isInstanceOf(RuntimeException.class);

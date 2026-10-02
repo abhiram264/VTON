@@ -43,29 +43,21 @@ class FeatureFlagServiceTest {
 			FeatureFlagName.NEW_QUALITY_GATE
 		);
 
-		// Only the postures this unit owns are asserted. NATURAL_LANGUAGE_STUDIO is
-		// deliberately excluded: its supported bit is owned by the C21 change
-		// (StudioController's natural-language route), so pinning it here would make
-		// two concurrent edits fight over one assertion.
-		for (FeatureFlagName name : List.of(
-				FeatureFlagName.MULTI_ITEM,
-				FeatureFlagName.TRYON_MAX,
-				FeatureFlagName.SHARE_IMPORT_ANDROID,
-				FeatureFlagName.SHARE_IMPORT_IOS,
-				FeatureFlagName.HD_GENERATION,
-				FeatureFlagName.NEW_QUALITY_GATE)) {
+		// Every literal is covered: MULTI_ITEM (C12) and NATURAL_LANGUAGE_STUDIO
+		// (C21) have mounted backing paths, so they are supported but ship OFF;
+		// unsupported capabilities always report disabled whatever the config says.
+		for (FeatureFlagName name : FeatureFlagName.values()) {
 			boolean expectedSupported =
 				name == FeatureFlagName.MULTI_ITEM
+					|| name == FeatureFlagName.NATURAL_LANGUAGE_STUDIO
 					|| name == FeatureFlagName.TRYON_MAX
 					|| name == FeatureFlagName.SHARE_IMPORT_ANDROID
 					|| name == FeatureFlagName.SHARE_IMPORT_IOS;
 			assertThat(name.isSupported()).isEqualTo(expectedSupported);
-			// Supported is NOT the same as default-enabled: MULTI_ITEM is an
-			// implemented capability whose server-side switch
-			// (vault.generation.multi-item-enabled) and advertised default both ship
-			// OFF, so it is supported while reporting disabled here.
-			boolean expectedDefaultEnabled = expectedSupported && name != FeatureFlagName.MULTI_ITEM;
-			assertThat(this.service.isEnabled(name)).isEqualTo(expectedDefaultEnabled);
+			// Supported reports its bound value; the two new capabilities ship
+			// default-OFF, which is what keeps them out of a release.
+			assertThat(this.service.isEnabled(name))
+				.isEqualTo(expectedSupported && this.properties.isEnabled(name));
 		}
 	}
 

@@ -108,6 +108,7 @@ class LooksHttpContractTest {
 		mockMvc.perform(get("/looks")).andExpect(status().isUnauthorized());
 		mockMvc.perform(get("/looks/" + id)).andExpect(status().isUnauthorized());
 		mockMvc.perform(post("/looks/" + id + "/share-link")).andExpect(status().isUnauthorized());
+		mockMvc.perform(post("/looks/" + id + "/export-ack")).andExpect(status().isUnauthorized());
 		mockMvc.perform(post("/looks/" + id + "/regenerate").header("Idempotency-Key", "key"))
 			.andExpect(status().isUnauthorized());
 		mockMvc.perform(delete("/looks/" + id)).andExpect(status().isUnauthorized());
@@ -136,6 +137,24 @@ class LooksHttpContractTest {
 		assertThat(objects.deleted).isEqualTo(new ObjectRef(StorageDomain.LOOK, storageKey(owner, id)));
 		mockMvc.perform(get("/looks/" + id).header(HttpHeaders.AUTHORIZATION, bearer(owner.token())))
 			.andExpect(status().isNotFound()).andExpect(content().string(NOT_FOUND));
+	}
+
+	@Test
+	void exportAckIsOwnerScopedAndReturnsNoContent() throws Exception {
+		Owner owner = owner();
+		UUID id = insertLook(owner);
+
+		// C22 "Look exported": the client acknowledges a local export; the ack is a
+		// fire-and-forget 204 and never discloses anything about the Look.
+		mockMvc.perform(post("/looks/" + id + "/export-ack").header(HttpHeaders.AUTHORIZATION, bearer(owner.token())))
+			.andExpect(status().isNoContent())
+			.andExpect(content().string(""));
+
+		// A Look the caller does not own is indistinguishable from a missing one.
+		Owner other = owner("export-ack-other-subject");
+		mockMvc.perform(post("/looks/" + id + "/export-ack").header(HttpHeaders.AUTHORIZATION, bearer(other.token())))
+			.andExpect(status().isNotFound())
+			.andExpect(content().string(NOT_FOUND));
 	}
 
 	@Test

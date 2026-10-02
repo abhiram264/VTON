@@ -84,6 +84,10 @@ class FeatureFlagCapabilityPostureTest {
 		// it reachable. Pre-repair this reported true.
 		this.properties.setHdGeneration(true);
 		this.properties.setNewQualityGate(true);
+		// NATURAL_LANGUAGE_STUDIO is deliberately absent here: C21 gave it a mounted
+		// backing path, so it is supported-but-default-OFF (see FeatureFlagServiceTest)
+		// rather than hard-unsupported, and this test covers only the hard-unsupported
+		// posture.
 
 		assertThat(this.service.isEnabled(FeatureFlagName.HD_GENERATION)).isFalse();
 		assertThat(this.service.isEnabled(FeatureFlagName.NEW_QUALITY_GATE)).isFalse();
