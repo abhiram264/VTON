@@ -37,3 +37,20 @@ export type ShareImportResolver = (
   payload: SharePayload,
   signal: AbortSignal,
 ) => Promise<ShareImportResponse>;
+
+/**
+ * The persisted Vault item a confirmation produced. Identity is server-derived
+ * from (owner, import) — `POST /share/imports/{importId}/confirm` is
+ * idempotent, so repeating a confirmation (including after a lost response)
+ * returns this same `id` instead of creating a second item.
+ */
+export type ShareImportConfirmedItem = {
+  id: string;
+  sourceReferenceId: string;
+  createdAt?: string;
+};
+
+export type ShareImportConfirmer = (
+  importId: string,
+  signal: AbortSignal,
+) => Promise<ShareImportConfirmedItem>;
