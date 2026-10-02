@@ -2,6 +2,7 @@ package com.aifashionvault.platform.web;
 
 import java.net.URI;
 import java.time.Clock;
+import java.util.List;
 import jakarta.servlet.http.HttpServletRequest;
 
 import javax.sql.DataSource;
@@ -81,6 +82,11 @@ public class GenerationsController {
 			.location(URI.create("/generations/" + body.id()))
 			.contentType(MediaType.APPLICATION_JSON)
 			.body(body);
+	}
+
+	@GetMapping
+	public List<GenerationResponse> list(@AuthenticationPrincipal UserId userId) {
+		return service().list(userId);
 	}
 
 	@GetMapping("/{generationId}")
