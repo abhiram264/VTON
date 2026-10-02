@@ -582,13 +582,23 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 			prepared = inputTransfer.prepare(
 				media.avatar(),
 				active.capabilities().inputTransfers(),
-				PROVIDER_SIGNED_READ_TTL);
+				PROVIDER_SIGNED_READ_TTL,
+				job.userId());
 			for (VtonProductAsset product : media.products()) {
 				inputTransfer.prepare(
 					product.media(),
 					active.capabilities().inputTransfers(),
-					PROVIDER_SIGNED_READ_TTL);
+					PROVIDER_SIGNED_READ_TTL,
+					job.userId());
 			}
+		}
+		catch (ConsentRequiredForTransferException ex) {
+			// The owner has not granted (or has withdrawn) consent for the
+			// body image to reach a third-party provider. Nothing was read and
+			// nothing was signed, so this is a deterministic, non-retryable
+			// refusal rather than an outage.
+			failTerminal(job, attempt, lease, TerminalReason.CONSENT_REQUIRED.name(), false);
+			return;
 		}
 		catch (RuntimeException ex) {
 			failTerminal(job, attempt, lease, TerminalReason.INTERNAL_INVARIANT_FAILURE.name(), false);

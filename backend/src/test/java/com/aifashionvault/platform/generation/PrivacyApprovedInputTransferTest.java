@@ -1,12 +1,15 @@
 package com.aifashionvault.platform.generation;
 
 import java.net.URI;
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.Set;
+import java.util.UUID;
 
 import org.junit.jupiter.api.Test;
 
@@ -19,8 +22,14 @@ import com.aifashionvault.platform.objectstore.ObjectMetadata;
 import com.aifashionvault.platform.objectstore.ObjectRef;
 import com.aifashionvault.platform.objectstore.ObjectStore;
 import com.aifashionvault.platform.objectstore.PresignedAccess;
+import com.aifashionvault.privacy.Consent;
+import com.aifashionvault.privacy.ConsentPurpose;
+import com.aifashionvault.privacy.ConsentService;
+import com.aifashionvault.privacy.ConsentStore;
+import com.aifashionvault.shared.ConsentId;
 import com.aifashionvault.shared.StorageDomain;
 import com.aifashionvault.shared.StorageKey;
+import com.aifashionvault.shared.UserId;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
@@ -30,6 +39,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
@@ -165,6 +175,123 @@ class PrivacyApprovedInputTransferTest {
 
     private static PrivacyApprovedInputTransfer transfer(ObjectStore store) {
         return new PrivacyApprovedInputTransfer(policy(), store);
+    }
+
+    /**
+     * C06: a body image may not reach a third-party provider without an active
+     * consent, and the refusal must happen before the object is read or a
+     * signed read is minted.
+     */
+    private static PrivacyApprovedInputTransfer consentCheckedTransfer(
+        ObjectStore store,
+        ConsentStore consents
+    ) {
+        return new PrivacyApprovedInputTransfer(
+            policy(),
+            store,
+            new ConsentService(consents, Clock.fixed(EXPIRES, ZoneOffset.UTC), POLICY_VERSION));
+    }
+
+    private static final UserId OWNER =
+        new UserId(UUID.fromString("11111111-1111-1111-1111-111111111111"));
+    private static final String POLICY_VERSION = "2026-10-03";
+
+    private static final class MemoryConsentStore implements ConsentStore {
+        private final java.util.List<Consent> rows = new java.util.ArrayList<>();
+
+        @Override
+        public Consent insert(Consent consent) {
+            rows.add(consent);
+            return consent;
+        }
+
+        @Override
+        public Optional<Consent> active(UserId userId, String purpose) {
+            return rows.stream()
+                .filter(row -> row.userId().equals(userId) && row.purpose().equals(purpose)
+                    && row.revokedAt() == null)
+                .findFirst();
+        }
+
+        @Override
+        public int revoke(UserId userId, String purpose, Instant revokedAt) {
+            int revoked = 0;
+            for (int index = 0; index < rows.size(); index++) {
+                Consent row = rows.get(index);
+                if (row.userId().equals(userId) && row.purpose().equals(purpose)
+                    && row.revokedAt() == null) {
+                    rows.set(index, new Consent(row.id(), row.userId(), row.purpose(),
+                        row.version(), row.grantedAt(), revokedAt));
+                    revoked++;
+                }
+            }
+            return revoked;
+        }
+    }
+
+    @Test
+    void transferWithoutThirdPartyConsentIsRefusedBeforeAnyReadOrSignature() {
+        ObjectStore store = mock(ObjectStore.class);
+        MemoryConsentStore consents = new MemoryConsentStore();
+        PrivateMediaRef input = media("users/u1/avatars/a.jpg", OptionalLong.of(3));
+
+        assertThatExceptionOfType(ConsentRequiredForTransferException.class)
+            .isThrownBy(() -> consentCheckedTransfer(store, consents).prepare(
+                input, BOTH, MAX_SIGNED_READ_TTL, OWNER));
+
+        verifyNoInteractions(store);
+    }
+
+    @Test
+    void withdrawnConsentStopsTheNextTransfer() {
+        ObjectStore store = mock(ObjectStore.class);
+        ObjectRef object = new ObjectRef(StorageDomain.AVATAR, "users/u1/avatars/a.jpg");
+        byte[] payload = new byte[] {1, 2, 3};
+        when(store.readBounded(eq(object), any(), eq((int) MAX_INLINE_BYTES))).thenReturn(payload);
+
+        MemoryConsentStore consents = new MemoryConsentStore();
+        PrivacyApprovedInputTransfer transfer = consentCheckedTransfer(store, consents);
+
+        // Granted: the transfer proceeds.
+        consents.insert(new Consent(new ConsentId(UUID.randomUUID()), OWNER,
+            ConsentPurpose.THIRD_PARTY_AI_TRANSFER.wireName(), POLICY_VERSION, EXPIRES, null));
+        PrivacyApprovedInputTransfer.PreparedInput prepared = transfer.prepare(
+            media("users/u1/avatars/a.jpg", OptionalLong.of(payload.length)), BOTH,
+            MAX_SIGNED_READ_TTL, OWNER);
+        assertThat(prepared.inlineBytes()).contains(payload);
+
+        // Withdrawn: the very next transfer is refused and reads nothing more.
+        consents.revoke(OWNER, ConsentPurpose.THIRD_PARTY_AI_TRANSFER.wireName(), EXPIRES);
+        assertThatExceptionOfType(ConsentRequiredForTransferException.class)
+            .isThrownBy(() -> transfer.prepare(
+                media("users/u1/avatars/a.jpg", OptionalLong.of(payload.length)), BOTH,
+                MAX_SIGNED_READ_TTL, OWNER));
+        verify(store, times(1)).readBounded(eq(object), any(), eq((int) MAX_INLINE_BYTES));
+    }
+
+    @Test
+    void aDifferentPurposeOrOwnerDoesNotAuthorizeTheTransfer() {
+        ObjectStore store = mock(ObjectStore.class);
+        ConsentStore consents = new MemoryConsentStore();
+        consents.insert(new Consent(new ConsentId(UUID.randomUUID()), OWNER,
+            ConsentPurpose.BODY_IMAGE_PROCESSING.wireName(), POLICY_VERSION, EXPIRES, null));
+
+        // Same owner, wrong purpose.
+        assertThatExceptionOfType(ConsentRequiredForTransferException.class)
+            .isThrownBy(() -> consentCheckedTransfer(store, consents).prepare(
+                media("users/u1/avatars/a.jpg", OptionalLong.of(3)), BOTH,
+                MAX_SIGNED_READ_TTL, OWNER));
+
+        // Right purpose, another owner.
+        consents.insert(new Consent(new ConsentId(UUID.randomUUID()),
+            new UserId(UUID.fromString("22222222-2222-2222-2222-222222222222")),
+            ConsentPurpose.THIRD_PARTY_AI_TRANSFER.wireName(), POLICY_VERSION, EXPIRES, null));
+        assertThatExceptionOfType(ConsentRequiredForTransferException.class)
+            .isThrownBy(() -> consentCheckedTransfer(store, consents).prepare(
+                media("users/u1/avatars/a.jpg", OptionalLong.of(3)), BOTH,
+                MAX_SIGNED_READ_TTL, OWNER));
+
+        verifyNoInteractions(store);
     }
 
     private static PrivacyTransferPolicy policy() {

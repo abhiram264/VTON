@@ -20,18 +20,18 @@ class FeatureFlagServiceTest {
 	}
 
 	@Test
-	void freshServiceReturnsSixTrueDefaultsAndNewQualityGateFalse() {
-		assertThat(this.service.isEnabled(FeatureFlagName.MULTI_ITEM)).isTrue();
-		assertThat(this.service.isEnabled(FeatureFlagName.NATURAL_LANGUAGE_STUDIO)).isTrue();
+	void freshServiceReportsOnlySupportedCapabilitiesEnabled() {
+		assertThat(this.service.isEnabled(FeatureFlagName.MULTI_ITEM)).isFalse();
+		assertThat(this.service.isEnabled(FeatureFlagName.NATURAL_LANGUAGE_STUDIO)).isFalse();
 		assertThat(this.service.isEnabled(FeatureFlagName.TRYON_MAX)).isTrue();
-		assertThat(this.service.isEnabled(FeatureFlagName.HD_GENERATION)).isTrue();
+		assertThat(this.service.isEnabled(FeatureFlagName.HD_GENERATION)).isFalse();
 		assertThat(this.service.isEnabled(FeatureFlagName.SHARE_IMPORT_ANDROID)).isTrue();
 		assertThat(this.service.isEnabled(FeatureFlagName.SHARE_IMPORT_IOS)).isTrue();
 		assertThat(this.service.isEnabled(FeatureFlagName.NEW_QUALITY_GATE)).isFalse();
 	}
 
 	@Test
-	void featureFlagNameEnumContainsExactSevenLiteralsWithMatchingDefaults() {
+	void featureFlagNameEnumContainsExactSevenLiteralsWithSupportPosture() {
 		assertThat(FeatureFlagName.values()).containsExactly(
 			FeatureFlagName.MULTI_ITEM,
 			FeatureFlagName.NATURAL_LANGUAGE_STUDIO,
@@ -43,34 +43,36 @@ class FeatureFlagServiceTest {
 		);
 
 		for (FeatureFlagName name : FeatureFlagName.values()) {
-			boolean expectedDefault = (name != FeatureFlagName.NEW_QUALITY_GATE);
-			assertThat(name.defaultEnabled()).isEqualTo(expectedDefault);
-			assertThat(name.isDefaultEnabled()).isEqualTo(expectedDefault);
-			assertThat(this.service.isEnabled(name)).isEqualTo(expectedDefault);
+			boolean expectedSupported =
+				name == FeatureFlagName.TRYON_MAX
+					|| name == FeatureFlagName.SHARE_IMPORT_ANDROID
+					|| name == FeatureFlagName.SHARE_IMPORT_IOS;
+			assertThat(name.isSupported()).isEqualTo(expectedSupported);
+			assertThat(this.service.isEnabled(name)).isEqualTo(expectedSupported);
 		}
 	}
 
 	@Test
-	void propertyFalseIsOverriddenByProgrammaticTrueAndRestoredAfterClearOverride() {
-		this.properties.setEnabled(FeatureFlagName.HD_GENERATION, false);
-		assertThat(this.service.isEnabled(FeatureFlagName.HD_GENERATION)).isFalse();
+	void supportedFlagDisabledByConfigurationIsOverriddenOnAndRestoredAfterClear() {
+		this.properties.setEnabled(FeatureFlagName.TRYON_MAX, false);
+		assertThat(this.service.isEnabled(FeatureFlagName.TRYON_MAX)).isFalse();
 
-		this.service.override(FeatureFlagName.HD_GENERATION, true);
-		assertThat(this.service.isEnabled(FeatureFlagName.HD_GENERATION)).isTrue();
+		this.service.override(FeatureFlagName.TRYON_MAX, true);
+		assertThat(this.service.isEnabled(FeatureFlagName.TRYON_MAX)).isTrue();
 
-		this.service.clearOverride(FeatureFlagName.HD_GENERATION);
-		assertThat(this.service.isEnabled(FeatureFlagName.HD_GENERATION)).isFalse();
+		this.service.clearOverride(FeatureFlagName.TRYON_MAX);
+		assertThat(this.service.isEnabled(FeatureFlagName.TRYON_MAX)).isFalse();
 	}
 
 	@Test
-	void propertyTrueIsOverriddenByProgrammaticFalseAndRestoredAfterClearOverride() {
-		assertThat(this.service.isEnabled(FeatureFlagName.MULTI_ITEM)).isTrue();
+	void supportedFlagIsDisabledByOverrideAndRestoredAfterClear() {
+		assertThat(this.service.isEnabled(FeatureFlagName.SHARE_IMPORT_ANDROID)).isTrue();
 
-		this.service.override(FeatureFlagName.MULTI_ITEM, false);
-		assertThat(this.service.isEnabled(FeatureFlagName.MULTI_ITEM)).isFalse();
+		this.service.override(FeatureFlagName.SHARE_IMPORT_ANDROID, false);
+		assertThat(this.service.isEnabled(FeatureFlagName.SHARE_IMPORT_ANDROID)).isFalse();
 
-		this.service.clearOverride(FeatureFlagName.MULTI_ITEM);
-		assertThat(this.service.isEnabled(FeatureFlagName.MULTI_ITEM)).isTrue();
+		this.service.clearOverride(FeatureFlagName.SHARE_IMPORT_ANDROID);
+		assertThat(this.service.isEnabled(FeatureFlagName.SHARE_IMPORT_ANDROID)).isTrue();
 	}
 
 	@Test
@@ -78,24 +80,24 @@ class FeatureFlagServiceTest {
 		Map<FeatureFlagName, Boolean> snapshot = this.service.snapshot();
 		assertThat(snapshot).hasSize(7);
 		assertThat(snapshot.get(FeatureFlagName.NEW_QUALITY_GATE)).isFalse();
-		assertThat(snapshot.get(FeatureFlagName.HD_GENERATION)).isTrue();
+		assertThat(snapshot.get(FeatureFlagName.TRYON_MAX)).isTrue();
 
-		assertThatThrownBy(() -> snapshot.put(FeatureFlagName.HD_GENERATION, false))
+		assertThatThrownBy(() -> snapshot.put(FeatureFlagName.TRYON_MAX, false))
 			.isInstanceOf(UnsupportedOperationException.class);
 		assertThatThrownBy(snapshot::clear)
 			.isInstanceOf(UnsupportedOperationException.class);
 
 		// Subsequent reads unaffected
-		assertThat(this.service.isEnabled(FeatureFlagName.HD_GENERATION)).isTrue();
+		assertThat(this.service.isEnabled(FeatureFlagName.TRYON_MAX)).isTrue();
 
 		// Programmatic override after snapshot does not mutate previous snapshot
-		this.service.override(FeatureFlagName.HD_GENERATION, false);
-		assertThat(this.service.isEnabled(FeatureFlagName.HD_GENERATION)).isFalse();
-		assertThat(snapshot.get(FeatureFlagName.HD_GENERATION)).isTrue();
+		this.service.override(FeatureFlagName.TRYON_MAX, false);
+		assertThat(this.service.isEnabled(FeatureFlagName.TRYON_MAX)).isFalse();
+		assertThat(snapshot.get(FeatureFlagName.TRYON_MAX)).isTrue();
 
 		// Fresh snapshot reflects new override
 		Map<FeatureFlagName, Boolean> updatedSnapshot = this.service.snapshot();
-		assertThat(updatedSnapshot.get(FeatureFlagName.HD_GENERATION)).isFalse();
+		assertThat(updatedSnapshot.get(FeatureFlagName.TRYON_MAX)).isFalse();
 	}
 
 	@Test
@@ -103,22 +105,22 @@ class FeatureFlagServiceTest {
 		assertThat(this.service.overrides()).isEmpty();
 		assertThat(this.service.getOverrides()).isEmpty();
 
-		this.service.override(FeatureFlagName.HD_GENERATION, false);
-		assertThat(this.service.overrides()).containsExactlyEntriesOf(Map.of(FeatureFlagName.HD_GENERATION, false));
+		this.service.override(FeatureFlagName.TRYON_MAX, false);
+		assertThat(this.service.overrides()).containsExactlyEntriesOf(Map.of(FeatureFlagName.TRYON_MAX, false));
 
-		this.service.override(FeatureFlagName.NEW_QUALITY_GATE, true);
+		this.service.override(FeatureFlagName.SHARE_IMPORT_ANDROID, false);
 		assertThat(this.service.overrides()).containsExactlyInAnyOrderEntriesOf(Map.of(
-			FeatureFlagName.HD_GENERATION, false,
-			FeatureFlagName.NEW_QUALITY_GATE, true
+			FeatureFlagName.TRYON_MAX, false,
+			FeatureFlagName.SHARE_IMPORT_ANDROID, false
 		));
 
 		assertThatThrownBy(() -> this.service.overrides().clear())
 			.isInstanceOf(UnsupportedOperationException.class);
 
-		this.service.clearOverride(FeatureFlagName.HD_GENERATION);
-		assertThat(this.service.overrides()).containsExactlyEntriesOf(Map.of(FeatureFlagName.NEW_QUALITY_GATE, true));
+		this.service.clearOverride(FeatureFlagName.TRYON_MAX);
+		assertThat(this.service.overrides()).containsExactlyEntriesOf(Map.of(FeatureFlagName.SHARE_IMPORT_ANDROID, false));
 
-		this.service.clearOverride(FeatureFlagName.NEW_QUALITY_GATE);
+		this.service.clearOverride(FeatureFlagName.SHARE_IMPORT_ANDROID);
 		assertThat(this.service.overrides()).isEmpty();
 	}
 
@@ -130,5 +132,21 @@ class FeatureFlagServiceTest {
 			.isInstanceOf(NullPointerException.class);
 		assertThatThrownBy(() -> this.service.clearOverride(null))
 			.isInstanceOf(NullPointerException.class);
+	}
+
+	// C22: the fail-closed authority refuses to enable an unsupported capability at
+	// the API boundary (override / binding surface) rather than silently accepting it.
+	@Test
+	void enablingAnUnsupportedCapabilityIsRefusedAtTheApiBoundary() {
+		assertThatThrownBy(() -> this.service.override(FeatureFlagName.MULTI_ITEM, true))
+			.isInstanceOf(UnsupportedOperationException.class);
+		assertThatThrownBy(() -> this.service.override(FeatureFlagName.HD_GENERATION, true))
+			.isInstanceOf(UnsupportedOperationException.class);
+		assertThatThrownBy(() -> this.properties.setEnabled(FeatureFlagName.MULTI_ITEM, true))
+			.isInstanceOf(UnsupportedOperationException.class);
+
+		// Disabling an unsupported capability is always allowed and stays off.
+		this.service.override(FeatureFlagName.MULTI_ITEM, false);
+		assertThat(this.service.isEnabled(FeatureFlagName.MULTI_ITEM)).isFalse();
 	}
 }
