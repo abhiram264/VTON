@@ -71,25 +71,44 @@ class AccountDeletionOrchestratorTest {
 		jdbc.update("DELETE FROM users");
 	}
 
+	/**
+	 * The barrier comes FIRST. C17 requires the deletion barrier to be
+	 * established before any cleanup, so that nothing can become newly visible
+	 * and a cleanup failure cannot leave a half-erased account that still looks
+	 * active. The purge therefore observes deleted_at ALREADY set.
+	 *
+	 * <p>This replaces an earlier test that asserted the opposite ordering
+	 * (purge, then mark). That ordering was the pre-barrier design and was
+	 * deliberately inverted; asserting it now would pin a state the
+	 * requirement forbids.</p>
+	 */
 	@Test
-	void beginDeletionPurgesMediaBeforeMarkingDeleted() {
+	void beginDeletionCommitsTheBarrierBeforePurgingMedia() {
 		RecordingPurge recording = new RecordingPurge(jdbc);
 		JdbcIdentityProvisioning provisioning = new JdbcIdentityProvisioning(
 			dataSource,
 			CLOCK,
 			List.of(recording));
-		UserId userId = provisionUser(provisioning, "purge-first");
+		UserId userId = provisionUser(provisioning, "barrier-first");
 
 		User deleted = provisioning.beginDeletion(userId, DELETED_AT);
 
 		assertThat(recording.userIds).containsExactly(userId);
-		assertThat(recording.deletedAtOnPurge).containsExactly((Timestamp) null);
+		// Observed from inside the purge: the barrier is already durable.
+		assertThat(recording.deletedAtOnPurge).containsExactly(Timestamp.from(DELETED_AT));
 		assertThat(deleted.deletedAt()).isEqualTo(DELETED_AT);
 		assertThat(deletedAt(userId)).isEqualTo(Timestamp.from(DELETED_AT));
 	}
 
+	/**
+	 * A failed purge must NOT reopen the account. The barrier is committed in
+	 * its own transaction before the purge runs, so the failure propagates
+	 * (the caller can retry cleanup) while the account stays deleted — the
+	 * opposite of the superseded behaviour, which rolled the barrier back and
+	 * left media destroyed under a still-active account.
+	 */
 	@Test
-	void beginDeletionWithThrowingPurgeLeavesDeletedAtNull() {
+	void beginDeletionWithThrowingPurgeKeepsTheBarrierSet() {
 		AccountMediaPurge throwing = userId -> {
 			throw new IllegalStateException("purge failed");
 		};
@@ -102,7 +121,7 @@ class AccountDeletionOrchestratorTest {
 		assertThatThrownBy(() -> provisioning.beginDeletion(userId, DELETED_AT))
 			.isInstanceOf(IllegalStateException.class)
 			.hasMessage("purge failed");
-		assertThat(deletedAt(userId)).isNull();
+		assertThat(deletedAt(userId)).isEqualTo(Timestamp.from(DELETED_AT));
 	}
 
 	@Test
@@ -137,7 +156,7 @@ class AccountDeletionOrchestratorTest {
 	}
 
 	@Test
-	void factoryBeanBeginDeletionInvokesRegisteredPurgeBeforeDeletedAt() {
+	void factoryBeanBeginDeletionCommitsTheBarrierBeforePurging() {
 		RecordingPurge recording = new RecordingPurge(jdbc);
 		new ApplicationContextRunner()
 			.withUserConfiguration(IdentityProvisioningConfiguration.class)
@@ -151,7 +170,7 @@ class AccountDeletionOrchestratorTest {
 				User deleted = provisioning.beginDeletion(userId, DELETED_AT);
 
 				assertThat(recording.userIds).containsExactly(userId);
-				assertThat(recording.deletedAtOnPurge).containsExactly((Timestamp) null);
+				assertThat(recording.deletedAtOnPurge).containsExactly(Timestamp.from(DELETED_AT));
 				assertThat(deleted.deletedAt()).isEqualTo(DELETED_AT);
 				assertThat(deletedAt(userId)).isEqualTo(Timestamp.from(DELETED_AT));
 			});
