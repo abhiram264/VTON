@@ -11,6 +11,7 @@ import {
   type VaultItemSummary,
 } from '../features/vault/vaultApi';
 import { ApiProblemError } from '../features/my-model/http';
+import { openSourceLink } from '../features/export/sourceLink';
 import type { VaultFilter } from '../navigation/RootNavigator';
 
 const FILTERS: readonly { value: VaultFilter; label: string; category?: string }[] = [
@@ -220,6 +221,7 @@ function ItemDetail({ itemId, onBack, onChanged, onRemoved }: {
   const [category, setCategory] = useState('');
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'failed' | 'in-use'>('idle');
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [sourceNotice, setSourceNotice] = useState<string | null>(null);
   const [deleteStatus, setDeleteStatus] = useState<'idle' | 'deleting' | 'failed' | 'in-use'>('idle');
 
   const load = useCallback(() => {
@@ -321,6 +323,18 @@ function ItemDetail({ itemId, onBack, onChanged, onRemoved }: {
         return <Pressable key={value} accessibilityRole="radio" accessibilityLabel={value} accessibilityState={{ checked: selected }} onPress={() => setCategory(value)} style={[styles.filter, selected && styles.selected]}><Text style={[styles.filterLabel, selected && styles.selectedLabel]}>{selected ? `✓ ${value}` : value}</Text></Pressable>;
       })}</View>
 
+      {item.sourceUrl ? <>
+        <Text style={styles.label}>Source</Text>
+        <Action label="Open original listing" onPress={() => {
+          // The URL is untrusted text from a shared page, so it is handed to the
+          // OS handler only through openSourceLink; a refusal is reported here
+          // rather than silently doing nothing.
+          void openSourceLink(item.sourceUrl).then(result => {
+            setSourceNotice(result.opened ? null : result.reason === 'UNSAFE_URL' ? 'That source link cannot be opened safely.' : 'No app can open that source link.');
+          });
+        }} />
+      </> : null}
+      {sourceNotice ? <Text accessibilityLiveRegion="polite">{sourceNotice}</Text> : null}
       {item.brand ? <Text>Brand: {item.brand}</Text> : null}
       {item.color ? <Text>Colour: {item.color}</Text> : null}
       {item.category === 'UNKNOWN' ? <Text accessibilityLiveRegion="polite">This item is unclassified. Choose a category above and save.</Text> : null}
