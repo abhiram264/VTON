@@ -19,7 +19,8 @@
                 // the consent surface (C06) and studio surface (C10) are domain
                 // APIs like the others.
                 "privacy",
-                "studio"
+                "studio",
+                "studio :: agent"
 		}
 )
 package com.aifashionvault.platform;
