@@ -36,6 +36,7 @@ import com.aifashionvault.shared.IdentityMappingId;
 import com.aifashionvault.shared.UserId;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @SpringBootTest(properties = "spring.autoconfigure.exclude=")
 class IdentityProvisioningTest {
@@ -281,6 +282,38 @@ class IdentityProvisioningTest {
 		assertThat(jdbc.queryForObject("SELECT deleted_at FROM users WHERE id = ?", Timestamp.class, active.userId().value()))
 			.isEqualTo(Timestamp.from(DELETED_AT));
 		assertThat(jdbc.queryForObject("SELECT updated_at FROM users WHERE id = ?", Timestamp.class, active.userId().value()))
+			.isEqualTo(Timestamp.from(DELETED_AT));
+	}
+
+	@Test
+	void beginDeletionCommitsBarrierBeforeMediaPurge() {
+		IdentityResolution.Active active = (IdentityResolution.Active) identityProvisioning.resolve(ISSUER, "barrier-order");
+		List<Boolean> barrierVisibleDuringPurge = new ArrayList<>();
+		JdbcIdentityProvisioning provisioning = new JdbcIdentityProvisioning(
+			dataSource,
+			Clock.systemUTC(),
+			List.<AccountMediaPurge>of(userId -> barrierVisibleDuringPurge.add(jdbc.queryForObject(
+				"SELECT deleted_at IS NOT NULL FROM users WHERE id = ?", Boolean.class, userId.value()))));
+
+		provisioning.beginDeletion(active.userId(), DELETED_AT);
+
+		assertThat(barrierVisibleDuringPurge).containsExactly(true);
+	}
+
+	@Test
+	void beginDeletionBarrierSurvivesMediaPurgeFailure() {
+		IdentityResolution.Active active = (IdentityResolution.Active) identityProvisioning.resolve(ISSUER, "barrier-survives");
+		JdbcIdentityProvisioning provisioning = new JdbcIdentityProvisioning(
+			dataSource,
+			Clock.systemUTC(),
+			List.<AccountMediaPurge>of(userId -> {
+				throw new IllegalStateException("media purge failed");
+			}));
+
+		assertThatThrownBy(() -> provisioning.beginDeletion(active.userId(), DELETED_AT))
+			.isInstanceOf(IllegalStateException.class);
+
+		assertThat(jdbc.queryForObject("SELECT deleted_at FROM users WHERE id = ?", Timestamp.class, active.userId().value()))
 			.isEqualTo(Timestamp.from(DELETED_AT));
 	}
 
