@@ -41,6 +41,14 @@ class TerminalReasonTest {
 				"STORAGE_UNAVAILABLE",
 				"COST_BUDGET_BLOCKED",
 				"NO_ELIGIBLE_PROVIDER",
+				// Added with the C06 consent gate: the provider-transfer
+				// boundary refuses to read or transfer media without an active
+				// third-party-AI-transfer consent, and the refusal is an honest
+				// terminal reason rather than a generic invariant failure.
+				// Declared here (before the catch-all) to match the shipped
+				// enum; nothing depends on TerminalReason's ordinal, so the
+				// position is a readability choice, not a wire contract.
+				"CONSENT_REQUIRED",
 				"INTERNAL_INVARIANT_FAILURE");
 	}
 }
