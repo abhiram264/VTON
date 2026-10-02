@@ -42,14 +42,19 @@ and this document disagree about current behavior, this document and the invento
 - **Runtime topology (local)**: `compose.yaml` runs PostgreSQL and LocalStack only. The
   backend and the mobile app run on host toolchains (`python scripts/run_backend.py`;
   `mobile/` npm scripts).
-- **HTTP surface**: ten `@RestController` classes, 36 mappings — nine live under
+- **HTTP surface**: ten `@RestController` classes, 37 mappings — nine live under
   `backend/src/main/java/com/aifashionvault/platform/web/` and the tenth is
   `backend/src/main/java/com/aifashionvault/featureflag/FeatureFlagController.java:7`,
   so a `platform/web`-only scan undercounts. Bearer-only fail-closed authentication,
   actuator `health`+`metrics` only. See [docs/API_CONTRACTS.md](API_CONTRACTS.md).
 - **Generation path**: `POST /generations` → durable SQS work queue → worker → callback
-  inbox. FASHN is the only constructed VTON provider (ADR-008), and `FASHN_API_KEY` is a
-  mandatory startup property today.
+  inbox. ADR-008 defines the VTON provider port; **two** adapters implement it today —
+  `platform/fashn/FashnConfig.java:40` and `platform/inferhub/InferHubConfig.java:52`.
+  Each bean is created only when its key is non-blank, and
+  `generation/vton/ProviderRegistryComposition.java:70` selects `inferhub` before `fashn`.
+  Both `FASHN_API_KEY` and `VTON_IMAGE_API_KEY` are therefore **optional at boot**
+  (`application.yaml:49-55`): with no key, no provider bean exists and the create path
+  refuses admission honestly (503 `GENERATION_PROVIDER_UNAVAILABLE`).
 - **Mobile** (ADR-002): React Native 0.86.2 / React 19.2.3 with Android and iOS
   share-import hosts. Native builds are not executed or verified on this host.
 - **Identity** (ADR-007): external bearer verification mapped to an internal `UserId`;

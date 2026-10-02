@@ -433,3 +433,28 @@ The F02 count is source-verified: eight `baseUrl: ''` mounts exist under
 - It does not claim native builds pass; they were not executed here.
 - It does not claim provider selection, no-provider generation behavior, or
   share-link removal are done — those are PR-02 and PR-16 work.
+
+## 9. C01 reconciliation — 2026-10-03 (baseline `1f13d34`)
+
+This section is **appended**, not a rewrite. §2 and §4 above are the dated PR-01 baseline
+(commit `8e60d2a`) and are preserved as historical results. Current source differs:
+
+- **Route count:** §2 states 36 mappings; a literal annotation count at `1f13d34` yields
+  **37** (`CollectionsController` 7, `VaultController`/`SharesController`/`LooksController`/
+  `AvatarsController` 5 each, `UploadsController`/`GenerationsController` 3 each,
+  `MeController` 2, `GenerationCallbackController`/`FeatureFlagController` 1 each).
+- **Mobile client construction:** §4's "eight `baseUrl: ''` mounts" is historical. Current
+  mobile resolves through the single `productionApiConfig` seam
+  (`mobile/src/config/apiConfig.ts`), which throws on an unset base URL and on a missing
+  token.
+- **Provider selection / no-provider behavior:** §3's "`FASHN_API_KEY` is a **mandatory
+  startup property**" and "FASHN as the selected provider" are historical. Now implemented:
+  two gated provider beans (`FashnConfig.java:40`, `InferHubConfig.java:52`), selection
+  preferring `inferhub` then `fashn` in `ProviderRegistryComposition.java:70`, both keys
+  optional at boot (`application.yaml:49-55`), and no-provider admission refusal
+  (`VaultEnvironmentValidator.java:25-28`).
+- **Share-link removal:** confirmed done — `POST /looks/{id}/share-link` is mounted but the
+  mobile client does not call it (`features/looks/looksApi.ts:71-76`).
+
+The full current inventory, per-package status, and externally blocked packages are in
+[docs/RELEASE_COMPLETION_LEDGER.md](RELEASE_COMPLETION_LEDGER.md).
