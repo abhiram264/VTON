@@ -5,6 +5,7 @@ import { looksApi } from '../features/looks/looksApi';
 import { generationApi, pollGeneration } from '../features/generation/generationApi';
 import { recoverActiveGeneration } from '../features/generation/generationLifecycle';
 import type { GenerationResource, LookResource } from '../features/generation/types';
+import { ApiProblemError } from '../features/my-model/http';
 import { lookLabel } from './HomeScreen';
 
 type Props = { onModify: (lookId: string) => void; onOpenLook: (lookId: string) => void; onProfile: () => void; pollDelay?: (ms: number) => Promise<void> };
@@ -26,6 +27,9 @@ export default function LooksScreen({ onModify, onOpenLook, onProfile, pollDelay
   const [looks, setLooks] = useState<LookResource[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [status, setStatus] = useState<'loading' | 'ready' | 'failed'>('loading');
+  // C23: why the list failed. An ended session is not a transient failure and
+  // must not be described with generic "keep using navigation" advice.
+  const [loadFailure, setLoadFailure] = useState<'unauthorized' | 'retryable' | null>(null);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [recentGeneration, setRecentGeneration] = useState<{ sourceLookId: string; generation: GenerationResource } | null>(null);
@@ -71,7 +75,16 @@ export default function LooksScreen({ onModify, onOpenLook, onProfile, pollDelay
         setSelected(null);
         setActionError(null);
       }
-    }, () => { if (active) { setLooks([]); setStatus('failed'); } });
+    }, (error: unknown) => {
+      if (!active) return;
+      setLooks([]);
+      setStatus('failed');
+      setLoadFailure(
+        error instanceof ApiProblemError && error.code === 'UNAUTHORIZED'
+          ? 'unauthorized'
+          : 'retryable',
+      );
+    });
     // Recovery is best-effort and independent of the Look list: an `unavailable`
     // answer (the lookup failed) is NOT "nothing in flight", so it leaves the
     // ordinary regenerate path alone rather than inventing an empty state.
@@ -177,7 +190,7 @@ export default function LooksScreen({ onModify, onOpenLook, onProfile, pollDelay
     {recovered ? <Text accessibilityLiveRegion="polite">A regeneration is already in progress. Press Regenerate to resume it without starting another.</Text> : null}
     <Text accessibilityRole="header" style={styles.heading}>Saved Looks</Text>
     {status === 'loading' ? <Text accessibilityLiveRegion="polite">Loading Looks…</Text> : null}
-    {status === 'failed' ? <Text accessibilityLiveRegion="polite">Could not load Looks. You can keep using navigation.</Text> : null}
+    {status === 'failed' ? <Text accessibilityLiveRegion="polite">{loadFailure === 'unauthorized' ? 'Your session has expired. Sign in again to see your Looks.' : 'Could not load Looks. You can keep using navigation.'}</Text> : null}
     {status === 'ready' && looks.length === 0 ? <Text>No saved Looks yet.</Text> : null}
     {labeled.map(({ look, label }) => <View key={look.id} style={styles.cell}>{brokenImages.has(look.id) ? <View style={styles.cell}><Text accessibilityLiveRegion="polite" style={styles.imageNotice}>Preview unavailable for {label}.</Text><Action label={`Refresh preview for ${label}`} onPress={() => refreshPreview(look.id)} busy={refreshingPreview === look.id} disabled={refreshingPreview !== null} /></View> : <Image accessible accessibilityRole="image" accessibilityLabel={`${label} preview`} onError={() => setBrokenImages(current => new Set(current).add(look.id))} source={{ uri: look.image.url }} style={styles.thumbnail} />}<Pressable accessibilityRole="button" accessibilityLabel={label} accessibilityHint="Selects this Look. Use Open Look for details." accessibilityState={{ selected: selected === look.id }} onPress={() => selectLook(look.id)} onLongPress={() => onOpenLook(look.id)} style={styles.button}><Text style={styles.buttonLabel}>{label}</Text></Pressable></View>)}
     <Text accessibilityRole="header" style={styles.heading}>Recent generations</Text>
