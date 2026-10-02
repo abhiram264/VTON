@@ -11,11 +11,17 @@ export type FeatureFlagName =
 // They default off, and a flag payload — including an offline or cached one —
 // may not turn them on: the backend capability is authoritative (item 5), so
 // the client fails closed until a supported path exists.
+//
+// NATURAL_LANGUAGE_STUDIO is deliberately NOT here: C21 mounted a real backing
+// path (POST /studio/sessions/{id}/natural-language-command, gated server-side
+// by the same flag), so the backend is now the authority for it. It still
+// defaults OFF, but a flag fetch may enable it because the server refuses the
+// capability itself when the flag is off.
 export const UNSUPPORTED_CAPABILITIES: Readonly<
   Record<FeatureFlagName, boolean>
 > = {
   MULTI_ITEM: true,
-  NATURAL_LANGUAGE_STUDIO: true,
+  NATURAL_LANGUAGE_STUDIO: false,
   TRYON_MAX: false,
   HD_GENERATION: true,
   SHARE_IMPORT_ANDROID: false,
