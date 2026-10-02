@@ -554,7 +554,29 @@ class FcmDeliveryTest {
 	}
 
 	private FcmDeliveryWorker newWorker() {
-		return new FcmDeliveryWorker(store, newClient(() -> ACCESS_TOKEN), config, zeroJitter(), meters, observations);
+		return newWorker(token -> {});
+	}
+
+	private FcmDeliveryWorker newWorker(java.util.function.Consumer<String> invalidTokenPruner) {
+		return new FcmDeliveryWorker(
+			store, newClient(() -> ACCESS_TOKEN), config, zeroJitter(), meters, observations, invalidTokenPruner);
+	}
+
+	@Test
+	void unregisteredTokenIsPrunedAndDeliveryTerminatesWithoutRetry() {
+		Seed seed = seedLookReady();
+		CopyOnWriteArrayList<String> pruned = new CopyOnWriteArrayList<>();
+		FcmDeliveryWorker pruningWorker = newWorker(pruned::add);
+		fcm.enqueue(404, null, "");
+
+		assertThat(processNextOnFrozenClock(pruningWorker)).isTrue();
+
+		assertThat(pruned).containsExactly(DEVICE);
+		DeviceDelivery delivery = store.findDelivery(seed.eventId(), DEVICE).orElseThrow();
+		assertThat(delivery.status()).isEqualTo(DeviceDelivery.FAILED);
+		assertThat(delivery.terminalResult()).isEqualTo(DeviceDelivery.PERMANENT_FAILURE);
+		assertThat(processNextOnFrozenClock(pruningWorker)).isFalse();
+		assertThat(fcm.requests).hasSize(1);
 	}
 
 	/**
