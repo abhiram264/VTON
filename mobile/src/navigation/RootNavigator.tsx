@@ -4,6 +4,7 @@ import { createNativeStackNavigator, type NativeStackScreenProps } from '@react-
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useEffect, useState, type ReactNode } from 'react';
 import { subscribeToAuthSession, type AuthSession } from '../config/firebase';
+import AccountDeletionCard from '../features/account/AccountDeletionCard';
 import SignInScreen from '../screens/SignInScreen';
 import GenerateScreen from '../screens/GenerateScreen';
 import HomeScreen from '../screens/HomeScreen';
@@ -75,7 +76,7 @@ function MainTabs() {
   );
 }
 function ProfileSettings({ navigation }: NativeStackScreenProps<RootStackParamList, 'ProfileSettings'>) {
-  return <View><Pressable accessibilityRole="button" accessibilityLabel="Back" onPress={navigation.goBack}><Text>Back</Text></Pressable><MyModelScreen onCreateLook={() => navigation.navigate('Generate')} /></View>;
+  return <View><Pressable accessibilityRole="button" accessibilityLabel="Back" onPress={navigation.goBack}><Text>Back</Text></Pressable><MyModelScreen onCreateLook={() => navigation.navigate('Generate')} /><AccountDeletionCard /></View>;
 }
 
 // Leading `loading` is the no-flash contract: a restored session never shows
