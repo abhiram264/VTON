@@ -80,11 +80,12 @@ public class SharesController {
 	@PostMapping("/{importId}/confirm")
 	public ResponseEntity<VaultItemResponse> confirm(
 		@AuthenticationPrincipal UserId userId,
-		@PathVariable String importId
+		@PathVariable String importId,
+		@RequestBody(required = false) ConfirmShareImportRequest request
 	) {
 		return ResponseEntity.status(HttpStatus.CREATED)
 			.contentType(MediaType.APPLICATION_JSON)
-			.body(service().confirm(userId, importId));
+			.body(service().confirm(userId, importId, request));
 	}
 
 
