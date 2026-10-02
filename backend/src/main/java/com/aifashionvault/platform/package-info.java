@@ -21,10 +21,10 @@
                 "privacy",
                 "studio",
                 "studio :: agent",
-                // The composition layer constructs the product-metrics seam for the
-                // generation processor (C22 lifecycle events) and consults the
-                // capability flags at the HTTP boundary (C22), so both are
-                // composition-layer dependencies like the surfaces above.
+                // The composition layer emits C22 lifecycle events through the
+                // analytics module's ProductMetrics seam and consults the capability
+                // flags at the HTTP boundary (C22), so both are composition-layer
+                // dependencies like the surfaces above.
                 "analytics",
                 "featureflag"
 		}
