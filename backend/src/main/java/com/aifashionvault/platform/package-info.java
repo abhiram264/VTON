@@ -14,7 +14,10 @@
                 "retention",
                 "collection",
                 "vault",
-                "normalization"
+                "normalization",
+                // The composition layer mounts every domain's HTTP surface, and
+                // the consent surface (C06) is a domain API like the others.
+                "privacy"
 		}
 )
 package com.aifashionvault.platform;

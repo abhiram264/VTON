@@ -73,6 +73,12 @@ vault:
   # POST /avatars, PATCH /avatars/{id}.
   integrity:
     required: false
+  privacy:
+    # C06: the policy version recorded on every consent grant. It is
+    # configuration, not a compiled constant, so publishing a new policy is a
+    # visible deployment change and the version stored on a grant is the one in
+    # force when that grant was made. Bump it whenever the consent text changes.
+    consent-policy-version: ${CONSENT_POLICY_VERSION:2026-10-03}
   avatar:
     # See the NOT YET ENFORCING note above; true today = 403 on all avatar writes.
     attestation-required: false
