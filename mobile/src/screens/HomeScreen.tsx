@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { choosePhoto } from '../features/my-model/photoSource';
+import { ApiProblemError } from '../features/my-model/http';
 import { looksApi } from '../features/looks/looksApi';
 import type { LookResource } from '../features/generation/types';
 import { useFocusEffect } from '@react-navigation/native';
@@ -13,19 +14,62 @@ type Props = {
   onQuickTry: () => void;
 };
 
+// Failure is differentiated so the user is told the truth: a revoked/expired
+// session is not something "Retry" can fix, while a transient server or
+// network failure is. Neither state is presented as an empty list.
+type LooksState =
+  | { status: 'loading' }
+  | { status: 'ready'; looks: LookResource[] }
+  | { status: 'error'; kind: 'unauthorized' | 'retryable' };
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+// Product label for a Look. The backend Look id is an opaque UUID and must not
+// be shown to the user as the item's name; the creation date is the one
+// human-meaningful field the list resource carries. UTC keeps the label stable
+// regardless of the device timezone.
+export function lookLabel(createdAt: string): string {
+  const parsed = new Date(createdAt);
+  if (Number.isNaN(parsed.getTime())) {
+    return 'Look from earlier';
+  }
+  return `Look from ${parsed.getUTCDate()} ${MONTHS[parsed.getUTCMonth()]} ${parsed.getUTCFullYear()}`;
+}
+
+// Two Looks created on the same day would otherwise share an accessible name,
+// which screen readers cannot tell apart; disambiguate duplicates in order.
+function labeledLooks(looks: LookResource[]): { look: LookResource; label: string }[] {
+  const seen = new Map<string, number>();
+  return looks.map(look => {
+    const base = lookLabel(look.createdAt);
+    const count = (seen.get(base) ?? 0) + 1;
+    seen.set(base, count);
+    return { look, label: count === 1 ? base : `${base} (${count})` };
+  });
+}
+
 export default function HomeScreen({ onImport, onOpenLook, onProfile, onQuickTry }: Props) {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
-  const [looks, setLooks] = useState<LookResource[]>([]);
-  const [looksStatus, setLooksStatus] = useState<'loading' | 'ready' | 'failed'>('loading');
+  const [looksState, setLooksState] = useState<LooksState>({ status: 'loading' });
+  const [reloadToken, setReloadToken] = useState(0);
 
   useFocusEffect(useCallback(() => {
     let active = true;
-    setLooksStatus('loading');
-    setLooks([]);
-    void looksApi.list().then(value => { if (active) { setLooks(value); setLooksStatus('ready'); } }, () => { if (active) { setLooks([]); setLooksStatus('failed'); } });
+    setLooksState({ status: 'loading' });
+    void looksApi.list().then(
+      value => { if (active) setLooksState({ status: 'ready', looks: value }); },
+      (error: unknown) => {
+        if (!active) return;
+        const kind = error instanceof ApiProblemError && error.code === 'UNAUTHORIZED'
+          ? 'unauthorized'
+          : 'retryable';
+        setLooksState({ status: 'error', kind });
+      },
+    );
     return () => { active = false; };
-  }, []));
+  }, [reloadToken]));
+
   async function importItem() {
     if (busy) return;
     setBusy(true);
@@ -52,10 +96,22 @@ export default function HomeScreen({ onImport, onOpenLook, onProfile, onQuickTry
       <Text accessibilityRole="header" style={styles.heading}>Recent shares</Text>
       <Text>No recent shares yet.</Text>
       <Text accessibilityRole="header" style={styles.heading}>Recent Looks</Text>
-      {looksStatus === 'loading' ? <Text accessibilityLiveRegion="polite">Loading recent Looks…</Text> : null}
-      {looksStatus === 'failed' ? <Text accessibilityLiveRegion="polite">Could not load recent Looks.</Text> : null}
-      {looksStatus === 'ready' && looks.length === 0 ? <Text>No recent Looks yet.</Text> : null}
-      {looks.map(look => <Action key={look.id} label={`Recent Look ${look.id}`} onPress={() => onOpenLook(look.id)} />)}
+      {looksState.status === 'loading' ? <Text accessibilityLiveRegion="polite">Loading recent Looks…</Text> : null}
+      {looksState.status === 'error' && looksState.kind === 'unauthorized' ? (
+        <Text accessibilityLiveRegion="polite">Your session has expired. Sign in again to see your Looks.</Text>
+      ) : null}
+      {looksState.status === 'error' && looksState.kind === 'retryable' ? (
+        <>
+          <Text accessibilityLiveRegion="polite">Could not load recent Looks.</Text>
+          <Action label="Retry loading Looks" onPress={() => setReloadToken(token => token + 1)} />
+        </>
+      ) : null}
+      {looksState.status === 'ready' && looksState.looks.length === 0 ? <Text>No recent Looks yet.</Text> : null}
+      {looksState.status === 'ready'
+        ? labeledLooks(looksState.looks).map(({ look, label }) => (
+            <Action key={look.id} label={label} onPress={() => onOpenLook(look.id)} />
+          ))
+        : null}
       <Action label="Quick Try" onPress={onQuickTry} />
     </ScrollView>
   );

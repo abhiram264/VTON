@@ -156,6 +156,30 @@ class ProductMetricsTest {
         assertThatCode(() -> isolated.record(null, null)).doesNotThrowAnyException();
     }
 
+    @Test
+    void deletionLifecycleRecordsRequestCompletionAndCost() {
+        var registry = new SimpleMeterRegistry();
+        ProductMetrics metrics = new MicrometerProductMetrics(registry);
+        metrics.record(AnalyticsEventName.DELETION_REQUESTED, context(START, null, null, null, null));
+        metrics.record(AnalyticsEventName.DELETION_COMPLETED, context(START, null, null, null, new BigDecimal("0.42")));
+
+        assertThat(counter(registry, MicrometerProductMetrics.DELETION_REQUEST, "numerator", "all")).isOne();
+        assertThat(counter(registry, MicrometerProductMetrics.DELETION_COMPLETION, "numerator", "all")).isOne();
+        assertThat(registry.get(MicrometerProductMetrics.DELETION_COST).summary().count()).isOne();
+        assertThat(registry.get(MicrometerProductMetrics.DELETION_COST).summary().totalAmount()).isEqualTo(0.42d);
+    }
+
+    @Test
+    void deletionCompletionWithoutCostStillCountsButRecordsNoCost() {
+        var registry = new SimpleMeterRegistry();
+        ProductMetrics metrics = new MicrometerProductMetrics(registry);
+        metrics.record(AnalyticsEventName.DELETION_COMPLETED, context(START, null, null, null, null));
+
+        assertThat(counter(registry, MicrometerProductMetrics.DELETION_COMPLETION, "numerator", "all")).isOne();
+        assertThat(registry.find(MicrometerProductMetrics.DELETION_COST).meter()).isNull();
+        assertThat(registry.find(MicrometerProductMetrics.DELETION_REQUEST).meter()).isNull();
+    }
+
     private static ProductMetricContext context(Instant at, String mode, Long items, String quality, BigDecimal cost) {
         return context(at, mode, items, quality, cost, 100L);
     }
