@@ -5,13 +5,21 @@ import LooksScreen from '../src/screens/LooksScreen';
 import StudioScreen from '../src/screens/StudioScreen';
 import VaultScreen from '../src/screens/VaultScreen';
 import { vaultApi } from '../src/features/vault/vaultApi';
-import { collectionApi } from '../src/features/vault/collectionApi';
+import { collectionsApi } from '../src/features/collections/collectionsApi';
 import { looksApi } from '../src/features/looks/looksApi';
 import { studioApi } from '../src/features/studio/studioApi';
 import { generationApi } from '../src/features/generation/generationApi';
 
-jest.mock('../src/features/vault/vaultApi', () => ({ vaultApi: { list: jest.fn() } }));
-jest.mock('../src/features/vault/collectionApi', () => ({ collectionApi: { list: jest.fn() } }));
+jest.mock('../src/features/vault/vaultApi', () => ({
+  vaultApi: {
+    list: jest.fn(),
+    image: jest.fn().mockResolvedValue({
+      url: 'https://signed.example.invalid/item?X-Amz-Signature=read-token',
+      expiresAt: '2026-09-01T00:05:00Z',
+    }),
+  },
+}));
+jest.mock('../src/features/collections/collectionsApi', () => ({ collectionsApi: { list: jest.fn() } }));
 jest.mock('../src/features/looks/looksApi', () => ({ looksApi: { list: jest.fn(), regenerate: jest.fn() } }));
 jest.mock('../src/features/studio/studioApi', () => ({ studioApi: { get: jest.fn().mockResolvedValue({ sessionId: 'session-1', itemIds: [] }), command: jest.fn() } }));
 jest.mock('../src/features/generation/generationApi', () => ({ generationApi: { get: jest.fn() }, pollGeneration: jest.requireActual('../src/features/generation/generationApi').pollGeneration }));
@@ -36,7 +44,13 @@ test('browses collection membership from the collection and vault sources', asyn
     { id: 'item-1', category: 'TOP', name: 'Silk top' },
     { id: 'item-2', category: 'BOTTOM', name: 'Trousers' },
   ]);
-  jest.mocked(collectionApi.list).mockResolvedValue([{ id: 'collection-1', name: 'Work', vaultItemIds: ['item-2'] }]);
+  jest.mocked(collectionsApi.list).mockResolvedValue([{
+    id: 'collection-1',
+    name: 'Work',
+    createdAt: '2026-09-01T00:00:00Z',
+    updatedAt: '2026-09-01T00:00:00Z',
+    items: [{ vaultItemId: 'item-2', createdAt: '2026-09-01T00:00:00Z' }],
+  }]);
   await render(<VaultScreen onProfile={noop} />);
   fireEvent.press(screen.getByRole('radio', { name: 'Collections' }));
   fireEvent.press(await screen.findByRole('button', { name: 'Work' }));
@@ -155,7 +169,7 @@ test('Home loads recent Looks and opens the selected Look', async () => {
       <HomeScreen onImport={noop} onOpenLook={open} onProfile={noop} onQuickTry={noop} />
     </NavigationContainer>
   );
-  fireEvent.press(await screen.findByRole('button', { name: 'Recent Look look-1' }));
+  fireEvent.press(await screen.findByRole('button', { name: 'Look from 30 Aug 2026' }));
   expect(open).toHaveBeenCalledWith('look-1');
   expect(screen.queryByText('No recent Looks yet.')).toBeNull();
 });

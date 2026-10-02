@@ -21,7 +21,9 @@ public enum AnalyticsEventName {
     LOOK_VIEWED("look_viewed"),
     LOOK_SAVED("look_saved"),
     LOOK_SHARED("look_shared"),
-    SOURCE_LINK_OPENED("source_link_opened");
+    SOURCE_LINK_OPENED("source_link_opened"),
+    DELETION_REQUESTED("deletion_requested"),
+    DELETION_COMPLETED("deletion_completed");
 
     private final String wireName;
 
