@@ -38,5 +38,10 @@ vault:
     api-key:
   firebase:
     project-id: demo-ai-fashion-vault
+  privacy:
+    # Mirrors src/main/resources/application.yaml. This test resource shadows the
+    # main one on the test classpath, so any vault.* key the app requires must be
+    # declared here too or the context fails to start.
+    consent-policy-version: 2026-10-03
   otel:
     service-name: ai-fashion-vault-api
