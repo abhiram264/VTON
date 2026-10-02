@@ -84,6 +84,93 @@ describe('mobile feature flags', () => {
     });
   });
 
+  describe('unsupported capabilities fail closed (C22)', () => {
+    const unsupported: FeatureFlagName[] = [
+      'MULTI_ITEM',
+      'NATURAL_LANGUAGE_STUDIO',
+      'HD_GENERATION',
+    ];
+
+    test('default off in code', () => {
+      for (const name of unsupported) {
+        expect(DEFAULT_FEATURE_FLAGS[name]).toBe(false);
+        expect(isFeatureEnabled(name)).toBe(false);
+      }
+      expect(UNSUPPORTED_CAPABILITIES.MULTI_ITEM).toBe(true);
+      expect(UNSUPPORTED_CAPABILITIES.NATURAL_LANGUAGE_STUDIO).toBe(true);
+      expect(UNSUPPORTED_CAPABILITIES.HD_GENERATION).toBe(true);
+      expect(UNSUPPORTED_CAPABILITIES.TRYON_MAX).toBe(false);
+      expect(UNSUPPORTED_CAPABILITIES.SHARE_IMPORT_ANDROID).toBe(false);
+      expect(UNSUPPORTED_CAPABILITIES.SHARE_IMPORT_IOS).toBe(false);
+    });
+
+    test('a flag payload cannot enable them (offline or remote)', () => {
+      applyFeatureFlagPayload({
+        flags: {
+          MULTI_ITEM: true,
+          NATURAL_LANGUAGE_STUDIO: true,
+          HD_GENERATION: true,
+          TRYON_MAX: true,
+        },
+        overrides: {
+          MULTI_ITEM: true,
+          NATURAL_LANGUAGE_STUDIO: true,
+          HD_GENERATION: true,
+        },
+      });
+
+      for (const name of unsupported) {
+        expect(isFeatureEnabled(name)).toBe(false);
+      }
+      // Supported capabilities are unaffected by the guard.
+      expect(isFeatureEnabled('TRYON_MAX')).toBe(true);
+    });
+
+    test('a flat payload cannot enable them either', () => {
+      applyFeatureFlagPayload({
+        MULTI_ITEM: true,
+        NATURAL_LANGUAGE_STUDIO: true,
+        HD_GENERATION: true,
+      });
+
+      for (const name of unsupported) {
+        expect(isFeatureEnabled(name)).toBe(false);
+      }
+    });
+
+    test('a remote or offline flag fetch cannot enable them', async () => {
+      const fetchResponse = jest.fn().mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        headers: { get: () => 'application/json' },
+        json: () =>
+          Promise.resolve({
+            flags: {
+              MULTI_ITEM: true,
+              NATURAL_LANGUAGE_STUDIO: true,
+              HD_GENERATION: true,
+              TRYON_MAX: true,
+            },
+          }),
+      });
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = fetchResponse as unknown as typeof fetch;
+      try {
+        await refreshFeatureFlags({
+          baseUrl: 'https://api.aifashionvault.com',
+          getAccessToken: () => null,
+        });
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+
+      for (const name of unsupported) {
+        expect(isFeatureEnabled(name)).toBe(false);
+      }
+      expect(isFeatureEnabled('TRYON_MAX')).toBe(true);
+    });
+  });
+
   describe('applyFeatureFlagPayload', () => {
     test('applies S3 wire shape with flags and overrides', () => {
       applyFeatureFlagPayload({

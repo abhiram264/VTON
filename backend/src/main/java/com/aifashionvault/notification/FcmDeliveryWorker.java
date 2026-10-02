@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Random;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 import com.aifashionvault.notification.FcmClient.FcmSendResult;
@@ -24,6 +25,7 @@ public final class FcmDeliveryWorker {
 	private final Random random;
 	private final NotificationMetrics metrics;
 	private final ObservationFacade observations;
+	private final Consumer<String> invalidTokenPruner;
 
 	public FcmDeliveryWorker(
 		NotificationEventStore store,
@@ -50,6 +52,23 @@ public final class FcmDeliveryWorker {
 		MeterRegistry meterRegistry,
 		ObservationRegistry observationRegistry
 	) {
+		this(store, client, config, random, meterRegistry, observationRegistry, token -> {});
+	}
+
+	/**
+	 * @param invalidTokenPruner called with the device token when FCM reports it
+	 *   as permanently unregistered, so the owner-bound registry can drop it
+	 *   (C20). Defaults to a no-op for callers with no registry.
+	 */
+	public FcmDeliveryWorker(
+		NotificationEventStore store,
+		FcmClient client,
+		NotificationDeliveryConfiguration config,
+		Random random,
+		MeterRegistry meterRegistry,
+		ObservationRegistry observationRegistry,
+		Consumer<String> invalidTokenPruner
+	) {
 		if (store == null) {
 			throw new IllegalArgumentException("store is required");
 		}
@@ -62,12 +81,16 @@ public final class FcmDeliveryWorker {
 		if (random == null) {
 			throw new IllegalArgumentException("random is required");
 		}
+		if (invalidTokenPruner == null) {
+			throw new IllegalArgumentException("invalidTokenPruner is required");
+		}
 		this.store = store;
 		this.client = client;
 		this.config = config;
 		this.random = random;
 		this.metrics = new NotificationMetrics(meterRegistry);
 		this.observations = new ObservationFacade(observationRegistry);
+		this.invalidTokenPruner = invalidTokenPruner;
 	}
 
 	public void enqueue(NotificationEvent event, List<String> deviceIdentities) {
@@ -155,6 +178,9 @@ public final class FcmDeliveryWorker {
 					delivery.id(), due.claimToken(), due.claimEpoch(), attempts,
 					completedAt.plus(delay.compareTo(remaining) < 0 ? delay : remaining));
 			return true;
+		}
+		if (result.unregistered()) {
+			invalidTokenPruner.accept(delivery.deviceIdentity());
 		}
 		store.markTerminal(
 				delivery.id(), due.claimToken(), due.claimEpoch(), attempts, outcome, completedAt);

@@ -202,6 +202,20 @@ public class GenerationProcessorConfiguration {
 		});
 	}
 
+	/**
+	 * Product-lifecycle analytics sink (C22). Late-binding like the metrics bean: it
+	 * exists only once a MeterRegistry is present, so slim contexts stay loadable and
+	 * the processor's optional dependency simply resolves to null.
+	 */
+	@Bean
+	@ConditionalOnMissingBean(com.aifashionvault.analytics.ProductMetrics.class)
+	FactoryBean<com.aifashionvault.analytics.ProductMetrics> productMetrics(ObjectProvider<MeterRegistry> registries) {
+		return factory(com.aifashionvault.analytics.ProductMetrics.class, () -> {
+			MeterRegistry registry = registries.getIfAvailable();
+			return registry == null ? null : new com.aifashionvault.analytics.MicrometerProductMetrics(registry);
+		});
+	}
+
 	@Bean
 	@ConditionalOnMissingBean(GlobalCostCircuitBreaker.class)
 	FactoryBean<GlobalCostCircuitBreaker> globalCostCircuitBreaker(
@@ -268,6 +282,7 @@ public class GenerationProcessorConfiguration {
 		ObjectProvider<WorkOutboxStore> workOutboxes,
 		ObjectProvider<CallbackInboxStore> callbackInboxes,
 		ObjectProvider<GenerationMetrics> metrics,
+		ObjectProvider<com.aifashionvault.analytics.ProductMetrics> productMetrics,
 		ObjectProvider<GenerationCapacityLeaseStore> capacityLeases,
 		ObjectProvider<NotificationEventStore> notificationEvents,
 		ObjectProvider<GlobalCostCircuitBreaker> costCircuitBreakers,
@@ -314,7 +329,8 @@ public class GenerationProcessorConfiguration {
 				notificationEvents.getIfAvailable(),
 				null,
 				costCircuitBreaker,
-				providerHealthGates.getIfAvailable(this::providerHealthGate));
+				providerHealthGates.getIfAvailable(this::providerHealthGate),
+				productMetrics.getIfAvailable());
 		});
 	}
 

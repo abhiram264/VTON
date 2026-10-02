@@ -21,8 +21,9 @@ class FlywayDeploymentPolicyTest {
 
 	private static final Pattern MIGRATION_FILE_PATTERN = Pattern.compile("^V(\\d{3})__[a-z0-9_]+\\.sql$");
 	private static final int PUBLISHED_CEILING_VERSION = 23;
-	private static final int RESERVED_NEXT_VERSION = 25;
+	private static final int RESERVED_NEXT_VERSION = 26;
 	private static final String CLAIMED_V024 = "V024__notification_fencing_and_provider_constraints__contract.sql";
+	private static final String CLAIMED_V025 = "V025__device_registration.sql";
 	private static final List<String> FORBIDDEN_FILE_PREFIXES = List.of("U", "R__", "B__");
 	private static final Pattern DESTRUCTIVE_PATTERN = Pattern.compile(
 		"(?is)\\b(?:DROP\\s+(?!INDEX(?:\\s+UNIQUE)?\\s+CONCURRENTLY\\b)[A-Z][A-Z0-9_ ]*|TRUNCATE\\b|ALTER\\s+TABLE\\b[^;]*?\\b(?:DROP|RENAME|ALTER\\s+COLUMN|SET\\s+DATA\\s+TYPE)\\b)");
@@ -108,9 +109,10 @@ class FlywayDeploymentPolicyTest {
 	}
 
 	@Test
-	void v024IsClaimedAndV025StaysReserved() throws IOException {
+	void v024AndV025AreClaimedAndV026StaysReserved() throws IOException {
 		Path migrations = migrationRoot();
 		assertThat(migrations.resolve(CLAIMED_V024)).isRegularFile();
+		assertThat(migrations.resolve(CLAIMED_V025)).isRegularFile();
 
 		List<String> violations = new ArrayList<>();
 		try (Stream<Path> stream = Files.list(migrations)) {
