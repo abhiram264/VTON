@@ -73,7 +73,11 @@ export type LookExportDeps = {
   maxStagingAgeMs: number;
 };
 
-const DEFAULT_MAX_BYTES = 25 * 1024 * 1024;
+// Matches the app's frozen image policy (ShareLimits.MAX_SHARE_BYTES), so a
+// caller never asks the native staging bridge for more than it can grant. The
+// bridge clamps to this cap anyway; aligning avoids a confusing TOO_LARGE
+// rejection for a size our own constant implied was acceptable.
+const DEFAULT_MAX_BYTES = 20 * 1024 * 1024;
 const DEFAULT_MAX_STAGING_AGE_MS = 15 * 60 * 1000;
 
 /** Typed staging failure a native stager raises for a denied permission. */
