@@ -25,7 +25,7 @@ class StudioAgentTest {
     assertThat(tools.query).isEqualTo("white Nike shoes"); assertThat(tools.category).isEqualTo("FOOTWEAR"); assertThat(tools.key).isEqualTo("retry-1");
   }
   @Test void rejectsMalformedAndStopsBeforeLaterCall() {
-    StudioAgent.AgentExecution result=agent.execute(actor,session,List.of(call("getStudioState",Map.of()),call("removeItem",Map.of("slot","JEWELLERY")),call("getStudioState",Map.of())));
+    StudioAgent.AgentExecution result=agent.execute(actor,session,List.of(call("getStudioState",Map.of()),call("removeItem",Map.of("slot","HEAD","position",0)),call("getStudioState",Map.of())));
     assertThat(result.completed()).isFalse(); assertThat(result.results()).extracting(StudioAgent.ToolCallResult::status).containsExactly(StudioAgent.ToolStatus.OK,StudioAgent.ToolStatus.REJECTED);
     assertThat(result.results().get(1).problem()).isEqualTo(AgentProblemCode.MALFORMED_CALL); assertThat(tools.invocations).containsExactly("getStudioState");
   }
