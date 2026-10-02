@@ -140,6 +140,39 @@ describe('studioApi wire contract', () => {
     expect(draft.itemIds).toEqual([ITEM_A]);
   });
 
+  test('the natural-language outcome contract is parsed, and an absent outcome reads as APPLIED', async () => {
+    fetchMock.mockImplementation((input, init) => {
+      expect(requestUrl(input)).toBe(`${BASE_URL}/studio/sessions/${SESSION_ID}/natural-language-command`);
+      expect(JSON.parse(String(init?.body))).toEqual({ text: 'add a top' });
+      return jsonResponse(200, {
+        ...sessionBody,
+        outcome: 'CONFIRM_REQUIRED',
+        message: 'Which top did you mean?',
+        candidates: [
+          { vaultItemId: ITEM_A, label: 'Silk top', slot: 'UPPER_BODY' },
+          { vaultItemId: ITEM_B, label: 'Linen top', slot: 'UPPER_BODY' },
+        ],
+      });
+    });
+
+    const result = await studioApi.command(SESSION_ID, 'add a top');
+    expect(result.outcome).toBe('CONFIRM_REQUIRED');
+    expect(result.message).toBe('Which top did you mean?');
+    expect(result.candidates).toEqual([
+      { vaultItemId: ITEM_A, label: 'Silk top', slot: 'UPPER_BODY' },
+      { vaultItemId: ITEM_B, label: 'Linen top', slot: 'UPPER_BODY' },
+    ]);
+    expect(result.state.sessionId).toBe(SESSION_ID);
+
+    // The pre-C21 route answers with only the session body; that must still read
+    // as an applied command rather than an unknown state.
+    fetchMock.mockImplementation(() => jsonResponse(200, sessionBody));
+    const legacy = await studioApi.command(SESSION_ID, 'add a top');
+    expect(legacy.outcome).toBe('APPLIED');
+    expect(legacy.candidates).toEqual([]);
+    expect(legacy.message).toBeNull();
+  });
+
   test('a malformed Studio body is rejected rather than rendered', async () => {
     fetchMock.mockImplementation(() => jsonResponse(200, { sessionId: SESSION_ID, itemIds: 'nope' }));
     await expect(studioApi.get(SESSION_ID)).rejects.toThrow();
