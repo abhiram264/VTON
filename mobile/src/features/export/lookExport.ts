@@ -31,11 +31,11 @@ export interface LookExportStager {
   /** Attaches the staged image to the OS share sheet. Optional on iOS. */
   shareStaged?(uri: string): Promise<'shared' | 'dismissed' | 'failed'>;
   /** Copies a staged file into the photo library with minimal permission. */
-  saveToPhotos(uri: string): Promise<'saved' | 'denied' | 'failed'>;
+  saveToPhotos?(uri: string): Promise<'saved' | 'denied' | 'failed'>;
   /** Removes one staged file. Must be safe to call on an absent file. */
   removeStaged(uri: string): Promise<void>;
-  /** Sweeps staged files older than `maxAgeMs` (crash/expiry recovery). */
-  sweepStaged(maxAgeMs: number): Promise<void>;
+  /** Sweeps staged files older than `maxAgeMs`; omit if the native side owns it. */
+  sweepStaged?(maxAgeMs: number): Promise<void>;
 }
 
 export type LookExportAction = 'share' | 'save';
@@ -94,19 +94,16 @@ export function resolveNativeStager(
     if (typeof candidate !== 'object' || candidate === null) {
       continue;
     }
-    if (
-      !('stageFromUrl' in candidate) ||
-      !('saveToPhotos' in candidate) ||
-      !('removeStaged' in candidate) ||
-      !('sweepStaged' in candidate)
-    ) {
+    // Only the two methods every export needs are required here; shareStaged,
+    // saveToPhotos and sweepStaged stay optional so a bridge that implements a
+    // narrower surface still works (its absence is reported honestly, never
+    // faked).
+    if (!('stageFromUrl' in candidate) || !('removeStaged' in candidate)) {
       continue;
     }
     if (
       typeof candidate.stageFromUrl !== 'function' ||
-      typeof candidate.saveToPhotos !== 'function' ||
-      typeof candidate.removeStaged !== 'function' ||
-      typeof candidate.sweepStaged !== 'function'
+      typeof candidate.removeStaged !== 'function'
     ) {
       continue;
     }
@@ -183,7 +180,11 @@ export function createLookExporter(overrides: Partial<LookExportDeps> = {}) {
       if (action === 'save') {
         // Item 4: save-to-photos is a distinct user intent from sending a
         // copy; the native side requests the minimum platform permission and
-        // reports denial distinctly.
+        // reports denial distinctly. A bridge that cannot save reports
+        // failure rather than a fabricated success.
+        if (typeof stager.saveToPhotos !== 'function') {
+          return {status: 'SAVE_FAILED'};
+        }
         const saved = await stager.saveToPhotos(uri);
         if (saved === 'saved') return {status: 'SAVED'};
         if (saved === 'denied') return {status: 'PERMISSION_DENIED'};
@@ -206,11 +207,12 @@ export function createLookExporter(overrides: Partial<LookExportDeps> = {}) {
   }
 
   async function cleanupExpiredStaging(): Promise<void> {
-    if (deps.stager === null) {
+    const stager = deps.stager;
+    if (stager === null || typeof stager.sweepStaged !== 'function') {
       return;
     }
     try {
-      await deps.stager.sweepStaged(deps.maxStagingAgeMs);
+      await stager.sweepStaged(deps.maxStagingAgeMs);
     } catch {
       // Best-effort sweep.
     }

@@ -236,6 +236,19 @@ describe('look export (C16)', () => {
     expect(outcome).toEqual({status: 'PERMISSION_DENIED'});
   });
 
+  test('reports SAVE_FAILED rather than faking a save when the bridge cannot save', async () => {
+    const {stager} = makeStager();
+    delete stager.saveToPhotos;
+    const exporter = exporterWith(stager);
+
+    const outcome = await exporter.exportLook(
+      {lookId: 'look-1', imageUrl: SIGNED_URL, disclosureAcknowledged: true},
+      'save',
+    );
+
+    expect(outcome).toEqual({status: 'SAVE_FAILED'});
+  });
+
   test('sweeps staging older than the configured age so a crash does not leak private copies', async () => {
     const {stager, swept} = makeStager();
     const exporter = exporterWith(stager, {maxStagingAgeMs: 60_000});
@@ -247,6 +260,13 @@ describe('look export (C16)', () => {
 
   test('cleanup is a no-op when no native stager exists', async () => {
     const exporter = exporterWith(null);
+    await expect(exporter.cleanupExpiredStaging()).resolves.toBeUndefined();
+  });
+
+  test('cleanup is a no-op when the bridge owns staging itself (no sweepStaged)', async () => {
+    const {stager} = makeStager();
+    delete stager.sweepStaged;
+    const exporter = exporterWith(stager);
     await expect(exporter.cleanupExpiredStaging()).resolves.toBeUndefined();
   });
 });
@@ -273,9 +293,16 @@ describe('native bridge resolution (C16)', () => {
     const incomplete = {
       stageFromUrl: async () => STAGED_URI,
       saveToPhotos: async () => 'saved',
-      removeStaged: async () => undefined,
     };
     expect(resolveNativeStager({ImageExport: incomplete})).toBeNull();
+  });
+
+  test('accepts a bridge implementing only the two required methods', () => {
+    const minimal = {
+      stageFromUrl: async () => STAGED_URI,
+      removeStaged: async () => undefined,
+    };
+    expect(resolveNativeStager({ImageExport: minimal})).not.toBeNull();
   });
 
   test('ignores non-object module entries and returns null when nothing matches', () => {
