@@ -237,6 +237,11 @@ class OfflineEchoGenerationIntegrationTest {
 		jdbc.update("INSERT INTO avatar_image (id, profile_id, storage_key, quality_status, created_at) "
 			+ "VALUES (?, ?, ?, 'ACCEPTED', ?)", image, profile, avatarKey(userId), now);
 		jdbc.update("UPDATE avatar_profile SET primary_image_id = ? WHERE id = ?", image, profile);
+		// C06: the worker refuses to transfer the body image to a provider without an
+		// active third-party AI transfer consent (TerminalReason CONSENT_REQUIRED). The
+		// golden path is about provider reachability, so the owner grants it first.
+		jdbc.update("INSERT INTO consent (id, user_id, purpose, version, granted_at, revoked_at) "
+			+ "VALUES (?, ?, 'third_party_ai_transfer', '2026-10-03', ?, NULL)", UUID.randomUUID(), userId, now);
 		return new Owner(token, userId);
 	}
 
