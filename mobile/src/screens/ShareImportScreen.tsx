@@ -14,6 +14,7 @@ import type {
 import {apiConfig, type ShareImportApiConfig} from './share-import/apiConfig';
 import {attachRecoveryImage} from './share-import/recoveryClient';
 import type {SharePayload} from '../features/share/types';
+import CollectionsPicker from '../features/collections/CollectionsPicker';
 import type {LocalPhoto} from '../features/my-model/types';
 import {
   ACTION_CHOOSE_SCREENSHOT,
@@ -125,6 +126,9 @@ export default function ShareImportScreen({
   });
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  // Optional collection chosen during import. The picker's selection mode only
+  // reports ids; nothing is written until the confirm call persists the item.
+  const [collectionId, setCollectionId] = useState<string | null>(null);
 
   const payloadRef = useRef(payload);
   payloadRef.current = payload;
@@ -249,7 +253,10 @@ export default function ShareImportScreen({
       const controller = new AbortController();
       abortRef.current = controller;
       try {
-        const item = await activeConfirmer(importId, controller.signal);
+        const item =
+          collectionId === null
+            ? await activeConfirmer(importId, controller.signal)
+            : await activeConfirmer(importId, controller.signal, {collectionId});
         if (!controller.signal.aborted && operation === operationRef.current) {
           setState({view: 'SAVED', itemId: item.id});
         }
@@ -273,7 +280,7 @@ export default function ShareImportScreen({
         }
       }
     },
-    [activeConfirmer],
+    [activeConfirmer, collectionId],
   );
 
   const recover = useCallback(
@@ -375,6 +382,11 @@ export default function ShareImportScreen({
               Save this item to your Vault to keep it.
             </Text>
           </View>
+          <CollectionsPicker
+            vaultItemId={null}
+            selectedIds={collectionId === null ? [] : [collectionId]}
+            onChange={selected => setCollectionId(selected[0] ?? null)}
+          />
           <View style={styles.actions}>
             <Pressable
               accessibilityRole="button"

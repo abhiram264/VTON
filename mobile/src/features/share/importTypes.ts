@@ -50,7 +50,19 @@ export type ShareImportConfirmedItem = {
   createdAt?: string;
 };
 
+/**
+ * Optional corrections accepted by the confirm route. The backend treats all
+ * three as optional and an omitted field as "leave unchanged", so a caller
+ * that sends nothing keeps today's body-less confirmation behavior.
+ */
+export type ShareImportConfirmCorrections = {
+  name?: string;
+  category?: string;
+  collectionId?: string;
+};
+
 export type ShareImportConfirmer = (
   importId: string,
   signal: AbortSignal,
+  corrections?: ShareImportConfirmCorrections,
 ) => Promise<ShareImportConfirmedItem>;

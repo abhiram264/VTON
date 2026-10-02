@@ -10,6 +10,7 @@ import {releaseStagedImage} from './shareHandoff';
 import type {AvatarApiConfig} from '../my-model/types';
 import { productionApiConfig } from '../../config/apiConfig';
 import type {
+  ShareImportConfirmCorrections,
   ShareImportConfirmedItem,
   ShareImportConfirmer,
   ShareImportRequest,
@@ -283,15 +284,27 @@ export function createShareImportConfirmer(
   return async function confirm(
     importId: string,
     signal: AbortSignal,
+    corrections?: ShareImportConfirmCorrections,
   ): Promise<ShareImportConfirmedItem> {
     if (signal.aborted) {
       throw new Error('Aborted');
+    }
+    // Only fields the caller actually supplied are sent: an omitted correction
+    // must stay omitted so the server keeps its own value rather than being
+    // handed an explicit null it would have to interpret.
+    const body: Record<string, string> = {};
+    if (corrections?.name !== undefined) body.name = corrections.name;
+    if (corrections?.category !== undefined) body.category = corrections.category;
+    if (corrections?.collectionId !== undefined) {
+      body.collectionId = corrections.collectionId;
     }
     const payload = (await requireOk(
       await apiRequest(
         config,
         `${STATUS_PATH}/${encodeURIComponent(importId)}/confirm`,
-        {method: 'POST'},
+        Object.keys(body).length === 0
+          ? {method: 'POST'}
+          : {method: 'POST', body: JSON.stringify(body)},
       ),
     )) as unknown;
     if (!isConfirmedItem(payload)) {
