@@ -39,7 +39,12 @@ export default function VaultScreen({ onProfile, onSelect, selectionUnavailable 
   const [previews, setPreviews] = useState<Record<string, string>>({});
   const [previewFailures, setPreviewFailures] = useState(0);
   const [previewAttempt, setPreviewAttempt] = useState(0);
-  const [status, setStatus] = useState<'loading' | 'ready' | 'failed'>('loading');
+  // A failure carries its kind so the screen can tell the truth: a revoked or
+  // expired session is not something Retry can fix, while a transient server
+  // failure is. Both are distinct from an empty Vault.
+  const [status, setStatus] = useState<
+    'loading' | 'ready' | { kind: 'unauthorized' | 'retryable' }
+  >('loading');
   const [attempt, setAttempt] = useState(0);
   const [collectionVersion, setCollectionVersion] = useState(0);
   const [detailId, setDetailId] = useState<string | null>(null);
@@ -62,22 +67,22 @@ export default function VaultScreen({ onProfile, onSelect, selectionUnavailable 
         setItems([]);
         setCollectionVersion(version => version + 1);
         setStatus('ready');
-      }, () => {
+      }, (error: unknown) => {
         if (!active) return;
         setCollections([]);
         setCollectionId(null);
         setItems([]);
-        setStatus('failed');
+        setStatus({ kind: isUnauthorized(error) ? 'unauthorized' : 'retryable' });
       });
     } else {
       void vaultApi.list(option.category).then(value => {
         if (!active) return;
         setItems(value);
         setStatus('ready');
-      }, () => {
+      }, (error: unknown) => {
         if (!active) return;
         setItems([]);
-        setStatus('failed');
+        setStatus({ kind: isUnauthorized(error) ? 'unauthorized' : 'retryable' });
       });
     }
     return () => { active = false; };
@@ -103,10 +108,10 @@ export default function VaultScreen({ onProfile, onSelect, selectionUnavailable 
         setItems(value.filter(item => memberIds.has(item.id)));
         setStatus('ready');
       }
-    }, () => {
+    }, (error: unknown) => {
       if (active) {
         setItems([]);
-        setStatus('failed');
+        setStatus({ kind: isUnauthorized(error) ? 'unauthorized' : 'retryable' });
       }
     });
     return () => { active = false; };
@@ -171,7 +176,8 @@ export default function VaultScreen({ onProfile, onSelect, selectionUnavailable 
     {selectionUnavailable ? <Text accessibilityLiveRegion="polite">Studio selection is unavailable because no Studio session was provided. Browse the Vault normally.</Text> : null}
     <Text accessibilityRole="header" accessibilityLiveRegion="polite" style={styles.heading}>{selectedCollection?.name ?? option.label}</Text>
     {status === 'loading' ? <Text accessibilityLiveRegion="polite">Loading Vault items…</Text> : null}
-    {status === 'failed' ? <><Text accessibilityLiveRegion="polite">Could not load Vault items.</Text><Action label="Retry Vault" onPress={() => setAttempt(value => value + 1)} /></> : null}
+    {typeof status === 'object' && status.kind === 'unauthorized' ? <Text accessibilityLiveRegion="polite">Your session has expired. Sign in again to see your Vault.</Text> : null}
+    {typeof status === 'object' && status.kind === 'retryable' ? <><Text accessibilityLiveRegion="polite">Could not load Vault items.</Text><Action label="Retry Vault" onPress={() => setAttempt(value => value + 1)} /></> : null}
     {status === 'ready' && option.value === 'COLLECTIONS' && !collectionId && collections.length === 0 ? <Text accessibilityLiveRegion="polite">No collections yet.</Text> : null}
     {status === 'ready' && option.value === 'COLLECTIONS' && !collectionId && collections.length > 0 ? <Action label={collectionMode === 'manage' ? 'Done managing collections' : 'Manage collections'} onPress={() => setCollectionMode(mode => (mode === 'manage' ? 'browse' : 'manage'))} /> : null}
     {status === 'ready' && option.value === 'COLLECTIONS' && !collectionId && collectionMode === 'manage' ? <CollectionsPicker vaultItemId={null} manageOnly onError={() => undefined} onChange={onCollectionsChanged} /> : null}
@@ -205,7 +211,9 @@ function ItemDetail({ itemId, onBack, onChanged, onRemoved }: {
   onRemoved: () => void;
 }) {
   const [item, setItem] = useState<VaultItemSummary | null>(null);
-  const [status, setStatus] = useState<'loading' | 'ready' | 'gone' | 'failed'>('loading');
+  const [status, setStatus] = useState<
+    'loading' | 'ready' | 'gone' | { kind: 'unauthorized' | 'retryable' }
+  >('loading');
   const [image, setImage] = useState<VaultItemImage | null>(null);
   const [imageStatus, setImageStatus] = useState<'loading' | 'ready' | 'unavailable'>('loading');
   const [name, setName] = useState('');
@@ -227,7 +235,11 @@ function ItemDetail({ itemId, onBack, onChanged, onRemoved }: {
       if (!active) return;
       // 404 is the opaque "not found or not yours" answer, so an item the
       // owner cannot see is reported as gone rather than as a retryable error.
-      setStatus(error instanceof ApiProblemError && error.code === 'VAULT_ITEM_NOT_FOUND' ? 'gone' : 'failed');
+      setStatus(
+        error instanceof ApiProblemError && error.code === 'VAULT_ITEM_NOT_FOUND'
+          ? 'gone'
+          : { kind: isUnauthorized(error) ? 'unauthorized' : 'retryable' },
+      );
     });
     return () => { active = false; };
   }, [itemId]);
@@ -292,7 +304,8 @@ function ItemDetail({ itemId, onBack, onChanged, onRemoved }: {
     <View style={styles.headingRow}><Text accessibilityRole="header" style={styles.title}>Vault item</Text><Action label="Back" onPress={onBack} /></View>
     {status === 'loading' ? <Text accessibilityLiveRegion="polite">Loading item…</Text> : null}
     {status === 'gone' ? <Text accessibilityLiveRegion="polite">This item is no longer available.</Text> : null}
-    {status === 'failed' ? <><Text accessibilityLiveRegion="polite">Could not load this item.</Text><Action label="Retry item" onPress={load} /></> : null}
+    {typeof status === 'object' && status.kind === 'unauthorized' ? <Text accessibilityLiveRegion="polite">Your session has expired. Sign in again to see this item.</Text> : null}
+    {typeof status === 'object' && status.kind === 'retryable' ? <><Text accessibilityLiveRegion="polite">Could not load this item.</Text><Action label="Retry item" onPress={load} /></> : null}
     {status === 'ready' && item ? <>
       <CollectionsPicker vaultItemId={itemId} onError={() => undefined} onChange={onChanged} />
       {imageStatus === 'ready' && image ? <Text accessibilityLiveRegion="polite">Preview available until {image.expiresAt}.</Text> : null}
@@ -325,6 +338,11 @@ function ItemDetail({ itemId, onBack, onChanged, onRemoved }: {
       {deleteStatus === 'in-use' ? <Text accessibilityLiveRegion="polite">Delete blocked: this item is still used by an active draft or Look.</Text> : null}
     </> : null}
   </ScrollView>;
+}
+
+// A 401/403 is the session, not the network: retrying cannot fix it.
+function isUnauthorized(error: unknown): boolean {
+  return error instanceof ApiProblemError && (error.code === 'UNAUTHORIZED' || error.code === 'HTTP_401' || error.code === 'HTTP_403');
 }
 
 function Action({ label, onPress, disabled = false }: { label: string; onPress: () => void; disabled?: boolean }) { return <Pressable accessibilityRole="button" accessibilityLabel={label} accessibilityState={{ disabled }} disabled={disabled} onPress={onPress} style={styles.profile}><Text style={styles.profileLabel}>{label}</Text></Pressable>; }
