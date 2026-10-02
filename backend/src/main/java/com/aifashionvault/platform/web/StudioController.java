@@ -551,6 +551,11 @@ public class StudioController {
 		}
 	}
 
+	/**
+	 * One owned garment the ambiguous command could mean. The client re-sends the
+	 * explicit {@code vaultItemId} through the manual command route, so the choice
+	 * resolves without a second parse of the user's words.
+	 */
 	public record CandidateResponse(String vaultItemId, String label) {
 	}
 

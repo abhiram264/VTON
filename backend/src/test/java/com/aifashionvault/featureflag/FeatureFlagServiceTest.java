@@ -43,12 +43,19 @@ class FeatureFlagServiceTest {
 		);
 
 		for (FeatureFlagName name : FeatureFlagName.values()) {
+			// A capability is supported once a release-ready backing path exists; the
+			// shipped default then decides whether it is ON. NATURAL_LANGUAGE_STUDIO
+			// joined the supported set with C21's mounted route + production adapter.
 			boolean expectedSupported =
 				name == FeatureFlagName.TRYON_MAX
 					|| name == FeatureFlagName.SHARE_IMPORT_ANDROID
-					|| name == FeatureFlagName.SHARE_IMPORT_IOS;
+					|| name == FeatureFlagName.SHARE_IMPORT_IOS
+					|| name == FeatureFlagName.NATURAL_LANGUAGE_STUDIO;
 			assertThat(name.isSupported()).isEqualTo(expectedSupported);
-			assertThat(this.service.isEnabled(name)).isEqualTo(expectedSupported);
+			// Supported reports its bound value (the new ones ship default-OFF);
+			// unsupported always reports disabled, whatever the configuration says.
+			assertThat(this.service.isEnabled(name))
+				.isEqualTo(expectedSupported && this.properties.isEnabled(name));
 		}
 	}
 
