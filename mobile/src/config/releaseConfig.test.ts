@@ -46,6 +46,25 @@ describe('release API base URL guard (C02)', () => {
     );
   });
 
+  test('a release build also refuses alternate spellings of loopback', () => {
+    // Numeric IPv4 integer for 127.0.0.1.
+    expect(() => resolveApiBaseUrl('https://2130706433', true)).toThrow(
+      /localhost or a LAN/i,
+    );
+    // IPv4-mapped IPv6 loopback.
+    expect(() => resolveApiBaseUrl('https://[::ffff:127.0.0.1]', true)).toThrow(
+      /localhost or a LAN/i,
+    );
+    // Trailing-dot FQDN.
+    expect(() => resolveApiBaseUrl('https://localhost.', true)).toThrow(
+      /localhost or a LAN/i,
+    );
+    // Numeric LAN address (192.168.1.20 as an integer).
+    expect(() => resolveApiBaseUrl('https://3232235796', true)).toThrow(
+      /localhost or a LAN/i,
+    );
+  });
+
   test('a release build accepts a public https target and strips the trailing slash', () => {
     expect(resolveApiBaseUrl('https://api.example.invalid/', true)).toBe(
       'https://api.example.invalid',

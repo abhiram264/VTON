@@ -283,6 +283,83 @@ class GenerationHttpContractTest {
 		assertThat(generationCount()).isEqualTo(before);
 	}
 
+	@Test
+	void listReturnsOwnerScopedRecentGenerationsNewestFirst() throws Exception {
+		Owner owner = seedOwner(true);
+		Instant base = Instant.now().minusSeconds(3600);
+		UUID oldest = insertJobAt(owner, "GENERATING", null, base);
+		UUID middle = insertJobAt(owner, "FAILED", "CANCELLED_BY_USER", base.plusSeconds(60));
+		UUID newest = insertJobAt(owner, "COMPLETED", null, base.plusSeconds(120));
+		UUID lookId = UUID.randomUUID();
+		jdbc.update("INSERT INTO look (id, user_id, avatar_profile_id, generation_job_id, storage_key, provider, provider_model, quality_status, created_at) VALUES (?, ?, ?, ?, ?, 'provider-secret', 'model-secret', 'PASS', ?)",
+			lookId, owner.userId().value(), owner.profileId(), newest, "private/secret", Timestamp.from(base.plusSeconds(120)));
+
+		Owner stranger = seedOwnerFor("foreign-list-owner");
+		UUID foreign = insertJobAt(stranger, "QUEUED", null, base.plusSeconds(30));
+
+		JsonNode body = list(owner);
+		List<String> ids = new java.util.ArrayList<>();
+		body.forEach(node -> ids.add(node.get("id").stringValue()));
+		assertThat(ids).containsExactly(newest.toString(), middle.toString(), oldest.toString());
+		assertThat(ids).doesNotContain(foreign.toString());
+		// Conditional fields stay exactly as the single-resource contract defines them.
+		assertThat(body.get(0).get("lookId").stringValue()).isEqualTo(lookId.toString());
+		assertThat(body.get(1).get("failureCode").stringValue()).isEqualTo("CANCELLED_BY_USER");
+		assertThat(body.get(2).propertyNames()).containsExactly(
+			"id", "status", "phase", "statusVersion", "createdAt", "updatedAt");
+
+		// Another account's list never contains this owner's rows.
+		JsonNode strangerBody = list(stranger);
+		assertThat(strangerBody.size()).isEqualTo(1);
+		assertThat(strangerBody.get(0).get("id").stringValue()).isEqualTo(foreign.toString());
+
+		mockMvc.perform(MockMvcRequestBuilders.get("/generations")).andExpect(status().isUnauthorized());
+	}
+
+	@Test
+	void listIsBoundedToTheMostRecentWindow() throws Exception {
+		Owner owner = seedOwner(true);
+		Instant base = Instant.now().minusSeconds(7200);
+		int total = GenerationCreationService.MAX_RECENT_GENERATIONS + 5;
+		UUID newest = null;
+		for (int index = 0; index < total; index++) {
+			UUID id = insertJobAt(owner, "QUEUED", null, base.plusSeconds(index));
+			if (index == total - 1) {
+				newest = id;
+			}
+		}
+		assertThat(count("generation_job")).isEqualTo(total);
+
+		JsonNode body = list(owner);
+		assertThat(body.size()).isEqualTo(GenerationCreationService.MAX_RECENT_GENERATIONS);
+		assertThat(body.get(0).get("id").stringValue()).isEqualTo(newest.toString());
+	}
+
+	private JsonNode list(Owner owner) throws Exception {
+		return json(mockMvc.perform(MockMvcRequestBuilders.get("/generations")
+				.header(HttpHeaders.AUTHORIZATION, bearer(owner.token())))
+			.andExpect(status().isOk()).andReturn());
+	}
+
+	private Owner seedOwnerFor(String subject) throws Exception {
+		String token = InProcessJwtFixture.bearerTokenForSubject(subject);
+		mockMvc.perform(MockMvcRequestBuilders.get("/me").header(HttpHeaders.AUTHORIZATION, bearer(token)))
+			.andExpect(status().isOk());
+		UUID user = jdbc.queryForObject("SELECT user_id FROM identity_mapping WHERE subject = ?", UUID.class, subject);
+		UserId userId = new UserId(user);
+		return new Owner(token, userId, insertProfileWithImage(userId), UUID.randomUUID());
+	}
+
+	private UUID insertJobAt(Owner owner, String status, String reason, Instant createdAt) {
+		UUID id = UUID.randomUUID();
+		UUID image = jdbc.queryForObject("SELECT primary_image_id FROM avatar_profile WHERE id = ?", UUID.class, owner.profileId());
+		Timestamp ts = Timestamp.from(createdAt);
+		jdbc.update("INSERT INTO generation_job (id, user_id, status, requested_mode, client_request_id, created_at, updated_at, completed_at, avatar_image_id, terminal_reason, status_version) VALUES (?, ?, ?, 'STANDARD', ?, ?, ?, ?, ?, ?, 0)",
+			id, owner.userId().value(), status, "request-" + id, ts, ts,
+			Set.of("COMPLETED", "FAILED").contains(status) ? ts : null, image, reason);
+		return id;
+	}
+
 	private double generationCount() {
 		Counter counter = meters.find(GenerationMetrics.GENERATION_COUNT).counter();
 		return counter == null ? 0d : counter.count();

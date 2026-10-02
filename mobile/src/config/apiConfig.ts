@@ -32,6 +32,61 @@ function hostnameOf(url: string): string | null {
   return colon >= 0 ? authority.slice(0, colon) : authority;
 }
 
+/** Dotted quad for a 32-bit IPv4 integer (e.g. 2130706433 -> 127.0.0.1). */
+function ipv4FromInteger(value: string): string | null {
+  if (!/^\d{1,10}$/.test(value)) {
+    return null;
+  }
+  const n = Number(value);
+  if (!Number.isSafeInteger(n) || n < 0 || n > 0xffffffff) {
+    return null;
+  }
+  return [n >>> 24, (n >>> 16) & 0xff, (n >>> 8) & 0xff, n & 0xff].join('.');
+}
+
+/** Dotted quad for the low 32 bits of an IPv6 address, when they form IPv4. */
+function ipv4FromIpv6Tail(host: string): string | null {
+  const parts = host.split(':');
+  const last = parts[parts.length - 1];
+  if (last.includes('.')) {
+    return last;
+  }
+  const groups = host.split(':').filter(part => part.length > 0);
+  const tail = groups.slice(-2);
+  if (tail.length !== 2 || !tail.every(g => /^[0-9a-f]{1,4}$/.test(g))) {
+    return null;
+  }
+  const n = (parseInt(tail[0], 16) << 16) | parseInt(tail[1], 16);
+  return [n >>> 24, (n >>> 16) & 0xff, (n >>> 8) & 0xff, n & 0xff].join('.');
+}
+
+/**
+ * True for a host that only resolves on the developer's own machine or local
+ * network, including alternate spellings a release bundle must not ship:
+ * numeric IPv4 (2130706433), IPv4-mapped IPv6 (::ffff:127.0.0.1) and a
+ * trailing-dot FQDN (localhost.).
+ */
+function isLocalHost(host: string): boolean {
+  const normalized = host.trim().toLowerCase().replace(/\.$/, '');
+  if (normalized.length === 0) {
+    return false;
+  }
+  if (LOOPBACK_OR_LAN_HOSTNAME.test(normalized)) {
+    return true;
+  }
+  const asInteger = ipv4FromInteger(normalized);
+  if (asInteger !== null && LOOPBACK_OR_LAN_HOSTNAME.test(asInteger)) {
+    return true;
+  }
+  if (normalized.includes(':')) {
+    const mapped = ipv4FromIpv6Tail(normalized);
+    if (mapped !== null && LOOPBACK_OR_LAN_HOSTNAME.test(mapped)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /**
  * Normalizes the API base URL and, for a release build, refuses a target that
  * cannot serve a shipped app: missing, placeholder, non-https, localhost or a
@@ -58,7 +113,7 @@ export function resolveApiBaseUrl(raw: string, isRelease: boolean): string {
     if (host === null || host.length === 0) {
       throw new Error(`Release API base URL has no host: ${trimmed}`);
     }
-    if (LOOPBACK_OR_LAN_HOSTNAME.test(host)) {
+    if (isLocalHost(host)) {
       throw new Error(
         `Release API base URL must not target localhost or a LAN address: ${trimmed}`,
       );
