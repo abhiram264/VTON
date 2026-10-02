@@ -1,7 +1,14 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- takePhoto() captures through the system camera; the runtime grant is requested by
+         the photo-picker module. -->
     <uses-permission android:name="android.permission.CAMERA" />
+    <!-- saveStagedImageToPhotos() uses MediaStore, which needs no permission on API 29+.
+         On API 24-28 the legacy insert path needs this, capped so newer devices never ask. -->
+    <uses-permission
+      android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+      android:maxSdkVersion="28" />
 
     <application
       android:name=".MainApplication"
@@ -38,6 +45,17 @@
             <data android:mimeType="image/*" />
         </intent-filter>
       </activity>
+      <!-- User-directed export (LookExportStagerModule): the share sheet receives a per-URI read
+           grant for one app-private staged file, and nothing else is exposed. -->
+      <provider
+        android:name="androidx.core.content.FileProvider"
+        android:authorities="${applicationId}.exportfileprovider"
+        android:exported="false"
+        android:grantUriPermissions="true">
+        <meta-data
+          android:name="android.support.FILE_PROVIDER_PATHS"
+          android:resource="@xml/look_export_paths" />
+      </provider>
       <activity
         android:name=".MainActivity"
         android:label="@string/app_name"
