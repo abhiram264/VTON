@@ -458,3 +458,28 @@ This section is **appended**, not a rewrite. §2 and §4 above are the dated PR-
 
 The full current inventory, per-package status, and externally blocked packages are in
 [docs/RELEASE_COMPLETION_LEDGER.md](RELEASE_COMPLETION_LEDGER.md).
+
+### 9.1 Frozen seam — C12 multi-item generation (`POST /generations/multi`)
+
+**Status: FROZEN SEAM, implementation in flight (worker-05) — NOT yet mounted.** This
+records the agreed contract so backend/mobile work can proceed in parallel, per the C01
+contract-first rule (guide §5.3). Do not read it as a mounted route until the
+implementation merge lands and this heading is updated.
+
+| Aspect | Contract |
+|---|---|
+| Method/path | `POST /generations/multi` (sibling of the manual single-item `POST /generations`) |
+| Request | `GenerationMultiRequest(studioSessionId: UUID \| null, productVaultItemIds: UUID[] ordered, mode: String \| null, default "standard")` |
+| Required header | `Idempotency-Key` — missing → `400 IDEMPOTENCY_KEY_REQUIRED` |
+| Success | `202` + `Location: /generations/{id}`, body identical to `POST /generations` (`GenerationResponse`) |
+| Feature gate | `vault.generation.multi-item-enabled` (default **false**) → `503 MULTI_ITEM_DISABLED` |
+| Invalid input | empty / >64 / duplicate / null items, bad mode → `400 MULTI_ITEM_INVALID` |
+| Ownership | foreign or unknown vault item, or foreign `studioSessionId` → `404 UNAUTHORIZED_OR_NOT_FOUND` |
+| Idempotency | same key + different fingerprint (avatar revision + mode + item **order**) → `409 IDEMPOTENCY_KEY_REUSED` |
+| Admission | `429` with the admission reason (`PRODUCT_LIMIT`/`ROLLING_LIMIT`/`ACTIVE_LIMIT`) |
+| Global gates | `503 ADMISSION_PAUSED` / `503 GENERATION_PROVIDER_UNAVAILABLE` |
+| Persistence | one accepted job via `GenerationStore.createAccepted`: render plan one step per product in submitted order, one outbox row, quota reservation |
+
+The request discriminant is **not** `productUploadId` (C12 item 1): the manual path keeps
+`GenerationRequest(UUID productUploadId)` unchanged, and multi-item intent carries ordered
+Vault item ids plus an optional Studio session.
