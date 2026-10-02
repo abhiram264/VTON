@@ -123,6 +123,25 @@ export type StudioDraft = StudioState & {
   avatarUnavailable: boolean;
 };
 
+/**
+ * The C21 natural-language outcome. Only APPLIED means the draft changed;
+ * CONFIRM_REQUIRED, EXPLAINED and REFUSED all leave it exactly as it was.
+ */
+export type StudioCommandOutcome = 'APPLIED' | 'CONFIRM_REQUIRED' | 'EXPLAINED' | 'REFUSED';
+
+export type StudioCommandResult = {
+  state: StudioState;
+  outcome: StudioCommandOutcome;
+  message: string | null;
+  /** Owned garments offered for an ambiguous command; empty unless CONFIRM_REQUIRED. */
+  candidates: { vaultItemId: string; label: string; slot: StudioSlot | null }[];
+};
+
+function isStudioSlot(value: unknown): value is StudioSlot {
+  return value === 'HEAD' || value === 'UPPER_BODY' || value === 'LOWER_BODY' || value === 'FULL_BODY'
+    || value === 'FEET' || value === 'BAG' || value === 'JEWELLERY' || value === 'ACCESSORY';
+}
+
 function commandBody(command: string, expectedUpdatedAt: string | undefined, extra: Record<string, unknown>): string {
   return JSON.stringify({ command, ...extra, ...(expectedUpdatedAt ? { expectedUpdatedAt } : {}) });
 }
@@ -169,8 +188,41 @@ export const studioApi = {
   async removeItem(sessionId: string, itemId: string, expectedUpdatedAt?: string): Promise<StudioState> {
     return parseState(await requireOk(await apiRequest(config, `/studio/sessions/${encodeURIComponent(sessionId)}/commands`, { method: 'POST', body: commandBody('removeItem', expectedUpdatedAt, { itemId }) })));
   },
-  async command(sessionId: string, text: string): Promise<StudioState> {
-    return parseState(await requireOk(await apiRequest(config, `/studio/sessions/${encodeURIComponent(sessionId)}/natural-language-command`, { method: 'POST', body: JSON.stringify({ text }) })));
+  // Natural-language command. The route answers the same session shape plus the
+  // C21 outcome contract: `outcome` is APPLIED | CONFIRM_REQUIRED | EXPLAINED |
+  // REFUSED, `message` is a prompt/explanation (null on APPLIED) and
+  // `candidates` is always an array of owned items for a confirmation. An absent
+  // outcome is read as APPLIED so the client also works against the pre-C21
+  // route, where every successful command mutated the draft.
+  async command(sessionId: string, text: string): Promise<StudioCommandResult> {
+    const payload = await requireOk(await apiRequest(config, `/studio/sessions/${encodeURIComponent(sessionId)}/natural-language-command`, { method: 'POST', body: JSON.stringify({ text }) }));
+    const row = payload as Record<string, unknown>;
+    const outcome = row.outcome === 'CONFIRM_REQUIRED' || row.outcome === 'EXPLAINED' || row.outcome === 'REFUSED'
+      ? row.outcome
+      : 'APPLIED';
+    // The planner resolves the target slot once for the whole command, so it may
+    // be projected either per candidate or at the top level of the response.
+    // Accept both; a null slot means the command carried none of its own, and
+    // the caller falls back to the item's own slot.
+    const responseSlot = isStudioSlot(row.slot) ? row.slot : null;
+    const candidates = Array.isArray(row.candidates)
+      ? row.candidates.flatMap(entry => {
+          if (entry === null || typeof entry !== 'object') return [];
+          const candidate = entry as Record<string, unknown>;
+          if (typeof candidate.vaultItemId !== 'string' || candidate.vaultItemId.trim() === '') return [];
+          return [{
+            vaultItemId: candidate.vaultItemId,
+            label: typeof candidate.label === 'string' ? candidate.label : 'Garment',
+            slot: isStudioSlot(candidate.slot) ? candidate.slot : responseSlot,
+          }];
+        })
+      : [];
+    return {
+      state: parseState(payload),
+      outcome,
+      message: typeof row.message === 'string' ? row.message : null,
+      candidates,
+    };
   },
   // Studio-based multi-item generation: the owned session and its item set are
   // the frozen input, never the manual-photo upload path. Idempotency-Key makes

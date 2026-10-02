@@ -9,11 +9,21 @@ import com.aifashionvault.shared.StorageKey;
 import com.aifashionvault.shared.UserId;
 import com.aifashionvault.shared.VaultItemId;
 
+/**
+ * An owner's saved garment.
+ *
+ * <p>{@code sourceUrl} is the original product URL the item was imported from,
+ * carried through from {@code source_reference.url} on the owner-scoped read so
+ * the client can offer "open original product". It is nullable (photo-created
+ * items have no source), and it is the ONLY source-reference field exposed —
+ * {@code raw_metadata} stays server-side.</p>
+ */
 public record VaultItem(
 	VaultItemId id,
 	UserId userId,
 	StorageKey storageKey,
 	SourceReferenceId sourceReferenceId,
+	String sourceUrl,
 	String name,
 	String brand,
 	ProductCategory category,

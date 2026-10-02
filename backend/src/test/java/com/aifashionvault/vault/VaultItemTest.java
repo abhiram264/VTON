@@ -38,6 +38,7 @@ class VaultItemTest {
 				"userId",
 				"storageKey",
 				"sourceReferenceId",
+				"sourceUrl",
 				"name",
 				"brand",
 				"category",
@@ -53,6 +54,7 @@ class VaultItemTest {
 				UserId.class,
 				StorageKey.class,
 				SourceReferenceId.class,
+				String.class,
 				String.class,
 				String.class,
 				ProductCategory.class,
@@ -102,31 +104,31 @@ class VaultItemTest {
 	@Test
 	void requiresUserId() {
 		assertThatThrownBy(() -> new VaultItem(
-			ID, null, STORAGE_KEY, SOURCE_REFERENCE_ID, "Shirt", "Brand", ProductCategory.TOP, null, "black", null, null, CREATED_AT))
+			ID, null, STORAGE_KEY, SOURCE_REFERENCE_ID, null, "Shirt", "Brand", ProductCategory.TOP, null, "black", null, null, CREATED_AT))
 			.isInstanceOf(IllegalArgumentException.class);
 	}
 
 	@Test
 	void requiresStorageKey() {
 		assertThatThrownBy(() -> new VaultItem(
-			ID, USER_ID, null, SOURCE_REFERENCE_ID, "Shirt", "Brand", ProductCategory.TOP, null, "black", null, null, CREATED_AT))
+			ID, USER_ID, null, SOURCE_REFERENCE_ID, null, "Shirt", "Brand", ProductCategory.TOP, null, "black", null, null, CREATED_AT))
 			.isInstanceOf(IllegalArgumentException.class);
 	}
 
 	@Test
 	void requiresIdAndCreatedAt() {
 		assertThatThrownBy(() -> new VaultItem(
-			null, USER_ID, STORAGE_KEY, null, null, null, null, null, null, null, null, CREATED_AT))
+			null, USER_ID, STORAGE_KEY, null, null, null, null, null, null, null, null, null, CREATED_AT))
 			.isInstanceOf(IllegalArgumentException.class);
 		assertThatThrownBy(() -> new VaultItem(
-			ID, USER_ID, STORAGE_KEY, null, null, null, null, null, null, null, null, null))
+			ID, USER_ID, STORAGE_KEY, null, null, null, null, null, null, null, null, null, null))
 			.isInstanceOf(IllegalArgumentException.class);
 	}
 
 	@Test
 	void optionalCatalogFieldsMayBeNull() {
 		VaultItem item = new VaultItem(
-			ID, USER_ID, STORAGE_KEY, null, null, null, null, null, null, null, null, CREATED_AT);
+			ID, USER_ID, STORAGE_KEY, null, null, null, null, null, null, null, null, null, CREATED_AT);
 
 		assertThat(item.name()).isNull();
 		assertThat(item.brand()).isNull();
@@ -139,6 +141,6 @@ class VaultItemTest {
 
 	private static VaultItem item(SourceReferenceId sourceReferenceId) {
 		return new VaultItem(
-			ID, USER_ID, STORAGE_KEY, sourceReferenceId, "Shirt", "Brand", ProductCategory.TOP, "shirt", "black", "solid", new ObjectMapper().readTree("{}"), CREATED_AT);
+			ID, USER_ID, STORAGE_KEY, sourceReferenceId, null, "Shirt", "Brand", ProductCategory.TOP, "shirt", "black", "solid", new ObjectMapper().readTree("{}"), CREATED_AT);
 	}
 }
