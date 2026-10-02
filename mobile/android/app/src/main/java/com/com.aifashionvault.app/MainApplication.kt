@@ -7,6 +7,7 @@ import com.facebook.react.ReactHost
 import com.facebook.react.defaults.DefaultReactHost.getDefaultReactHost
 import com.facebook.react.ReactNativeApplicationEntryPoint.loadReactNative
 import com.aifashionvault.app.export.LookExportStagerPackage
+import com.aifashionvault.app.photopicker.PhotoPickerPackage
 import com.aifashionvault.app.share.ShareHandoffPackage
 
 class MainApplication : Application(), ReactApplication {
@@ -20,6 +21,7 @@ class MainApplication : Application(), ReactApplication {
           // add(MyReactNativePackage())
           add(ShareHandoffPackage())
           add(LookExportStagerPackage())
+          add(PhotoPickerPackage())
         },
     )
   }
