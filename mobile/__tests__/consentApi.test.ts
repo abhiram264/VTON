@@ -2,6 +2,7 @@ import {
   CONSENT_POLICY_VERSION,
   consentState,
   createConsentApi,
+  type ConsentRecord,
 } from '../src/features/my-model/consentApi';
 import { ApiProblemError } from '../src/features/my-model/http';
 
@@ -27,7 +28,7 @@ function emptyResponse(status: number): Response {
   } as unknown as Response;
 }
 
-function record(overrides: Record<string, unknown> = {}) {
+function record(overrides: Partial<ConsentRecord> = {}): ConsentRecord {
   return {
     purpose: 'third_party_ai_transfer',
     version: '2026-10-01',
@@ -125,8 +126,8 @@ describe('consentApi', () => {
   });
 
   it('distinguishes withdrawn from never granted', () => {
-    const revoked = {
-      purpose: 'retention' as const,
+    const revoked: ConsentRecord = {
+      purpose: 'retention',
       version: 'v1',
       grantedAt: '2026-10-01T10:00:00Z',
       revokedAt: '2026-10-02T10:00:00Z',
