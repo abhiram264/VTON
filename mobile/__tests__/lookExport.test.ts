@@ -256,6 +256,19 @@ describe('look export (C16)', () => {
     expect(outcome).toEqual({status: 'SAVE_FAILED'});
   });
 
+  test('requests the app image cap by default so the bridge never rejects a size our own bound implied was fine', async () => {
+    const {stager, staged} = makeStager();
+    const exporter = exporterWith(stager);
+
+    await exporter.exportLook(
+      {lookId: 'look-1', imageUrl: SIGNED_URL, disclosureAcknowledged: true},
+      'share',
+    );
+
+    // ShareLimits.MAX_SHARE_BYTES == 20 * 1024 * 1024.
+    expect(staged).toEqual([{url: SIGNED_URL, maxBytes: 20 * 1024 * 1024}]);
+  });
+
   test('sweeps staging older than the configured age so a crash does not leak private copies', async () => {
     const {stager, swept} = makeStager();
     const exporter = exporterWith(stager, {maxStagingAgeMs: 60_000});
