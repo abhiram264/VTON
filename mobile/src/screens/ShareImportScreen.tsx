@@ -42,6 +42,11 @@ export type ShareImportFlowState =
 
 function terminalMessage(code: string): string {
   switch (code) {
+    // C23: an ended session is not a broken share. Telling the user to re-share
+    // would send them in a circle, because the same expired credential would
+    // fail the new share too; the actionable fact is that they must sign in.
+    case 'UNAUTHORIZED':
+      return 'Your session has expired. Sign in again to continue this share.';
     case 'IMPORT_NOT_FOUND':
       return 'This shared import is no longer available. Share the item again from its app.';
     case 'IMPORT_STATE_CONFLICT':
