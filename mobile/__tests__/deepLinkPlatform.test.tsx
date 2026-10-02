@@ -4,7 +4,7 @@ import { Linking, NativeModules, Platform } from 'react-native';
 import fs from 'fs';
 import path from 'path';
 import * as featureFlags from '../src/config/featureFlags';
-import { generationApi } from '../src/features/generation/generationApi';
+import { looksApi } from '../src/features/looks/looksApi';
 import type { SharePayload } from '../src/features/share/types';
 
 // Native deep-link registration. The handlers above only ever see a URL the
@@ -109,7 +109,7 @@ async function flush() {
 
 function spyGetLook(): jest.Mock {
   return jest
-    .spyOn(generationApi, 'getLook')
+    .spyOn(looksApi, 'get')
     .mockReturnValue(
       new Promise<never>(() => undefined),
     ) as unknown as jest.Mock;
