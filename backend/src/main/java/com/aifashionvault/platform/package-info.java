@@ -14,7 +14,8 @@
                 "retention",
                 "collection",
                 "vault",
-                "normalization"
+                "normalization",
+                "privacy"
 		}
 )
 package com.aifashionvault.platform;
