@@ -23,7 +23,7 @@ jest.mock('../src/features/vault/vaultApi', () => ({
 jest.mock('../src/features/collections/collectionsApi', () => ({ collectionsApi: { list: jest.fn() } }));
 jest.mock('../src/features/looks/looksApi', () => ({ looksApi: { list: jest.fn(), regenerate: jest.fn() } }));
 jest.mock('../src/features/studio/studioApi', () => ({ studioApi: { get: jest.fn().mockResolvedValue({ sessionId: 'session-1', itemIds: [] }), command: jest.fn() } }));
-jest.mock('../src/features/generation/generationApi', () => ({ generationApi: { get: jest.fn() }, pollGeneration: jest.requireActual('../src/features/generation/generationApi').pollGeneration }));
+jest.mock('../src/features/generation/generationApi', () => ({ generationApi: { get: jest.fn(), list: jest.fn().mockResolvedValue([]) }, pollGeneration: jest.requireActual('../src/features/generation/generationApi').pollGeneration, isTerminalGeneration: jest.requireActual('../src/features/generation/generationApi').isTerminalGeneration }));
 
 const look = { id: 'look-1', generationId: 'old-generation', createdAt: '2026-08-30T10:00:00Z', image: { url: 'https://example/look', expiresAt: '2026-08-30T10:05:00Z' } };
 const noop = () => undefined;
@@ -71,7 +71,7 @@ test('regenerate polls fresh server state and opens the completed Look', async (
       <LooksScreen onModify={noop} onOpenLook={open} onProfile={noop} pollDelay={async () => undefined} />
     </NavigationContainer>
   );
-  await fireEvent.press(await screen.findByRole('button', { name: 'Look look-1' }));
+  await fireEvent.press(await screen.findByRole('button', { name: 'Look from 30 Aug 2026' }));
   await fireEvent.press(screen.getByRole('button', { name: 'Regenerate' }));
   await waitFor(() => expect(open).toHaveBeenCalledWith('look-2'));
   expect(generationApi.get).toHaveBeenCalledTimes(2);
@@ -102,7 +102,7 @@ test('regenerate surfaces truthful failure feedback on terminal FAILED and allow
       <LooksScreen onModify={noop} onOpenLook={open} onProfile={noop} pollDelay={async () => undefined} />
     </NavigationContainer>
   );
-  await fireEvent.press(await screen.findByRole('button', { name: 'Look look-1' }));
+  await fireEvent.press(await screen.findByRole('button', { name: 'Look from 30 Aug 2026' }));
   await fireEvent.press(screen.getByRole('button', { name: 'Regenerate' }));
 
   expect(await screen.findByText(/generation failed/i)).toBeTruthy();
@@ -140,7 +140,7 @@ test('regenerate handles response loss during polling and resumes without mintin
       <LooksScreen onModify={noop} onOpenLook={open} onProfile={noop} pollDelay={async () => undefined} />
     </NavigationContainer>
   );
-  await fireEvent.press(await screen.findByRole('button', { name: 'Look look-1' }));
+  await fireEvent.press(await screen.findByRole('button', { name: 'Look from 30 Aug 2026' }));
   await fireEvent.press(screen.getByRole('button', { name: 'Regenerate' }));
 
   expect(await screen.findByText(/could not check the accepted generation/i)).toBeTruthy();
