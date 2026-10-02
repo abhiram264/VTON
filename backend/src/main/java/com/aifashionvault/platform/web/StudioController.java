@@ -178,7 +178,9 @@ public class StudioController {
 				response(current), selection.prompt(),
 				selection.candidates().stream()
 					.map(candidate -> new CandidateResponse(
-						candidate.id().value().toString(), candidate.label()))
+						candidate.id().value().toString(),
+						candidate.label(),
+						selection.slot() == null ? null : selection.slot().name()))
 					.toList());
 			case StudioCommandPlanner.Explanation explanation -> StudioNaturalLanguageResponse.explained(
 				response(current), explanation.message());
@@ -552,11 +554,12 @@ public class StudioController {
 	}
 
 	/**
-	 * One owned garment the ambiguous command could mean. The client re-sends the
-	 * explicit {@code vaultItemId} through the manual command route, so the choice
-	 * resolves without a second parse of the user's words.
+	 * One owned garment the ambiguous command could mean. {@code slot} is the slot
+	 * the command TARGETED, taken from the planner's own resolution, so the
+	 * confirmation re-send never has to re-derive it from the garment's category on
+	 * the client.
 	 */
-	public record CandidateResponse(String vaultItemId, String label) {
+	public record CandidateResponse(String vaultItemId, String label, String slot) {
 	}
 
 	public record UnresolvedGarmentResponse(String slot, String vaultItemId, String reason) {

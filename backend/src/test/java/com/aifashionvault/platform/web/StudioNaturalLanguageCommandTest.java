@@ -151,6 +151,9 @@ class StudioNaturalLanguageCommandTest {
 
 		assertThat(confirm.get("outcome").stringValue()).isEqualTo("CONFIRM_REQUIRED");
 		assertThat(confirm.get("candidates")).hasSize(2);
+		// The planner's own target slot travels with the candidate, so the client
+		// never has to re-derive it from the garment's category.
+		assertThat(confirm.get("candidates").get(0).get("slot").stringValue()).isEqualTo("UPPER_BODY");
 		// Nothing was written: ambiguity is never guessed into a mutation.
 		assertThat(countItems(sessionId)).isZero();
 		assertThat(confirm.get("itemIds").isEmpty()).isTrue();

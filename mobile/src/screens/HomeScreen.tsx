@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { choosePhoto } from '../features/my-model/photoSource';
 import { ApiProblemError } from '../features/my-model/http';
@@ -52,23 +52,41 @@ export default function HomeScreen({ onImport, onOpenLook, onProfile, onQuickTry
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [looksState, setLooksState] = useState<LooksState>({ status: 'loading' });
-  const [reloadToken, setReloadToken] = useState(0);
+  // Monotonic request id: a slower earlier load must not overwrite a newer one
+  // (focus reload, Retry, or a blur that invalidates the in-flight response).
+  const looksRequest = useRef(0);
 
-  useFocusEffect(useCallback(() => {
-    let active = true;
+  // One loader for both entry points (focus and the Retry control), so the two
+  // paths cannot drift and neither needs a synthetic re-run dependency.
+  const loadLooks = useCallback(async () => {
+    const request = ++looksRequest.current;
     setLooksState({ status: 'loading' });
-    void looksApi.list().then(
-      value => { if (active) setLooksState({ status: 'ready', looks: value }); },
-      (error: unknown) => {
-        if (!active) return;
-        const kind = error instanceof ApiProblemError && error.code === 'UNAUTHORIZED'
+    try {
+      const value = await looksApi.list();
+      if (looksRequest.current === request) {
+        setLooksState({ status: 'ready', looks: value });
+      }
+    } catch (error) {
+      if (looksRequest.current !== request) {
+        return;
+      }
+      const kind =
+        error instanceof ApiProblemError && error.code === 'UNAUTHORIZED'
           ? 'unauthorized'
           : 'retryable';
-        setLooksState({ status: 'error', kind });
-      },
-    );
-    return () => { active = false; };
-  }, [reloadToken]));
+      setLooksState({ status: 'error', kind });
+    }
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      void loadLooks();
+      // Blur invalidates whatever this focus started.
+      return () => {
+        looksRequest.current += 1;
+      };
+    }, [loadLooks]),
+  );
 
   async function importItem() {
     if (busy) return;
@@ -103,7 +121,7 @@ export default function HomeScreen({ onImport, onOpenLook, onProfile, onQuickTry
       {looksState.status === 'error' && looksState.kind === 'retryable' ? (
         <>
           <Text accessibilityLiveRegion="polite">Could not load recent Looks.</Text>
-          <Action label="Retry loading Looks" onPress={() => setReloadToken(token => token + 1)} />
+          <Action label="Retry loading Looks" onPress={() => void loadLooks()} />
         </>
       ) : null}
       {looksState.status === 'ready' && looksState.looks.length === 0 ? <Text>No recent Looks yet.</Text> : null}
