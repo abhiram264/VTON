@@ -288,15 +288,29 @@ public class JdbcShareImportStore {
 	 * and the import's source provenance is preserved through the
 	 * {@code source_reference} row. The write is owner-scoped and transactional;
 	 * a foreign import never resolves here and no item is inserted.
+	 * <p>
+	 * Optional owner corrections ({@code correctedName}, {@code correctedCategory})
+	 * overwrite the saved item's metadata, and {@code collectionId} adds the item
+	 * to an owned collection, in the same transaction as the insert. Repeating
+	 * the same confirmation therefore converges on the same item and the same
+	 * single membership row.
 	 *
 	 * @return the confirmed Vault item, or empty when the import is not
-	 * owner-visible, is not READY, or has no resolved object.
+	 * owner-visible, is not READY, has no resolved object, or names a collection
+	 * that is not owned by the confirming user.
 	 */
-	public Optional<ConfirmedItem> confirm(UserId ownerId, ShareImportId id) {
+	public Optional<ConfirmedItem> confirm(UserId ownerId, ShareImportId id,
+			String correctedName, String correctedCategory, UUID collectionId) {
 		Objects.requireNonNull(ownerId, "ownerId");
 		Objects.requireNonNull(id, "id");
 		ShareImport current = find(ownerId, id).orElse(null);
 		if (current == null || current.state() != ShareImportState.READY || current.storageKey() == null) {
+			return Optional.empty();
+		}
+		// An unowned collection is refused before any write: the owner-scoped
+		// lookup keeps another owner's collection indistinguishable from a
+		// missing one, and a rejected confirmation saves nothing.
+		if (collectionId != null && !collectionOwned(ownerId, collectionId)) {
 			return Optional.empty();
 		}
 		UUID itemId = confirmedItemId(ownerId, id);
@@ -314,15 +328,38 @@ public class JdbcShareImportStore {
 					+ "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING",
 				itemId, ownerId.value(), current.storageKey().value(), id.value(),
 				current.sourceTitle(), Timestamp.from(now));
+			// Owner corrections are applied after the idempotent insert, so a
+			// repeat confirmation with the same corrections converges on the
+			// same row instead of creating a second item.
+			if (correctedName != null || correctedCategory != null) {
+				jdbc.update(
+					"UPDATE vault_item SET name = COALESCE(?, name), category = COALESCE(?, category) "
+						+ "WHERE id = ? AND user_id = ?",
+					correctedName, correctedCategory, itemId, ownerId.value());
+			}
+			if (collectionId != null) {
+				jdbc.update(
+					"INSERT INTO collection_item (collection_id, vault_item_id, user_id, created_at) VALUES (?, ?, ?, ?) "
+						+ "ON CONFLICT DO NOTHING",
+					collectionId, itemId, ownerId.value(), Timestamp.from(now));
+			}
 		});
 		return confirmedItem(ownerId, itemId);
 	}
 
+	private boolean collectionOwned(UserId ownerId, UUID collectionId) {
+		return !jdbc.query(
+			"SELECT 1 FROM collection WHERE id = ? AND user_id = ?",
+			(rs, rowNum) -> rs.getInt(1), collectionId, ownerId.value()).isEmpty();
+	}
+
 	private Optional<ConfirmedItem> confirmedItem(UserId ownerId, UUID itemId) {
 		return jdbc.query(
-			"SELECT v.id, v.source_reference_id, v.created_at FROM vault_item v WHERE v.id = ? AND v.user_id = ?",
+			"SELECT v.id, v.source_reference_id, v.name, v.category, v.created_at FROM vault_item v "
+				+ "WHERE v.id = ? AND v.user_id = ?",
 			(rs, rowNum) -> new ConfirmedItem(rs.getObject("id", UUID.class),
-				rs.getObject("source_reference_id", UUID.class), rs.getTimestamp("created_at").toInstant()),
+				rs.getObject("source_reference_id", UUID.class), rs.getString("name"), rs.getString("category"),
+				rs.getTimestamp("created_at").toInstant()),
 			itemId, ownerId.value()).stream().findFirst();
 	}
 
@@ -346,8 +383,9 @@ public class JdbcShareImportStore {
 		return value == null ? "null" : "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\"";
 	}
 
-	/** Saved-item identity returned by a successful confirmation. */
-	public record ConfirmedItem(UUID itemId, UUID sourceReferenceId, java.time.Instant createdAt) {
+	/** Saved-item identity and stored metadata returned by a successful confirmation. */
+	public record ConfirmedItem(UUID itemId, UUID sourceReferenceId, String name, String category,
+			java.time.Instant createdAt) {
 	}
 
 	public DeleteResult delete(UserId ownerId, ShareImportId id) {
