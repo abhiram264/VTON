@@ -531,3 +531,63 @@ above is **EXECUTED** by `DeviceRegistrationApiTest` (7 HTTP cases, real Postgre
 Known gap (SOURCE-CONFIRMED): `FcmDeliveryWorker.enqueue` has no production caller, so no
 generation completion currently creates a notification event. Delivery remains unmounted
 until a generation-publication owner wires it.
+
+## 11. C06 consent contract — 2026-10-03 (frozen, EXECUTED)
+
+Frozen DTO seam for the body-image-processing and third-party-AI-transfer consents (guide
+§5.3). Implemented in `platform/web/ConsentsController` over the existing `V006`-era `consent`
+table (migration `V010__create_consents.sql` — no new migration). The mobile client
+(`mobile/src/features/consent/consentApi.ts`) was written against this shape and agrees with
+it field for field.
+
+Every route is authenticated; the owner is the authenticated principal and never appears in a
+body or path, so consent is always scoped to the caller. **Both supported purposes are always
+enumerated**, so a client never has to tell "absent" apart from "not granted".
+
+Purpose literals are the **snake_case stored values**, not the enum names:
+
+| Enum | Wire literal |
+|---|---|
+| `ConsentPurpose.BODY_IMAGE_PROCESSING` | `body_image_processing` |
+| `ConsentPurpose.THIRD_PARTY_AI_TRANSFER` | `third_party_ai_transfer` |
+
+| Method | Route | Request | Response |
+|---|---|---|---|
+| GET | `/consents` | — | `200 {policyVersion, purposes:[ConsentState]}` |
+| POST | `/consents/{purpose}` | no body (the **server** picks the policy version) | `200 ConsentState` |
+| DELETE | `/consents/{purpose}` | — | `200 ConsentState` (idempotent) |
+
+`ConsentState` — every field always present (nulls included), so a client can parse strictly:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `purpose` | string | one of the two literals above |
+| `active` | boolean | whether the owner currently holds this consent |
+| `version` | string \| null | policy version the **active** grant was recorded under; null when `active` is false |
+| `grantedAt` | ISO-8601 UTC \| null | grant time of the active consent; null when `active` is false |
+| `policyVersion` | string | the version the server would record for a **new** grant, so `version != policyVersion` tells the client an active grant predates the current policy |
+
+Semantics:
+
+- `active` is answered by `ConsentService.isActive` — the same primitive the server-side
+  provider-transfer gate consults — so this surface can never report a purpose as granted
+  while the enforcement gate would refuse it.
+- A repeated `POST` for the same purpose is idempotent: one active record, same state.
+- `DELETE` is idempotent: repeating it stays `200` with `active:false`, never `404`. The
+  withdrawn record is kept (evidence), only `revoked_at` is set.
+- The recorded policy version comes from `vault.privacy.consent-policy-version`
+  (default `2026-10-03`), so publishing a new consent text is a visible deployment change
+  rather than a code edit.
+
+Errors: `400 {"code":"CONSENT_PURPOSE_UNKNOWN"}` for a purpose outside the two literals;
+`503 {"code":"CONSENT_UNAVAILABLE"}` when the server has no consent store configured — an
+unanswerable question is **never** answered "granted". Unauthenticated requests are `401`
+like every other route.
+
+Enforcement (EXECUTED): `PrivacyApprovedInputTransfer.prepare(..., owner)` checks the
+owner's active `third_party_ai_transfer` consent **before** the object is read or a signed
+read is minted, so a withdrawal stops the next transfer rather than the next upload. A job
+without consent fails terminally with `TerminalReason.CONSENT_REQUIRED` and publishes no Look.
+`GenerationProcessorConfiguration` builds the transfer component only when **both** an
+`ObjectStore` and a `ConsentService` are present, so a deployment missing the consent service
+builds no generation processor at all (fail closed) instead of transferring unchecked.
