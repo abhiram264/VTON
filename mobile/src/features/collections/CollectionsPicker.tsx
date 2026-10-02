@@ -16,12 +16,15 @@ import {
 /**
  * Reusable collections surface over the mounted /collections controller.
  *
- * Two modes, one component:
+ * Three modes, one component:
  *  - membership mode (`vaultItemId` set): shows whether the given garment is
  *    in each collection and toggles membership through the API.
  *  - selection mode (`vaultItemId` null): reports the chosen collection ids
  *    through `onChange` (used when choosing a collection during import)
  *    without touching membership.
+ *  - management mode (`manageOnly`): create/rename/delete only. No membership
+ *    checkbox is rendered, because there is no item and no selection to toggle
+ *    — a checkbox there would be a control that does nothing.
  *
  * Membership is many-to-many and non-destructive: removing a garment from a
  * collection and deleting a collection both leave the garment in the Vault.
@@ -30,6 +33,7 @@ export type CollectionsPickerProps = {
   vaultItemId: string | null;
   api?: CollectionsApi;
   selectedIds?: string[];
+  manageOnly?: boolean;
   onChange?: (selected: string[]) => void;
   onError?: (error: unknown) => void;
 };
@@ -38,6 +42,7 @@ export default function CollectionsPicker({
   vaultItemId,
   api = collectionsApi,
   selectedIds,
+  manageOnly = false,
   onChange,
   onError,
 }: CollectionsPickerProps) {
@@ -89,7 +94,7 @@ export default function CollectionsPicker({
   };
 
   const inCollection = (collection: Collection): boolean =>
-    vaultItemId !== null
+    vaultItemId !== null && !manageOnly
       ? collection.items.some(item => item.vaultItemId === vaultItemId)
       : (selectedIds ?? []).includes(collection.id);
 
@@ -124,6 +129,10 @@ export default function CollectionsPicker({
       const created = await api.create(trimmed);
       setName('');
       setDrafts(current => ({ ...current, [created.id]: created.name }));
+      if (manageOnly) {
+        setCollections(current => [...current, created]);
+        return;
+      }
       if (vaultItemId === null) {
         setCollections(current => [...current, created]);
         onChange?.([...(selectedIds ?? []), created.id]);
@@ -182,16 +191,18 @@ export default function CollectionsPicker({
           const selected = inCollection(collection);
           return (
             <View key={collection.id} style={styles.row}>
-              <Pressable
-                accessibilityRole="checkbox"
-                accessibilityLabel={`Membership ${collection.name}`}
-                accessibilityState={{ checked: selected, disabled: busy }}
-                disabled={busy}
-                onPress={() => void toggle(collection)}
-                style={styles.checkbox}
-              >
-                <Text style={styles.rowLabel}>{selected ? '✓' : '○'}</Text>
-              </Pressable>
+              {manageOnly ? null : (
+                <Pressable
+                  accessibilityRole="checkbox"
+                  accessibilityLabel={`Membership ${collection.name}`}
+                  accessibilityState={{ checked: selected, disabled: busy }}
+                  disabled={busy}
+                  onPress={() => void toggle(collection)}
+                  style={styles.checkbox}
+                >
+                  <Text style={styles.rowLabel}>{selected ? '✓' : '○'}</Text>
+                </Pressable>
+              )}
               <TextInput
                 accessibilityLabel={`Rename ${collection.name}`}
                 value={drafts[collection.id] ?? collection.name}

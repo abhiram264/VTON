@@ -5,13 +5,22 @@ import LooksScreen from '../src/screens/LooksScreen';
 import StudioScreen from '../src/screens/StudioScreen';
 import VaultScreen from '../src/screens/VaultScreen';
 import { vaultApi } from '../src/features/vault/vaultApi';
-import { collectionApi } from '../src/features/vault/collectionApi';
+import { collectionsApi } from '../src/features/collections/collectionsApi';
 import { looksApi } from '../src/features/looks/looksApi';
 import { studioApi } from '../src/features/studio/studioApi';
 import { generationApi } from '../src/features/generation/generationApi';
+import * as featureFlags from '../src/config/featureFlags';
 
-jest.mock('../src/features/vault/vaultApi', () => ({ vaultApi: { list: jest.fn() } }));
-jest.mock('../src/features/vault/collectionApi', () => ({ collectionApi: { list: jest.fn() } }));
+jest.mock('../src/features/vault/vaultApi', () => ({
+  vaultApi: {
+    list: jest.fn(),
+    image: jest.fn().mockResolvedValue({
+      url: 'https://signed.example.invalid/item?X-Amz-Signature=read-token',
+      expiresAt: '2026-09-01T00:05:00Z',
+    }),
+  },
+}));
+jest.mock('../src/features/collections/collectionsApi', () => ({ collectionsApi: { list: jest.fn() } }));
 jest.mock('../src/features/looks/looksApi', () => ({ looksApi: { list: jest.fn(), regenerate: jest.fn() } }));
 jest.mock('../src/features/studio/studioApi', () => ({ studioApi: { get: jest.fn().mockResolvedValue({ sessionId: 'session-1', itemIds: [] }), command: jest.fn() } }));
 jest.mock('../src/features/generation/generationApi', () => ({ generationApi: { get: jest.fn() }, pollGeneration: jest.requireActual('../src/features/generation/generationApi').pollGeneration }));
@@ -36,7 +45,13 @@ test('browses collection membership from the collection and vault sources', asyn
     { id: 'item-1', category: 'TOP', name: 'Silk top' },
     { id: 'item-2', category: 'BOTTOM', name: 'Trousers' },
   ]);
-  jest.mocked(collectionApi.list).mockResolvedValue([{ id: 'collection-1', name: 'Work', vaultItemIds: ['item-2'] }]);
+  jest.mocked(collectionsApi.list).mockResolvedValue([{
+    id: 'collection-1',
+    name: 'Work',
+    createdAt: '2026-09-01T00:00:00Z',
+    updatedAt: '2026-09-01T00:00:00Z',
+    items: [{ vaultItemId: 'item-2', createdAt: '2026-09-01T00:00:00Z' }],
+  }]);
   await render(<VaultScreen onProfile={noop} />);
   fireEvent.press(screen.getByRole('radio', { name: 'Collections' }));
   fireEvent.press(await screen.findByRole('button', { name: 'Work' }));
@@ -139,12 +154,22 @@ test('regenerate handles response loss during polling and resumes without mintin
 });
 
 test('Apply command calls the Studio client with trimmed text', async () => {
-  jest.mocked(studioApi.command).mockResolvedValue({ sessionId: 'session-1', itemIds: [] });
-  await render(<StudioScreen studioSessionId="session-1" onAddFromVault={noop} onAvatar={noop} onOpenLook={noop} onProfile={noop} />);
-  await fireEvent.changeText(screen.getByLabelText('Natural-language command'), '  remove the hat  ');
-  await fireEvent.press(screen.getByRole('button', { name: 'Apply command' }));
-  await waitFor(() => expect(studioApi.command).toHaveBeenCalledWith('session-1', 'remove the hat'));
-  expect(screen.getByLabelText('Natural-language command').props.value).toBe('');
+  // C22 defaults NATURAL_LANGUAGE_STUDIO off; this test exercises the NL
+  // command input, so enable just that capability here rather than changing
+  // the shipped default.
+  const flagSpy = jest
+    .spyOn(featureFlags, 'isFeatureEnabled')
+    .mockImplementation(name => name === 'NATURAL_LANGUAGE_STUDIO');
+  try {
+    jest.mocked(studioApi.command).mockResolvedValue({ sessionId: 'session-1', itemIds: [] });
+    await render(<StudioScreen studioSessionId="session-1" onAddFromVault={noop} onAvatar={noop} onOpenLook={noop} onProfile={noop} />);
+    await fireEvent.changeText(screen.getByLabelText('Natural-language command'), '  remove the hat  ');
+    await fireEvent.press(screen.getByRole('button', { name: 'Apply command' }));
+    await waitFor(() => expect(studioApi.command).toHaveBeenCalledWith('session-1', 'remove the hat'));
+    expect(screen.getByLabelText('Natural-language command').props.value).toBe('');
+  } finally {
+    flagSpy.mockRestore();
+  }
 });
 
 test('Home loads recent Looks and opens the selected Look', async () => {
