@@ -10,6 +10,8 @@ import {releaseStagedImage} from './shareHandoff';
 import type {AvatarApiConfig} from '../my-model/types';
 import { productionApiConfig } from '../../config/apiConfig';
 import type {
+  ShareImportConfirmedItem,
+  ShareImportConfirmer,
   ShareImportRequest,
   ShareImportResolver,
   ShareImportResponse,
@@ -249,5 +251,60 @@ export function createShareImportResolver(
       }
     }
     return latest;
+  };
+}
+
+function isConfirmedItem(value: unknown): value is ShareImportConfirmedItem {
+  if (value === null || typeof value !== 'object') {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.id === 'string' &&
+    record.id.length > 0 &&
+    typeof record.sourceReferenceId === 'string' &&
+    record.sourceReferenceId.length > 0
+  );
+}
+
+/**
+ * Persists a resolved share import into the owner's Vault through the mounted
+ * `POST /share/imports/{importId}/confirm` route. This is the only save path:
+ * replaying resolution (`POST /share/imports`) can never persist an item, so
+ * the caller must never report "saved" from a resolution response.
+ *
+ * The route is idempotent server-side (saved-item identity is derived from
+ * owner + import), so a repeat — including a retry after a lost response —
+ * converges on the same item rather than creating a duplicate.
+ */
+export function createShareImportConfirmer(
+  config: AvatarApiConfig = productionApiConfig,
+): ShareImportConfirmer {
+  return async function confirm(
+    importId: string,
+    signal: AbortSignal,
+  ): Promise<ShareImportConfirmedItem> {
+    if (signal.aborted) {
+      throw new Error('Aborted');
+    }
+    const payload = (await requireOk(
+      await apiRequest(
+        config,
+        `${STATUS_PATH}/${encodeURIComponent(importId)}/confirm`,
+        {method: 'POST'},
+      ),
+    )) as unknown;
+    if (!isConfirmedItem(payload)) {
+      throw new Error('Invalid confirm response');
+    }
+    if (signal.aborted) {
+      throw new Error('Aborted');
+    }
+    return {
+      id: payload.id,
+      sourceReferenceId: payload.sourceReferenceId,
+      createdAt:
+        typeof payload.createdAt === 'string' ? payload.createdAt : undefined,
+    };
   };
 }
