@@ -217,6 +217,14 @@ public class JdbcGenerationStore implements GenerationStore {
 		this.admissionPolicy = admissionPolicy;
 	}
 
+	/**
+	 * C19: the effective admission caps this store enforces. Package-visible so
+	 * the configuration wiring can be observed without a database.
+	 */
+	AdmissionPolicy admissionPolicy() {
+		return admissionPolicy;
+	}
+
 	@Override
 	public void insertJob(GenerationJob job) {
 		if (job == null) {
