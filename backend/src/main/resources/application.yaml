@@ -73,12 +73,31 @@ vault:
   # POST /avatars, PATCH /avatars/{id}.
   integrity:
     required: false
+  privacy:
+    # C06: the policy version recorded on every consent grant. It is
+    # configuration, not a compiled constant, so publishing a new policy is a
+    # visible deployment change and the version stored on a grant is the one in
+    # force when that grant was made. Bump it whenever the consent text changes.
+    consent-policy-version: ${CONSENT_POLICY_VERSION:2026-10-03}
   avatar:
     # See the NOT YET ENFORCING note above; true today = 403 on all avatar writes.
     attestation-required: false
   generation:
     multi-item-enabled: false
     admission-paused: false
+    # C19: approved generation admission caps. These ARE application
+    # configuration (AdmissionCapsProperties, prefix vault.generation.admission)
+    # and the store enforces exactly what is bound here. The values below
+    # reproduce the caps this application previously compiled in as
+    # AdmissionPolicy.DEFAULT (5 accepted jobs per 24h, 2 active jobs, 6
+    # products per job); they are NOT an approved launch budget. Set the real
+    # numbers for the deployment - env form VAULT_GENERATION_ADMISSION_* - and
+    # an operator can then explain provider bill versus application accounting
+    # without reading source. Values below 1 fail startup.
+    admission:
+      accepted-jobs-per-24-hours: 5
+      max-active-jobs: 2
+      max-products-per-job: 6
     # See the NOT YET ENFORCING note above; true today = 403 on all generation
     # writes, including POST /looks/{id}/regenerate.
     attestation-required: false

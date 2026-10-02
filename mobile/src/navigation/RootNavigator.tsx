@@ -5,6 +5,7 @@ import { Pressable, StyleSheet, View } from 'react-native';
 import { useEffect, useState, type ReactNode } from 'react';
 import { subscribeToAuthSession, type AuthSession } from '../config/firebase';
 import { trackAccountIsolation } from '../features/auth/accountSession';
+import AccountDeletionCard from '../features/account/AccountDeletionCard';
 import SignInScreen from '../screens/SignInScreen';
 import GenerateScreen from '../screens/GenerateScreen';
 import HomeScreen from '../screens/HomeScreen';
@@ -68,7 +69,7 @@ function MainTabs() {
         {props => <VaultTabScreen {...props} />}
       </Tabs.Screen>
       <Tabs.Screen name="StudioTab" options={{ tabBarLabel: 'STUDIO' }}>
-        {({ navigation, route }: TabProps<'StudioTab'>) => <StudioScreen {...route.params} onAddFromVault={studioSessionId => navigation.navigate('VaultTab', { mode: 'SELECT_FOR_STUDIO', studioSessionId })} onAvatar={() => navigation.navigate('MyModel')} onGenerate={() => navigation.navigate('Generate')} onProfile={() => navigation.navigate('ProfileSettings')} />}
+        {({ navigation, route }: TabProps<'StudioTab'>) => <StudioScreen {...route.params} onAddFromVault={studioSessionId => navigation.navigate('VaultTab', { mode: 'SELECT_FOR_STUDIO', studioSessionId })} onAvatar={() => navigation.navigate('MyModel')} onOpenLook={lookId => navigation.navigate('Look', { lookId })} onProfile={() => navigation.navigate('ProfileSettings')} />}
       </Tabs.Screen>
       <Tabs.Screen name="LooksTab" options={{ tabBarLabel: 'LOOKS' }}>
         {({ navigation }: TabProps<'LooksTab'>) => <LooksScreen onModify={sourceLookId => navigation.navigate('StudioTab', { sourceLookId })} onOpenLook={lookId => navigation.navigate('Look', { lookId })} onProfile={() => navigation.navigate('ProfileSettings')} />}
@@ -78,7 +79,8 @@ function MainTabs() {
 }
 // The account settings surface (C03). It previously rendered My Model, which
 // left the app with no sign-out control; My Model stays reachable through its
-// own `MyModel` stack route.
+// own `MyModel` stack route. The account-deletion card is mounted as a child
+// so this function stays the single owner of the settings surface.
 function ProfileSettings({
   navigation,
   session,
@@ -91,7 +93,9 @@ function ProfileSettings({
       session={session}
       onBack={navigation.goBack}
       onOpenMyModel={() => navigation.navigate('MyModel')}
-    />
+    >
+      <AccountDeletionCard />
+    </SettingsScreen>
   );
 }
 
@@ -162,7 +166,7 @@ export default function RootNavigator({ session: injectedSession }: { session?: 
         {({ navigation }) => <GenerateScreen onCreateLook={lookId => navigation.navigate('Look', { lookId })} onMissingModel={() => navigation.navigate('MyModel')} />}
       </Stack.Screen>
       <Stack.Screen name="Look">
-        {({ route }) => <SessionGate session={session} signedIn={<LookScreen lookId={route.params.lookId} />} />}
+        {({ navigation, route }) => <SessionGate session={session} signedIn={<LookScreen lookId={route.params.lookId} onDeleted={() => navigation.goBack()} />} />}
       </Stack.Screen>
       <Stack.Screen name="ShareImport">
         {({ route }) => <SessionGate session={session} signedIn={<ShareImportScreen payload={route.params.payload} />} />}

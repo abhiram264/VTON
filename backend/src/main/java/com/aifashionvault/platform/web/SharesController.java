@@ -56,6 +56,14 @@ public class SharesController {
 		return service().get(userId, importId);
 	}
 
+	@GetMapping("/{importId}/preview")
+	public ShareImportPreviewResponse preview(
+		@AuthenticationPrincipal UserId userId,
+		@PathVariable String importId
+	) {
+		return service().preview(userId, importId);
+	}
+
 	@PutMapping("/{importId}/image")
 	public ResponseEntity<ShareImportResponse> attach(
 		@AuthenticationPrincipal UserId userId,
@@ -80,11 +88,12 @@ public class SharesController {
 	@PostMapping("/{importId}/confirm")
 	public ResponseEntity<VaultItemResponse> confirm(
 		@AuthenticationPrincipal UserId userId,
-		@PathVariable String importId
+		@PathVariable String importId,
+		@RequestBody(required = false) ConfirmShareImportRequest request
 	) {
 		return ResponseEntity.status(HttpStatus.CREATED)
 			.contentType(MediaType.APPLICATION_JSON)
-			.body(service().confirm(userId, importId));
+			.body(service().confirm(userId, importId, request));
 	}
 
 
