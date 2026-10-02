@@ -16,12 +16,16 @@ import com.aifashionvault.platform.fashn.FashnVtonProvider;
 import com.aifashionvault.platform.fashn.FashnConfig;
 import com.aifashionvault.platform.objectstore.ClaimCommand;
 import com.aifashionvault.platform.objectstore.ClaimResult;
+import com.aifashionvault.platform.objectstore.GenerationClaimCommand;
+import com.aifashionvault.platform.objectstore.GenerationMediaStore;
 import com.aifashionvault.platform.objectstore.MediaDeclaration;
 import com.aifashionvault.platform.objectstore.ObjectMetadata;
 import com.aifashionvault.platform.objectstore.ObjectRef;
 import com.aifashionvault.platform.objectstore.ObjectStore;
 import com.aifashionvault.platform.objectstore.PresignedAccess;
+import com.aifashionvault.platform.objectstore.ProductInputClaimCommand;
 import com.aifashionvault.platform.objectstore.UploadCapability;
+import com.aifashionvault.shared.StorageKey;
 import com.aifashionvault.shared.UploadId;
 import com.aifashionvault.shared.UserId;
 
@@ -36,6 +40,7 @@ class InferHubConfigTest {
             "vault.inferhub.api-key=" + INFERHUB_KEY,
             "vault.fashn.api-key=test-fashn-key")
         .withBean(ObjectStore.class, NoopObjectStore::new)
+        .withBean(GenerationMediaStore.class, NoopObjectStore::new)
         .withBean(VaultEnvironmentProperties.class, InferHubConfigTest::properties);
 
     @Test
@@ -55,6 +60,7 @@ class InferHubConfigTest {
         new ApplicationContextRunner()
             .withUserConfiguration(InferHubConfig.class)
             .withBean(ObjectStore.class, NoopObjectStore::new)
+            .withBean(GenerationMediaStore.class, NoopObjectStore::new)
             .run(context -> {
                 assertThat(context).hasNotFailed();
                 assertThat(context).doesNotHaveBean(InferHubVtonProvider.class);
@@ -77,6 +83,7 @@ class InferHubConfigTest {
             .withUserConfiguration(InferHubConfig.class, FashnConfig.class, ProviderRegistryComposition.class)
             .withPropertyValues("vault.inferhub.api-key=", "vault.fashn.api-key=")
             .withBean(ObjectStore.class, NoopObjectStore::new)
+            .withBean(GenerationMediaStore.class, NoopObjectStore::new)
             .withBean(VaultEnvironmentProperties.class, InferHubConfigTest::properties)
             .run(context -> {
                 assertThat(context).hasNotFailed();
@@ -101,6 +108,7 @@ class InferHubConfigTest {
             .withUserConfiguration(InferHubConfig.class, FashnConfig.class, ProviderRegistryComposition.class)
             .withPropertyValues("vault.inferhub.api-key=" + INFERHUB_KEY)
             .withBean(ObjectStore.class, NoopObjectStore::new)
+            .withBean(GenerationMediaStore.class, NoopObjectStore::new)
             .withBean(VaultEnvironmentProperties.class, InferHubConfigTest::properties)
             .run(context -> {
                 assertThat(context).hasNotFailed();
@@ -132,6 +140,7 @@ class InferHubConfigTest {
                     "vault.inferhub.api-key=" + INFERHUB_KEY,
                     "vault.fashn.api-key=test-fashn-key")
                 .withBean(ObjectStore.class, NoopObjectStore::new)
+                .withBean(GenerationMediaStore.class, NoopObjectStore::new)
                 .withBean(VaultEnvironmentProperties.class, InferHubConfigTest::properties)
                 .run(context -> {
                     assertThat(context).hasNotFailed();
@@ -199,7 +208,32 @@ class InferHubConfigTest {
      * Nothing in these context tests touches the store; every method fails loudly
      * so an unexpected call is visible instead of silently answered.
      */
-    static final class NoopObjectStore implements ObjectStore {
+    static final class NoopObjectStore implements ObjectStore, GenerationMediaStore {
+        @Override
+        public void putBounded(StorageKey dest, java.io.InputStream source, long maxBytes, String mediaType) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public ClaimResult claim(GenerationClaimCommand command) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public void preflightProductInput(ProductInputClaimCommand command) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public ClaimResult claimProductInput(ProductInputClaimCommand command) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public void releaseProductInput(ProductInputClaimCommand command) {
+            throw new UnsupportedOperationException();
+        }
+
         @Override
         public UploadCapability presignStagingPut(UserId userId, UploadId uploadId, MediaDeclaration declaration) {
             throw new UnsupportedOperationException();

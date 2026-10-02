@@ -5,6 +5,9 @@ import java.time.Instant;
 import java.util.List;
 import java.util.TimeZone;
 import java.util.UUID;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.BeforeAll;
@@ -150,6 +153,46 @@ class JdbcStudioStoreTest {
 			.isInstanceOf(IllegalArgumentException.class);
 
 		assertThat(countSessions()).isZero();
+	}
+
+	@Test
+	void concurrentStaleEditsCannotBothWin() throws Exception {
+		StudioSession created = store.create(draft(newId(), owner, T0, T0));
+		StudioSession first = draft(created.id(), owner, T0, T1,
+			item(created.id(), StudioSlot.UPPER_BODY, vaultItem(owner), 0));
+		StudioSession second = draft(created.id(), owner, T0, T2,
+			item(created.id(), StudioSlot.LOWER_BODY, vaultItem(owner), 0));
+
+		CyclicBarrier barrier = new CyclicBarrier(2);
+		AtomicReference<JdbcStudioStore.SaveResult> a = new AtomicReference<>();
+		AtomicReference<JdbcStudioStore.SaveResult> b = new AtomicReference<>();
+		Runnable saveFirst = () -> a.set(race(barrier, first));
+		Runnable saveSecond = () -> b.set(race(barrier, second));
+		Thread one = new Thread(saveFirst);
+		Thread two = new Thread(saveSecond);
+		one.start();
+		two.start();
+		one.join();
+		two.join();
+
+		List<JdbcStudioStore.SaveStatus> statuses = List.of(a.get().status(), b.get().status());
+		assertThat(statuses).containsExactlyInAnyOrder(
+			JdbcStudioStore.SaveStatus.SAVED, JdbcStudioStore.SaveStatus.STALE);
+		// Exactly one writer won, and the stored draft is that winner's — not a blend, and
+		// not the loser's (no lost update).
+		StudioSession persisted = store.findForUser(created.id(), owner).orElseThrow();
+		StudioSession winner = a.get().saved() ? first : second;
+		assertThat(persisted).isEqualTo(winner);
+	}
+
+	private JdbcStudioStore.SaveResult race(CyclicBarrier barrier, StudioSession next) {
+		try {
+			barrier.await(10, TimeUnit.SECONDS);
+		}
+		catch (Exception ex) {
+			throw new IllegalStateException("barrier", ex);
+		}
+		return store.save(next, T0);
 	}
 
 	private long countSessions() {

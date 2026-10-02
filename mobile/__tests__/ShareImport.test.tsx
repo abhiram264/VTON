@@ -543,7 +543,17 @@ describe('ShareImportScreen flow', () => {
     );
   }
 
-  test('READY saves through POST /share/imports/{id}/confirm and never claims saved before persistence', async () => {
+  function preview(id = IMPORT_ID) {
+    return {
+      importId: id,
+      previewUrl: `${BASE_URL}/share/imports/${id}/preview.png`,
+      previewExpiresAt: '2026-10-03T00:05:00Z',
+      sourceTitle: 'Linen Shirt',
+      sourceSiteName: 'example.invalid',
+    };
+  }
+
+  test('READY previews the item, sends owner corrections, and never claims saved before persistence', async () => {
     const confirmed = {
       id: 'vault-item-1',
       sourceReferenceId: 'source-ref-1',
@@ -551,39 +561,145 @@ describe('ShareImportScreen flow', () => {
     };
     fetchMock
       .mockResolvedValueOnce(jsonResponse(201, ready()))
+      .mockResolvedValueOnce(jsonResponse(200, preview()))
       .mockResolvedValueOnce(jsonResponse(201, confirmed));
     const view = await render(
       <ShareImportScreen payload={{ kind: 'url', url: SOURCE_URL }} api={api()} />,
     );
     expect(await view.findByText('Shared item ready')).toBeTruthy();
 
-    const save = await view.findByText('Save to Vault');
+    // The owner-scoped preview is shown, with its safe source metadata.
+    const image = await view.findByLabelText('Shared item preview');
+    expect(image.props.source.uri).toBe(
+      `${BASE_URL}/share/imports/${IMPORT_ID}/preview.png`,
+    );
+    expect(view.getByText('Linen Shirt')).toBeTruthy();
+    expect(view.getByText('example.invalid')).toBeTruthy();
+
+    // Corrected metadata is editable before the item is persisted.
     await act(async () => {
-      fireEvent.press(save);
+      fireEvent.changeText(view.getByLabelText('Item name'), '  Blue Shirt  ');
+    });
+    await act(async () => {
+      fireEvent.press(view.getByLabelText('TOP'));
+    });
+
+    await act(async () => {
+      fireEvent.press(await view.findByText('Save to Vault'));
     });
 
     // Persistence goes through the mounted confirm route, bound to the
-    // resolved importId — never by replaying resolution.
+    // resolved importId — never by replaying resolution — and carries only the
+    // corrections the owner actually made (the name is trimmed).
     const confirmPosts = fetchMock.mock.calls.filter(call =>
       requestUrl(call[0]).endsWith(`/share/imports/${IMPORT_ID}/confirm`),
     );
     expect(confirmPosts).toHaveLength(1);
     expect(confirmPosts[0][1].method).toBe('POST');
+    expect(JSON.parse(confirmPosts[0][1].body)).toEqual({
+      name: 'Blue Shirt',
+      category: 'TOP',
+    });
     // Only the persisted confirm response may present the saved state.
     expect(await view.findByText('Saved to your Vault')).toBeTruthy();
     // One share still creates at most one import: the save path never POSTs
     // /share/imports again.
-    const importPosts = fetchMock.mock.calls.filter(call =>
-      requestUrl(call[0]).endsWith('/share/imports'),
-    );
-    expect(importPosts).toHaveLength(1);
+    expect(
+      fetchMock.mock.calls.filter(call =>
+        requestUrl(call[0]).endsWith('/share/imports'),
+      ),
+    ).toHaveLength(1);
     expect(view.queryByText(/https?:\/\//)).toBeNull();
+  });
+
+  test('a preview failure does not block saving the resolved item', async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(201, ready()))
+      .mockRejectedValueOnce(new Error('preview unavailable'))
+      .mockResolvedValueOnce(
+        jsonResponse(201, {id: 'vault-item-1', sourceReferenceId: 'source-ref-1'}),
+      );
+    const view = await render(
+      <ShareImportScreen payload={{ kind: 'url', url: SOURCE_URL }} api={api()} />,
+    );
+    expect(await view.findByText('Shared item ready')).toBeTruthy();
+    expect(view.queryByLabelText('Shared item preview')).toBeNull();
+
+    await act(async () => {
+      fireEvent.press(await view.findByText('Save to Vault'));
+    });
+    expect(await view.findByText('Saved to your Vault')).toBeTruthy();
+    // No correction was made, so the confirm request carries no body.
+    const confirm = fetchMock.mock.calls.find(call =>
+      requestUrl(call[0]).endsWith(`/share/imports/${IMPORT_ID}/confirm`),
+    );
+    expect(confirm?.[1].body).toBeUndefined();
+  });
+
+  test('choosing a collection sends exactly that one collectionId, and a second choice replaces it', async () => {
+    const collections = [
+      {id: 'col-1', name: 'Work', items: []},
+      {id: 'col-2', name: 'Weekend', items: []},
+    ];
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = requestUrl(input);
+      if (url.endsWith('/share/imports')) {
+        return jsonResponse(201, ready());
+      }
+      if (url.endsWith(`/share/imports/${IMPORT_ID}/preview`)) {
+        return jsonResponse(200, preview());
+      }
+      if (url.endsWith('/collections')) {
+        return jsonResponse(200, collections);
+      }
+      if (url.endsWith(`/share/imports/${IMPORT_ID}/confirm`)) {
+        return jsonResponse(201, {
+          id: 'vault-item-1',
+          sourceReferenceId: 'source-ref-1',
+        });
+      }
+      return Promise.reject(new Error(`unexpected request: ${url}`));
+    });
+    const view = await render(
+      <ShareImportScreen payload={{ kind: 'url', url: SOURCE_URL }} api={api()} />,
+    );
+    expect(await view.findByText('Shared item ready')).toBeTruthy();
+
+    // The picker fetches on reveal, so an untouched screen issues no
+    // collections request at all.
+    expect(
+      fetchMock.mock.calls.filter(call => requestUrl(call[0]).endsWith('/collections')),
+    ).toHaveLength(0);
+
+    await act(async () => {
+      fireEvent.press(await view.findByText('Add to a collection'));
+    });
+    expect(await view.findByLabelText('Membership Work')).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.press(view.getByLabelText('Membership Work'));
+    });
+    await act(async () => {
+      fireEvent.press(view.getByLabelText('Membership Weekend'));
+    });
+
+    await act(async () => {
+      fireEvent.press(await view.findByText('Save to Vault'));
+    });
+
+    // The confirm contract takes one collectionId; the later choice wins
+    // instead of the first being silently kept or both being dropped.
+    const confirm = fetchMock.mock.calls.find(call =>
+      requestUrl(call[0]).endsWith(`/share/imports/${IMPORT_ID}/confirm`),
+    );
+    expect(JSON.parse(confirm?.[1].body)).toEqual({collectionId: 'col-2'});
   });
 
   test('a transient confirm failure keeps READY and a retry converges on one saved item', async () => {
     const confirmed = {id: 'vault-item-1', sourceReferenceId: 'source-ref-1'};
     fetchMock
       .mockResolvedValueOnce(jsonResponse(201, ready()))
+      .mockResolvedValueOnce(jsonResponse(200, preview()))
       .mockRejectedValueOnce(new Error('network down'))
       .mockResolvedValueOnce(jsonResponse(201, confirmed));
     const view = await render(
