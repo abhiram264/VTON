@@ -12,6 +12,23 @@ export const ACTION_CHOOSE_ANOTHER_PHOTO = 'Choose Another Photo';
 export const ACTION_CHOOSE_SCREENSHOT = 'Choose Screenshot';
 export const ACTION_UPLOAD_IMAGE = 'Upload Image';
 
+/**
+ * C14: "retry choices must explain whether they create a new chargeable
+ * request". Trying again after a terminal failure mints a NEW generation with
+ * a new request identity, so it is a new chargeable request and the user is
+ * told so before tapping. A retry that resumes an already-accepted job must
+ * NOT use this text.
+ */
+export const RETRY_NEW_CHARGE_NOTICE =
+  'Trying again starts a new generation, which counts as a new request against your daily allowance.';
+
+/**
+ * The counterpart for a retry that resumes the generation already accepted:
+ * nothing new is charged because the provider work was already paid for.
+ */
+export const RETRY_RESUMES_ACCEPTED_NOTICE =
+  'This continues the generation that was already started. It does not create a new request.';
+
 export type GenerationFailureClass =
   | 'QUALITY'
   | 'OUTAGE'

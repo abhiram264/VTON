@@ -139,7 +139,7 @@ describe('mobile feature flags', () => {
     });
 
     test('a remote or offline flag fetch cannot enable them', async () => {
-      const fetchMock = jest.fn().mockResolvedValueOnce({
+      const fetchResponse = jest.fn().mockResolvedValueOnce({
         ok: true,
         status: 200,
         headers: { get: () => 'application/json' },
@@ -154,7 +154,7 @@ describe('mobile feature flags', () => {
           }),
       });
       const originalFetch = globalThis.fetch;
-      globalThis.fetch = fetchMock as unknown as typeof fetch;
+      globalThis.fetch = fetchResponse as unknown as typeof fetch;
       try {
         await refreshFeatureFlags({
           baseUrl: 'https://api.aifashionvault.com',
