@@ -12,24 +12,30 @@ import {NativeModules, Share} from 'react-native';
  * `POST /looks/{id}/share-link` and never mints a bearer URL. Export is a local
  * copy the user chooses to send, so its boundary is the OS share sheet.
  *
- * Native seam: React Native core cannot write a private file, so downloading
- * into staging is an injected platform seam (`LookExportStager`). When the
- * module is not registered (tests, platforms without the native writer) export
- * reports `SHARE_UNAVAILABLE` instead of fabricating a share.
+ * Native seam: React Native core cannot write a private file, and its Android
+ * `Share` implementation is text-only (it never attaches `EXTRA_STREAM`), so
+ * the download, the image share and save-to-photos all live behind the
+ * `LookExportStager` bridge. When no bridge is registered (tests, platforms
+ * without the native writer) export reports `SHARE_UNAVAILABLE` rather than
+ * fabricating a share; iOS can still fall back to React Native's `Share`, which
+ * does accept a file URL.
  */
 
-export const LOOK_EXPORT_STAGER = 'LookExportStager';
+/** Native bridge names probed, most specific first. */
+const STAGER_MODULE_NAMES = ['ImageExport', 'LookExportStager'] as const;
 
 /** Native staging seam. Enforces `maxBytes` natively; never returns a URL. */
 export interface LookExportStager {
   /** Downloads `url` into a bounded private temp file; resolves a local uri. */
   stageFromUrl(url: string, maxBytes: number): Promise<string>;
+  /** Attaches the staged image to the OS share sheet. Optional on iOS. */
+  shareStaged?(uri: string): Promise<'shared' | 'dismissed' | 'failed'>;
+  /** Copies a staged file into the photo library with minimal permission. */
+  saveToPhotos(uri: string): Promise<'saved' | 'denied' | 'failed'>;
   /** Removes one staged file. Must be safe to call on an absent file. */
   removeStaged(uri: string): Promise<void>;
   /** Sweeps staged files older than `maxAgeMs` (crash/expiry recovery). */
   sweepStaged(maxAgeMs: number): Promise<void>;
-  /** Copies a staged file into the user's photo library with minimal permission. */
-  saveToPhotos(uri: string): Promise<'saved' | 'denied' | 'failed'>;
 }
 
 export type LookExportAction = 'share' | 'save';
@@ -56,7 +62,8 @@ export type LookExportRequest = {
 
 export type LookExportDeps = {
   stager: LookExportStager | null;
-  share: (options: {url: string; title?: string}) => Promise<{action?: string}>;
+  /** React Native Share fallback for platforms whose bridge omits shareStaged. */
+  rnShare: (options: {url: string; title?: string}) => Promise<{action?: string}>;
   maxBytes: number;
   /** Staged files older than this are swept even after a crash. */
   maxStagingAgeMs: number;
@@ -75,31 +82,40 @@ export function isPermissionDenied(error: unknown): boolean {
   );
 }
 
-function nativeStager(): LookExportStager | null {
-  const candidate = (NativeModules as unknown as Record<string, unknown>)[
-    LOOK_EXPORT_STAGER
-  ];
-  if (typeof candidate !== 'object' || candidate === null) {
-    return null;
+/**
+ * Picks the registered export bridge out of a module map. Exported so the
+ * probing/shape rules are testable without a live React Native runtime.
+ */
+export function resolveNativeStager(
+  modules: Record<string, unknown>,
+): LookExportStager | null {
+  for (const name of STAGER_MODULE_NAMES) {
+    const candidate = modules[name];
+    if (typeof candidate !== 'object' || candidate === null) {
+      continue;
+    }
+    if (
+      !('stageFromUrl' in candidate) ||
+      !('saveToPhotos' in candidate) ||
+      !('removeStaged' in candidate) ||
+      !('sweepStaged' in candidate)
+    ) {
+      continue;
+    }
+    if (
+      typeof candidate.stageFromUrl !== 'function' ||
+      typeof candidate.saveToPhotos !== 'function' ||
+      typeof candidate.removeStaged !== 'function' ||
+      typeof candidate.sweepStaged !== 'function'
+    ) {
+      continue;
+    }
+    // The required methods were each checked as functions above; this cast
+    // only names the validated bridge shape for the caller.
+    const stager = candidate as LookExportStager;
+    return stager;
   }
-  if (
-    !('stageFromUrl' in candidate) ||
-    !('removeStaged' in candidate) ||
-    !('sweepStaged' in candidate)
-  ) {
-    return null;
-  }
-  if (
-    typeof candidate.stageFromUrl !== 'function' ||
-    typeof candidate.removeStaged !== 'function' ||
-    typeof candidate.sweepStaged !== 'function'
-  ) {
-    return null;
-  }
-  // Each method was checked as a function above; this cast only names the
-  // validated bridge shape for the caller.
-  const stager = candidate as LookExportStager;
-  return stager;
+  return null;
 }
 
 /**
@@ -110,12 +126,37 @@ function nativeStager(): LookExportStager | null {
  */
 export function createLookExporter(overrides: Partial<LookExportDeps> = {}) {
   const deps: LookExportDeps = {
-    stager: nativeStager(),
-    share: options => Share.share(options),
+    stager: resolveNativeStager(NativeModules as unknown as Record<string, unknown>),
+    rnShare: options => Share.share(options),
     maxBytes: DEFAULT_MAX_BYTES,
     maxStagingAgeMs: DEFAULT_MAX_STAGING_AGE_MS,
     ...overrides,
   };
+
+  async function offerImage(
+    stager: LookExportStager,
+    uri: string,
+    fileName?: string,
+  ): Promise<LookExportOutcome> {
+    // Prefer the native image share: React Native's Android Share is
+    // text-only and would drop the image. Only platforms whose bridge omits
+    // shareStaged (iOS) fall back to React Native's file-URL share.
+    if (typeof stager.shareStaged === 'function') {
+      const result = await stager.shareStaged(uri);
+      if (result === 'shared') return {status: 'SHARED'};
+      if (result === 'dismissed') return {status: 'CANCELLED'};
+      return {status: 'SHARE_FAILED'};
+    }
+    const fallback = await deps.rnShare({
+      url: uri,
+      ...(fileName === undefined ? {} : {title: fileName}),
+    });
+    // iOS reports a user cancel as dismissedAction; Android resolves with no
+    // action. Either way the user chose not to send: harmless.
+    return fallback?.action === 'dismissedAction'
+      ? {status: 'CANCELLED'}
+      : {status: 'SHARED'};
+  }
 
   async function exportLook(
     request: LookExportRequest,
@@ -126,12 +167,13 @@ export function createLookExporter(overrides: Partial<LookExportDeps> = {}) {
     if (!request.disclosureAcknowledged) {
       return {status: 'DISCLOSURE_REQUIRED'};
     }
-    if (deps.stager === null) {
+    const stager = deps.stager;
+    if (stager === null) {
       return {status: 'SHARE_UNAVAILABLE'};
     }
     let uri: string;
     try {
-      uri = await deps.stager.stageFromUrl(request.imageUrl, deps.maxBytes);
+      uri = await stager.stageFromUrl(request.imageUrl, deps.maxBytes);
     } catch (error) {
       return isPermissionDenied(error)
         ? {status: 'PERMISSION_DENIED'}
@@ -142,20 +184,12 @@ export function createLookExporter(overrides: Partial<LookExportDeps> = {}) {
         // Item 4: save-to-photos is a distinct user intent from sending a
         // copy; the native side requests the minimum platform permission and
         // reports denial distinctly.
-        const saved = await deps.stager.saveToPhotos(uri);
+        const saved = await stager.saveToPhotos(uri);
         if (saved === 'saved') return {status: 'SAVED'};
         if (saved === 'denied') return {status: 'PERMISSION_DENIED'};
         return {status: 'SAVE_FAILED'};
       }
-      const result = await deps.share({
-        url: uri,
-        ...(request.fileName === undefined ? {} : {title: request.fileName}),
-      });
-      // iOS reports a user cancel as dismissedAction; Android resolves with
-      // no action. Either way the user chose not to send: harmless.
-      return result?.action === 'dismissedAction'
-        ? {status: 'CANCELLED'}
-        : {status: 'SHARED'};
+      return await offerImage(stager, uri, request.fileName);
     } catch {
       return action === 'save' ? {status: 'SAVE_FAILED'} : {status: 'SHARE_FAILED'};
     } finally {
@@ -163,7 +197,7 @@ export function createLookExporter(overrides: Partial<LookExportDeps> = {}) {
       // sheet and the photo library both copy the bytes out before resolving,
       // so an explicit saved copy is untouched by removing our staging file.
       try {
-        await deps.stager.removeStaged(uri);
+        await stager.removeStaged(uri);
       } catch {
         // Best-effort: the sweep retries, and a leaked private temp file is
         // preferable to failing the user's export result.
