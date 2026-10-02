@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  FileProvider root for user-directed image export (LookExportStagerModule). Only files directly
+  under cacheDir/export-staging are exposed, and only to the single app the user picks in the
+  share sheet, through a per-URI read grant. Keep `path` in sync with
+  ExportStaging.DIR_NAME; the authority is `${applicationId}.exportfileprovider`.
+-->
+<paths>
+    <cache-path name="export-staging" path="export-staging/" />
+</paths>
