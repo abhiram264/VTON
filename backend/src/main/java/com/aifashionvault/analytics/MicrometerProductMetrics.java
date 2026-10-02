@@ -36,6 +36,9 @@ public final class MicrometerProductMetrics implements ProductMetrics {
     public static final String MULTI_ITEM_USAGE = "product.generation.multi_item";
     public static final String LOOK_SAVE = "product.look.save";
     public static final String LOOK_SHARE = "product.look.share";
+    public static final String DELETION_REQUEST = "product.account.deletion.request";
+    public static final String DELETION_COMPLETION = "product.account.deletion.completion";
+    public static final String DELETION_COST = "product.account.deletion.cost";
     public static final String RETENTION = "product.retention";
     public static final String CORE_WEEKLY = "product.core.quality_approved_looks_per_activated_user_week";
     public static final String NUMERATOR = "numerator";
@@ -103,6 +106,11 @@ public final class MicrometerProductMetrics implements ProductMetrics {
                 case LOOK_SAVED -> count(LOOK_SAVE, NUMERATOR);
                 case LOOK_SHARED -> count(LOOK_SHARE, NUMERATOR);
                 case LOOK_VIEWED -> recordLookAndRetention(c.occurredAt());
+                case DELETION_REQUESTED -> count(DELETION_REQUEST, NUMERATOR);
+                case DELETION_COMPLETED -> {
+                    count(DELETION_COMPLETION, NUMERATOR);
+                    recordCost(DELETION_COST, c.cost());
+                }
                 default -> { }
             }
         } catch (RuntimeException ignored) {
