@@ -72,6 +72,7 @@ class GenerationHttpContractTest {
 	@Autowired RecordingVtonProvider provider;
 	@Autowired GenerationWorkProcessor processor;
 	@Autowired RecordingWorkQueue queue;
+	@Autowired RecordingProductMetrics productMetrics;
 
 	@DynamicPropertySource
 	static void datasource(DynamicPropertyRegistry registry) {
@@ -92,6 +93,7 @@ class GenerationHttpContractTest {
 			+ "generation_attempt, generation_render_step_item, generation_render_step, generation_job_product, "
 			+ "generation_job, vault_item, studio_item, studio_session, avatar_image, avatar_profile, identity_mapping, "
 			+ "users CASCADE");
+		productMetrics.reset();
 	}
 
 	@Test
@@ -417,6 +419,31 @@ class GenerationHttpContractTest {
 		return id;
 	}
 
+	/**
+	 * C22: a genuinely admitted generation intent records the "generation admitted"
+	 * lifecycle event; a rejected request admits nothing and records nothing.
+	 */
+	@Test
+	void admittedGenerationRecordsTheRequestedLifecycleEventAndRejectionRecordsNothing() throws Exception {
+		Owner owner = seedOwner(true);
+
+		create(owner, "lifecycle-admitted", owner.uploadId());
+		assertThat(productMetrics.names())
+			.containsExactly(com.aifashionvault.analytics.AnalyticsEventName.GENERATION_REQUESTED);
+		assertThat(productMetrics.itemCounts()).containsExactly(1L);
+
+		productMetrics.reset();
+		// No Idempotency-Key -> rejected before any admission; nothing was admitted.
+		mockMvc.perform(post("/generations").header(HttpHeaders.AUTHORIZATION, bearer(owner.token()))
+				.contentType(MediaType.APPLICATION_JSON).content(body(owner.uploadId())))
+			.andExpect(status().isBadRequest());
+		assertThat(productMetrics.names()).isEmpty();
+
+		// A replay of an already-accepted key admits nothing new.
+		create(owner, "lifecycle-admitted", owner.uploadId());
+		assertThat(productMetrics.names()).isEmpty();
+	}
+
 	private int count(String table) { return jdbc.queryForObject("SELECT COUNT(*) FROM " + table, Integer.class); }
 	private record Owner(String token, UserId userId, UUID profileId, UUID uploadId) {}
 
@@ -435,6 +462,7 @@ class GenerationHttpContractTest {
             return new GenerationMetrics(testGenerationMeterRegistry);
         }
         @Bean @Primary GenerationWorkQueue generationWorkQueue() { return new RecordingWorkQueue(); }
+        @Bean @Primary RecordingProductMetrics recordingProductMetrics() { return new RecordingProductMetrics(); }
 		// RULE: never reuse a production bean name for a test bean. A name collision throws
 		// BeanDefinitionOverrideException at registration and kills the context, and @Primary
 		// does not prevent it. Renamed from generationMediaStore; the product bean is @Primary
@@ -460,5 +488,28 @@ class GenerationHttpContractTest {
 		@Override public void extendVisibility(GenerationWorkLease lease, Duration extension) { }
 		@Override public void delete(GenerationWorkLease lease) { deleted.add(lease); }
 		private List<GenerationWorkLease> deleted() { return deleted; }
+	}
+
+	/** Records the C22 lifecycle events this test observes; no meter registry involved. */
+	static final class RecordingProductMetrics implements com.aifashionvault.analytics.ProductMetrics {
+		private final List<com.aifashionvault.analytics.AnalyticsEventName> events = new CopyOnWriteArrayList<>();
+		private final List<Long> itemCounts = new CopyOnWriteArrayList<>();
+
+		@Override
+		public void record(
+			com.aifashionvault.analytics.AnalyticsEventName eventName,
+			com.aifashionvault.analytics.ProductMetricContext context
+		) {
+			events.add(eventName);
+			itemCounts.add(context.itemCount());
+		}
+
+		void reset() {
+			events.clear();
+			itemCounts.clear();
+		}
+
+		List<com.aifashionvault.analytics.AnalyticsEventName> names() { return List.copyOf(events); }
+		List<Long> itemCounts() { return List.copyOf(itemCounts); }
 	}
 }

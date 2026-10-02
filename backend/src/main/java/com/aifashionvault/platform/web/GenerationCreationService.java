@@ -72,6 +72,11 @@ public class GenerationCreationService {
     private final com.aifashionvault.admission.GenerationRateLimiter rateLimiter;
     private final com.aifashionvault.platform.generation.GenerationMetrics metrics;
     private final boolean providerAvailable;
+    /**
+     * Best-effort C22 lifecycle seam. A deployment without the bean records nothing; a
+     * metrics failure never affects the create (see {@link #recordGenerationAdmitted}).
+     */
+    private final com.aifashionvault.analytics.ProductMetrics productMetrics;
 
     public GenerationCreationService(GenerationStore store, JdbcTemplate jdbc, GenerationApiProperties properties, Clock clock,
         GenerationMediaStore mediaStore) {
@@ -92,6 +97,13 @@ public class GenerationCreationService {
     public GenerationCreationService(GenerationStore store, JdbcTemplate jdbc, GenerationApiProperties properties, Clock clock,
         GenerationMediaStore mediaStore, com.aifashionvault.admission.GenerationRateLimiter rateLimiter,
         com.aifashionvault.platform.generation.GenerationMetrics metrics, boolean providerAvailable) {
+        this(store, jdbc, properties, clock, mediaStore, rateLimiter, metrics, providerAvailable, null);
+    }
+
+    public GenerationCreationService(GenerationStore store, JdbcTemplate jdbc, GenerationApiProperties properties, Clock clock,
+        GenerationMediaStore mediaStore, com.aifashionvault.admission.GenerationRateLimiter rateLimiter,
+        com.aifashionvault.platform.generation.GenerationMetrics metrics, boolean providerAvailable,
+        com.aifashionvault.analytics.ProductMetrics productMetrics) {
         this.store = store;
         this.jdbc = jdbc;
         this.properties = properties;
@@ -100,6 +112,7 @@ public class GenerationCreationService {
         this.rateLimiter = rateLimiter;
         this.metrics = metrics;
         this.providerAvailable = providerAvailable;
+        this.productMetrics = productMetrics;
     }
 
     public GenerationResponse create(UserId userId, String idempotencyKey, GenerationRequest request) {
@@ -162,6 +175,7 @@ public class GenerationCreationService {
 					if (metrics != null) {
 						metrics.recordGenerationCount();
 					}
+					recordGenerationAdmitted(1);
 					accepted = true;
 					yield toResponse(created.job());
 				}
@@ -329,6 +343,7 @@ public class GenerationCreationService {
 				if (metrics != null) {
 					metrics.recordGenerationCount();
 				}
+				recordGenerationAdmitted(items.size());
 				yield toResponse(created.job());
 			}
 			case GenerationStore.CreateAcceptedResult.Replayed replayed -> {
@@ -352,8 +367,29 @@ public class GenerationCreationService {
 		};
 	}
 
-	/** Normalizes the requested mode through the same value object the worker uses. */
-	private static String normalizeMultiMode(String mode) {
+	/**
+	 * C22 "generation admitted" lifecycle event, best-effort: recorded only when the store
+	 * actually CREATED the intent (a replay/conflict/quota rejection admits nothing), and the
+	 * payload is the coarse, non-identifying context — never a photo, prompt, token or signed
+	 * URL. A missing bean or a metrics failure never affects the create.
+	 */
+	private void recordGenerationAdmitted(int itemCount) {
+		if (productMetrics == null) {
+			return;
+		}
+		try {
+			productMetrics.record(
+				com.aifashionvault.analytics.AnalyticsEventName.GENERATION_REQUESTED,
+				new com.aifashionvault.analytics.ProductMetricContext(
+					clock.instant(), null, null, null, null, null, null, (long) itemCount, null));
+		}
+		catch (RuntimeException ignored) {
+			// Observability is deliberately off the product critical path.
+		}
+	}
+
+    /** Normalizes the requested mode through the same value object the worker uses. */
+    private static String normalizeMultiMode(String mode) {
 		if (mode == null || mode.isBlank()) {
 			return DEFAULT_MULTI_MODE;
 		}
