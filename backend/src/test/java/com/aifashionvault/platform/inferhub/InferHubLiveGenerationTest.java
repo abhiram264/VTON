@@ -29,7 +29,6 @@ import com.aifashionvault.platform.environment.VaultEnvironmentProperties;
 import com.aifashionvault.platform.objectstore.ImageMediaType;
 import com.aifashionvault.platform.objectstore.LoggingTempObjectAgeAlert;
 import com.aifashionvault.platform.objectstore.ObjectMetadata;
-import com.aifashionvault.platform.objectstore.ObjectStore;
 import com.aifashionvault.platform.objectstore.ObjectStoreGenerationOutputStore;
 import com.aifashionvault.platform.objectstore.S3ObjectStore;
 import com.aifashionvault.platform.objectstore.StorageKeys;
@@ -108,7 +107,7 @@ class InferHubLiveGenerationTest {
                 .pathStyleAccessEnabled(true)
                 .build())
             .build();
-        ObjectStore objects = new S3ObjectStore(s3, presigner, properties.s3(), Clock.systemUTC(),
+        S3ObjectStore objects = new S3ObjectStore(s3, presigner, properties.s3(), Clock.systemUTC(),
             new LoggingTempObjectAgeAlert());
 
         // The two real assets from the worktree root, uploaded through the real store.
@@ -121,7 +120,7 @@ class InferHubLiveGenerationTest {
         InferHubMapper mapper = new InferHubMapper();
         InferHubClient client = new InferHubClient(
             InferHubConfig.inferHubRestClientBuilder(apiKey).build());
-        InferHubVtonProvider provider = new InferHubVtonProvider(mapper, client, objects);
+        InferHubVtonProvider provider = new InferHubVtonProvider(mapper, client, objects, objects);
         assertThat(provider.providerKey().value()).isEqualTo("inferhub");
 
         VtonRequest request = new VtonRequest(
@@ -201,7 +200,7 @@ class InferHubLiveGenerationTest {
         UUID jobId = UUID.randomUUID();
         UUID attemptId = UUID.randomUUID();
         ObjectStoreGenerationOutputStore outputStore = new ObjectStoreGenerationOutputStore(
-            (S3ObjectStore) objects, objects, new UserId(UUID.fromString("00000000-0000-0000-0000-00000000e2e1")),
+            objects, objects, new UserId(UUID.fromString("00000000-0000-0000-0000-00000000e2e1")),
             jobId, attemptId, ImageMediaType.PNG);
         PrivateMediaRef persisted = outputStore.writePrivateTemp(
             ProviderMediaSource.of(new java.io.ByteArrayInputStream(image), OptionalLong.of(image.length),
