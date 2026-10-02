@@ -178,6 +178,41 @@ class LooksControllerTest {
 		assertThat(metrics.events).isEmpty();
 	}
 
+	/**
+	 * C22: "Look exported" is recorded from the owner-approved export ack (C16 exports are
+	 * user-directed and local, so the client acknowledges them). Owner-scoped, and the
+	 * recorded context stays coarse — no image, signed URL or identity.
+	 */
+	@Test
+	void exportingAnOwnedLookRecordsTheLookSharedLifecycleEvent() {
+		JdbcLookStore store = mock(JdbcLookStore.class);
+		ObjectStore objects = mock(ObjectStore.class);
+		when(store.findByIdForUser(LOOK_ID, OWNER)).thenReturn(Optional.of(look()));
+		RecordingProductMetrics metrics = new RecordingProductMetrics();
+
+		controller(store, objects, metrics).exportAck(OWNER, LOOK_ID.value().toString());
+
+		assertThat(metrics.events).hasSize(1);
+		assertThat(metrics.events.get(0).name()).isEqualTo(com.aifashionvault.analytics.AnalyticsEventName.LOOK_SHARED);
+		assertThat(metrics.events.get(0).context().occurredAt()).isEqualTo(NOW);
+		assertThat(metrics.events.get(0).context().provider()).isNull();
+		assertThat(metrics.events.get(0).context().model()).isNull();
+		assertThat(metrics.events.get(0).context().cost()).isNull();
+	}
+
+	@Test
+	void aForeignLookExportAckRecordsNothing() {
+		JdbcLookStore store = mock(JdbcLookStore.class);
+		ObjectStore objects = mock(ObjectStore.class);
+		when(store.findByIdForUser(LOOK_ID, OWNER)).thenReturn(Optional.empty());
+		RecordingProductMetrics metrics = new RecordingProductMetrics();
+
+		assertThatThrownBy(() -> controller(store, objects, metrics).exportAck(OWNER, LOOK_ID.value().toString()))
+			.isInstanceOf(RuntimeException.class);
+
+		assertThat(metrics.events).isEmpty();
+	}
+
 	private static final class RecordingProductMetrics implements com.aifashionvault.analytics.ProductMetrics {
 		private final List<Recorded> events = new java.util.ArrayList<>();
 

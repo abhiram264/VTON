@@ -50,7 +50,7 @@ public final class VaultService {
 		try{claim=media.claim(new ClaimCommand(user,upload,key,StorageDomain.VAULT,"vault:"+user.value()+":"+upload.value(),metadata.version()));}catch(RuntimeException e){throw problem(ProblemCode.VAULT_MEDIA_UNAVAILABLE);}
 		if(claim instanceof ClaimResult.Conflict)throw problem(ProblemCode.VAULT_UPLOAD_NOT_CLAIMABLE);
 		if(claim instanceof ClaimResult.Replay){existing=store.findByStorageKeyForUser(key,user);if(existing.isPresent())return existing.get();throw problem(ProblemCode.VAULT_UPLOAD_NOT_CLAIMABLE);}
-		VaultItem item=new VaultItem(id,user,key,source,request.name(),request.brand(),request.category(),request.subcategory(),request.color(),request.pattern(),request.attributes(),Instant.now(clock));
+		VaultItem item=new VaultItem(id,user,key,source,null,request.name(),request.brand(),request.category(),request.subcategory(),request.color(),request.pattern(),request.attributes(),Instant.now(clock));
 		try{return store.insert(item);}catch(RuntimeException e){try{media.delete(new ObjectRef(StorageDomain.VAULT,key.value()));}catch(RuntimeException ignored){}throw e;}
 	}
 	public List<VaultItem> list(UserId user,Filters filters){return store.listForUser(user,filters);}

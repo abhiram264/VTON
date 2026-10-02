@@ -503,6 +503,31 @@ existing `GET /share/imports/{importId}` status route; the status body
 
 The route is additive: a client that ignores it keeps the current status-only behavior.
 
+### 9.3 DTO change — vault item read carries `sourceUrl` (C16 item 5)
+
+**Status: MOUNTED at integration `91cbb6b` (worker-06).** Additive, nullable field on the
+existing owner-scoped vault item representation; recorded here because it changes a shared
+DTO that the mobile client parses.
+
+| Aspect | Contract |
+|---|---|
+| Field | `sourceUrl`, type `string \| null`, on `VaultItemResponse` |
+| Where | BOTH `GET /vault/items` (list) and `GET /vault/items/{id}` (detail) — one response mapper serves both |
+| Value | `source_reference.url` verbatim: the retailer product URL captured at import. **Untrusted**; the client must route it through its http/https-only external-navigation helper rather than handing it to the OS directly |
+| Nullability | `null` for a photo-created item that has no source, so the field is null rather than absent |
+| Not exposed | `raw_metadata` stays server-side. `sourceReferenceId` is unchanged (still the opaque id) |
+| Ownership | unchanged: foreign/unknown/malformed id → `404 VAULT_ITEM_NOT_FOUND` (opaque), so no other owner's URL is ever disclosed |
+
+Consumers that ignore the field are unaffected. Two shape oracles were updated deliberately,
+not weakened: `VaultControllerTest`'s strict `containsExactly(...)` property list now includes
+`sourceUrl` and additionally forbids `rawMetadata`/`raw_metadata`/`x-amz-`; `VaultItemTest`'s
+record-component name and type lists include `sourceUrl:String`.
+
+This is what makes the guide's "original product source links with safe external navigation"
+reachable: `source_reference.url` was already persisted by the import confirm path
+(`JdbcShareImportStore`), but the read exposed only the opaque `sourceReferenceId`, so the
+merged mobile `openSourceLink` had no data source.
+
 ## 10. C20 device-token contract — 2026-10-03 (frozen, EXECUTED)
 
 Frozen DTO seam for device-token registration and preferences (guide §5.3). All routes are

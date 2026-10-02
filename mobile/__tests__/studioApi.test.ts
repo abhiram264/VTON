@@ -173,6 +173,43 @@ describe('studioApi wire contract', () => {
     expect(legacy.message).toBeNull();
   });
 
+  test('the target slot is accepted from either the candidate or the response level', async () => {
+    // The planner resolves one target slot for the whole command, so a response
+    // may carry it per candidate or once at the top level.
+    fetchMock.mockImplementation(() => jsonResponse(200, {
+      ...sessionBody,
+      outcome: 'CONFIRM_REQUIRED',
+      message: 'Which top did you mean?',
+      slot: 'LOWER_BODY',
+      candidates: [{ vaultItemId: ITEM_A, label: 'Trousers' }],
+    }));
+
+    const topLevel = await studioApi.command(SESSION_ID, 'add trousers');
+    expect(topLevel.candidates).toEqual([{ vaultItemId: ITEM_A, label: 'Trousers', slot: 'LOWER_BODY' }]);
+
+    fetchMock.mockImplementation(() => jsonResponse(200, {
+      ...sessionBody,
+      outcome: 'CONFIRM_REQUIRED',
+      message: 'Which top did you mean?',
+      slot: 'LOWER_BODY',
+      candidates: [{ vaultItemId: ITEM_A, label: 'Trousers', slot: 'UPPER_BODY' }],
+    }));
+
+    // A candidate's own slot wins over the response-level one.
+    const perCandidate = await studioApi.command(SESSION_ID, 'add trousers');
+    expect(perCandidate.candidates[0].slot).toBe('UPPER_BODY');
+
+    // Neither present: the caller must fall back, so the slot is explicitly null.
+    fetchMock.mockImplementation(() => jsonResponse(200, {
+      ...sessionBody,
+      outcome: 'CONFIRM_REQUIRED',
+      message: 'Which garment?',
+      candidates: [{ vaultItemId: ITEM_A, label: 'Garment' }],
+    }));
+    const neither = await studioApi.command(SESSION_ID, 'add something');
+    expect(neither.candidates[0].slot).toBeNull();
+  });
+
   test('a malformed Studio body is rejected rather than rendered', async () => {
     fetchMock.mockImplementation(() => jsonResponse(200, { sessionId: SESSION_ID, itemIds: 'nope' }));
     await expect(studioApi.get(SESSION_ID)).rejects.toThrow();
