@@ -6,7 +6,7 @@ import type { GenerationResource, LookResource } from '../src/features/generatio
 import { generationApi } from '../src/features/generation/generationApi';
 import { Share } from 'react-native';
 jest.mock('../src/features/looks/looksApi', () => ({
-  looksApi: { list: jest.fn(), regenerate: jest.fn() },
+  looksApi: { list: jest.fn(), regenerate: jest.fn(), get: jest.fn(), remove: jest.fn() },
 }));
 // `pollGeneration` stays real so the bound under test is the real one; only the
 // network client is faked, and it is faked per test by clearAllMocks.
@@ -136,6 +136,46 @@ test('no raw Look or generation id is ever rendered to the user', async () => {
     expect(screen.queryByText(new RegExp(id))).toBeNull();
     expect(screen.queryByLabelText(new RegExp(id))).toBeNull();
   }
+});
+
+test('an expired signed preview is refreshed from the mounted Look route, not left broken', async () => {
+  jest.mocked(looksApi.list).mockResolvedValue([firstLook]);
+  jest.mocked(looksApi.get).mockResolvedValue({
+    ...firstLook,
+    image: { url: 'https://signed.example.invalid/read?X-Amz-Signature=fresh', expiresAt: '2026-08-30T10:20:00Z' },
+    items: [],
+    provider: null,
+    providerModel: null,
+    qualityStatus: null,
+  });
+  await renderLooksScreen();
+
+  const image = await screen.findByRole('image', { name: `${FIRST_LABEL} preview` });
+  await fireEvent(image, 'error');
+  expect(await screen.findByText(`Preview unavailable for ${FIRST_LABEL}.`)).toBeTruthy();
+
+  await fireEvent.press(screen.getByRole('button', { name: `Refresh preview for ${FIRST_LABEL}` }));
+
+  // The fresh signed read is now the one on screen; the Look was re-read, not
+  // re-created, and no share capability was involved.
+  const refreshed = await screen.findByRole('image', { name: `${FIRST_LABEL} preview` });
+  expect(refreshed.props.source).toEqual({
+    uri: 'https://signed.example.invalid/read?X-Amz-Signature=fresh',
+  });
+  expect(looksApi.get).toHaveBeenCalledWith(firstLook.id);
+});
+
+test('a refresh that fails says so and keeps the honest broken-preview state', async () => {
+  jest.mocked(looksApi.list).mockResolvedValue([firstLook]);
+  jest.mocked(looksApi.get).mockRejectedValue(new Error('HTTP_503'));
+  await renderLooksScreen();
+
+  const image = await screen.findByRole('image', { name: `${FIRST_LABEL} preview` });
+  await fireEvent(image, 'error');
+  await fireEvent.press(screen.getByRole('button', { name: `Refresh preview for ${FIRST_LABEL}` }));
+
+  expect(await screen.findByText('Could not refresh that preview. Try again later.')).toBeTruthy();
+  expect(screen.queryByRole('image', { name: `${FIRST_LABEL} preview` })).toBeNull();
 });
 
 test('a regeneration accepted before a restart is resumed, never re-charged', async () => {

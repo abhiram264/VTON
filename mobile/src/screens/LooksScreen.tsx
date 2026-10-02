@@ -31,6 +31,7 @@ export default function LooksScreen({ onModify, onOpenLook, onProfile, pollDelay
   const [recentGeneration, setRecentGeneration] = useState<{ sourceLookId: string; generation: GenerationResource } | null>(null);
   const [recovered, setRecovered] = useState<GenerationResource | null>(null);
   const [brokenImages, setBrokenImages] = useState<ReadonlySet<string>>(() => new Set());
+  const [refreshingPreview, setRefreshingPreview] = useState<string | null>(null);
   const selectedRef = useRef<string | null>(null);
   const acceptedGenerations = useRef(new Map<string, string>());
   // A regeneration accepted by the server is charged whether or not this
@@ -91,6 +92,27 @@ export default function LooksScreen({ onModify, onOpenLook, onProfile, pollDelay
     selectedRef.current = lookId;
     setSelected(lookId);
     setActionError(null);
+  }
+
+  // A signed preview expires by design. When one fails to load, re-reading the
+  // Look mints a fresh short-lived URL for THAT look only; the rest of the list
+  // is untouched and a failure is reported rather than silently re-broken.
+  async function refreshPreview(lookId: string) {
+    setRefreshingPreview(lookId);
+    try {
+      const detail = await looksApi.get(lookId);
+      if (!mounted.current) return;
+      setLooks(current => current.map(look => (look.id === lookId ? { ...look, image: detail.image } : look)));
+      setBrokenImages(current => {
+        const next = new Set(current);
+        next.delete(lookId);
+        return next;
+      });
+    } catch {
+      if (mounted.current) setActionError('Could not refresh that preview. Try again later.');
+    } finally {
+      if (mounted.current) setRefreshingPreview(null);
+    }
   }
 
   function rememberGeneration(sourceLookId: string, generation: GenerationResource) {
@@ -157,7 +179,7 @@ export default function LooksScreen({ onModify, onOpenLook, onProfile, pollDelay
     {status === 'loading' ? <Text accessibilityLiveRegion="polite">Loading Looks…</Text> : null}
     {status === 'failed' ? <Text accessibilityLiveRegion="polite">Could not load Looks. You can keep using navigation.</Text> : null}
     {status === 'ready' && looks.length === 0 ? <Text>No saved Looks yet.</Text> : null}
-    {labeled.map(({ look, label }) => <View key={look.id} style={styles.cell}>{brokenImages.has(look.id) ? <Text accessibilityLiveRegion="polite" style={styles.imageNotice}>Preview unavailable for {label}.</Text> : <Image accessible accessibilityRole="image" accessibilityLabel={`${label} preview`} onError={() => setBrokenImages(current => new Set(current).add(look.id))} source={{ uri: look.image.url }} style={styles.thumbnail} />}<Pressable accessibilityRole="button" accessibilityLabel={label} accessibilityHint="Selects this Look. Use Open Look for details." accessibilityState={{ selected: selected === look.id }} onPress={() => selectLook(look.id)} onLongPress={() => onOpenLook(look.id)} style={styles.button}><Text style={styles.buttonLabel}>{label}</Text></Pressable></View>)}
+    {labeled.map(({ look, label }) => <View key={look.id} style={styles.cell}>{brokenImages.has(look.id) ? <View style={styles.cell}><Text accessibilityLiveRegion="polite" style={styles.imageNotice}>Preview unavailable for {label}.</Text><Action label={`Refresh preview for ${label}`} onPress={() => refreshPreview(look.id)} busy={refreshingPreview === look.id} disabled={refreshingPreview !== null} /></View> : <Image accessible accessibilityRole="image" accessibilityLabel={`${label} preview`} onError={() => setBrokenImages(current => new Set(current).add(look.id))} source={{ uri: look.image.url }} style={styles.thumbnail} />}<Pressable accessibilityRole="button" accessibilityLabel={label} accessibilityHint="Selects this Look. Use Open Look for details." accessibilityState={{ selected: selected === look.id }} onPress={() => selectLook(look.id)} onLongPress={() => onOpenLook(look.id)} style={styles.button}><Text style={styles.buttonLabel}>{label}</Text></Pressable></View>)}
     <Text accessibilityRole="header" style={styles.heading}>Recent generations</Text>
     {recentGeneration ? <View accessibilityLiveRegion="polite"><Text>{`Last regeneration: ${recentGeneration.generation.status}${recentGeneration.generation.failureCode ? ` (${recentGeneration.generation.failureCode})` : ''}`}</Text>{recentGeneration.generation.lookId ? <Action label="Open generated Look" onPress={() => onOpenLook(recentGeneration.generation.lookId!)} /> : null}</View> : <Text>No recent generations yet.</Text>}
     <Action label={resumeSelected ? 'Resume regeneration' : 'Regenerate'} onPress={regenerate} disabled={disabled} busy={busy} />
