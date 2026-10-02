@@ -260,20 +260,23 @@ Checked after worker-08 merged (C04 native picker + C03 account-session isolatio
 - **Corroboration:** peer worker-03 independently reproduced the C01 route census
   (37 mappings, 10 controllers) and verified the C22 analytics tests at `ae358d7`.
 
-## 11. Post-run status at integration `f2994b4` (2026-10-03)
+## 11. Post-run status at integration `ba41621` (2026-10-03)
 
-**Appended; §1–§10 and the `1f13d34` baseline rows above are preserved.** Each advance
-below was verified by reading the integrated branch at `f2994b4` (file/route existence,
-plus the focused tests re-run in §7), not taken from a peer report alone.
+**Appended; §1–§10 and the `1f13d34` baseline rows above are preserved.** §1's census
+(10 controllers / 37 mappings) is the **baseline**; the branch has since grown to
+**13 controllers / 49 mappings** — the three additions are `ConsentsController` (C06),
+`StudioController` (C10/C11) and `VaultImageController` (C08), plus C12's `POST /multi`
+and C07's confirm/attach routes. Each advance below was verified by reading the branch at
+`ba41621` (file/route existence), not taken from a peer report alone.
 
-| Requirement | Advance since the baseline | Evidence (verified at `f2994b4`) |
+| Requirement | Advance since the baseline | Evidence (verified at `ba41621`) |
 |---|---|---|
 | C02 | Babel inliner ↔ `firebase.ts` agree; release fails closed on placeholder/localhost/LAN | `mobile/src/config/apiConfig.ts` `resolveApiBaseUrl`; `src/config/releaseConfig.test.ts` 7/7 (independently re-run) |
-| C03 | Signup/reset, account-session isolation, sign-out control | `mobile/src/screens/SignInScreen.tsx`, `mobile/src/features/auth/`, `mobile/src/features/session/` |
+| C03 | Signup/reset, account-session isolation, settings surface with sign-out | `mobile/src/screens/{SignInScreen,SettingsScreen}.tsx`, `mobile/src/features/auth/` (`accountSession.ts`), `mobile/src/features/session/`; RootNavigator wires `trackAccountIsolation` (`cf28dc6`) |
 | C04 | Android native PhotoPicker (system picker + camera) | `photopicker/PhotoPickerModule.kt` `getName()="PhotoPicker"`, registered in `MainApplication.kt`; **iOS half pending** |
-| C06 | Consent store/service + HTTP surface, owner-scoped | `privacy/{ConsentService,JdbcConsentStore,ConsentPurpose}.java`, `platform/web/ConsentConfiguration.java` |
-| C07 | Confirm persists corrected metadata; client calls `/confirm` | `SharesController.java:80`, `features/share/importClient.ts:283-298`; ShareImportConfirm 3/3 |
-| C08 | Detail/edit/delete + signed preview with refresh + **list thumbnails** | `mobile/src/features/vault/vaultApi.ts`; thumbnails `5755d44`; image route **in flight** (worker-06 `a004579`) |
+| C06 | Consent store/service + HTTP surface + provider-transfer enforcement | `privacy/{ConsentService,JdbcConsentStore,ConsentPurpose}.java`, `platform/web/ConsentConfiguration.java`, `ConsentsController.java`; enforcement `PrivacyApprovedInputTransfer.java`; **fail-open finding open — see below** |
+| C07 | Confirm persists corrected metadata; client calls `/confirm`; mobile preview | `SharesController.java` (confirm + attach), `features/share/importClient.ts`, `ShareImportScreen.tsx` (`ba41621`); ShareImportConfirm 3/3 |
+| C08 | Detail/edit/delete + signed preview with refresh + **list thumbnails** | `mobile/src/features/vault/vaultApi.ts`; thumbnails `5755d44`; image route `VaultImageController.java` (`abc3b88`, `GET /vault/items/{id}/image`) |
 | C09 | Collections client + picker + Vault mount | `features/collections/{collectionsApi,CollectionsPicker}.tsx`; 14/14 |
 | C10/C11 | Studio HTTP mount + persistent sessions + clone-from-Look | `platform/web/StudioController.java` (POST `/studio/sessions`, GET `/active`, GET `/{id}`, POST `/{id}/commands`, POST `/from-look`) + `studio/JdbcStudioStore.java`; merged `daddbcb` |
 | C12 | Multi-item create mounted | `POST /generations/multi` (`GenerationsController.java:110`, `GenerationMultiRequest`) — frozen seam now **MOUNTED**; merged `daddbcb` |
@@ -294,9 +297,19 @@ plus the focused tests re-run in §7), not taken from a peer report alone.
   carries none (`git grep sourceUrl` over both → none). Mounting an external source link
   needs a product/owner decision (or a new field), not a client change.
 
-**Still in flight at `f2994b4`:** C08 image route (worker-06), StudioScreen mobile wiring
-(worker-07), C20 device tokens (worker-25), C21 NL Studio (worker-14). (C13 landed
-`74e31b0`; C12 + Studio HTTP mount landed `daddbcb`; C06 enforcement `104aa1d`.)
+**Open — security finding (not yet fixed at `ba41621`):**
+
+- **C06 consent enforcement fails open.** `PrivacyApprovedInputTransfer.java:96` returns
+  silently when `consents == null`, and `GenerationProcessorConfiguration.java:146` passes
+  `consentServices.getIfAvailable()`, so a context with an ObjectStore but no `ConsentService`
+  builds the transfer and would send body images with no consent check. Reported by
+  worker-31, independently reproduced by me, fix claimed by worker-09.
+
+**Still in flight at `ba41621`:** C04 iOS native picker (worker-04), C07 share-import
+preview (worker-04), C20 device tokens (worker-25), C21 NL Studio (`natural-language-command`
+route not yet mounted; worker-22), C22 flag-sync wiring (worker-15). (C08 image route
+`abc3b88`; C12 + Studio HTTP mount `daddbcb`; C13 `74e31b0`; C06 enforcement `104aa1d` —
+all landed.)
 
 **Independently re-run in my worktree (EXECUTED, this host):** C02 7/7, C09 14/14,
 C08 10/10, C07 3/3, C14+C16 52/52.
