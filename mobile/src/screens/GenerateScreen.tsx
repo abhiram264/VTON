@@ -286,6 +286,7 @@ export default function GenerateScreen({
             accessibilityState={{ disabled: busy, busy }}
             disabled={busy}
             onPress={() => start(retainedPhoto ?? undefined, true)}
+            style={[styles.button, styles.primary, busy && styles.disabled]}
           >
             <Text style={styles.primaryLabel}>{ACTION_TRY_AGAIN}</Text>
           </Pressable>
