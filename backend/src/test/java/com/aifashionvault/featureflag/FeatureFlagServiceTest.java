@@ -1,5 +1,6 @@
 package com.aifashionvault.featureflag;
 
+import java.util.List;
 import java.util.Map;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -42,13 +43,29 @@ class FeatureFlagServiceTest {
 			FeatureFlagName.NEW_QUALITY_GATE
 		);
 
-		for (FeatureFlagName name : FeatureFlagName.values()) {
+		// Only the postures this unit owns are asserted. NATURAL_LANGUAGE_STUDIO is
+		// deliberately excluded: its supported bit is owned by the C21 change
+		// (StudioController's natural-language route), so pinning it here would make
+		// two concurrent edits fight over one assertion.
+		for (FeatureFlagName name : List.of(
+				FeatureFlagName.MULTI_ITEM,
+				FeatureFlagName.TRYON_MAX,
+				FeatureFlagName.SHARE_IMPORT_ANDROID,
+				FeatureFlagName.SHARE_IMPORT_IOS,
+				FeatureFlagName.HD_GENERATION,
+				FeatureFlagName.NEW_QUALITY_GATE)) {
 			boolean expectedSupported =
-				name == FeatureFlagName.TRYON_MAX
+				name == FeatureFlagName.MULTI_ITEM
+					|| name == FeatureFlagName.TRYON_MAX
 					|| name == FeatureFlagName.SHARE_IMPORT_ANDROID
 					|| name == FeatureFlagName.SHARE_IMPORT_IOS;
 			assertThat(name.isSupported()).isEqualTo(expectedSupported);
-			assertThat(this.service.isEnabled(name)).isEqualTo(expectedSupported);
+			// Supported is NOT the same as default-enabled: MULTI_ITEM is an
+			// implemented capability whose server-side switch
+			// (vault.generation.multi-item-enabled) and advertised default both ship
+			// OFF, so it is supported while reporting disabled here.
+			boolean expectedDefaultEnabled = expectedSupported && name != FeatureFlagName.MULTI_ITEM;
+			assertThat(this.service.isEnabled(name)).isEqualTo(expectedDefaultEnabled);
 		}
 	}
 
@@ -136,17 +153,19 @@ class FeatureFlagServiceTest {
 
 	// C22: the fail-closed authority refuses to enable an unsupported capability at
 	// the API boundary (override / binding surface) rather than silently accepting it.
+	// HD_GENERATION and NEW_QUALITY_GATE are the stable unsupported exemplars;
+	// NATURAL_LANGUAGE_STUDIO is owned by the C21 change and intentionally not pinned.
 	@Test
 	void enablingAnUnsupportedCapabilityIsRefusedAtTheApiBoundary() {
-		assertThatThrownBy(() -> this.service.override(FeatureFlagName.MULTI_ITEM, true))
-			.isInstanceOf(UnsupportedOperationException.class);
 		assertThatThrownBy(() -> this.service.override(FeatureFlagName.HD_GENERATION, true))
 			.isInstanceOf(UnsupportedOperationException.class);
-		assertThatThrownBy(() -> this.properties.setEnabled(FeatureFlagName.MULTI_ITEM, true))
+		assertThatThrownBy(() -> this.service.override(FeatureFlagName.NEW_QUALITY_GATE, true))
+			.isInstanceOf(UnsupportedOperationException.class);
+		assertThatThrownBy(() -> this.properties.setEnabled(FeatureFlagName.HD_GENERATION, true))
 			.isInstanceOf(UnsupportedOperationException.class);
 
 		// Disabling an unsupported capability is always allowed and stays off.
-		this.service.override(FeatureFlagName.MULTI_ITEM, false);
-		assertThat(this.service.isEnabled(FeatureFlagName.MULTI_ITEM)).isFalse();
+		this.service.override(FeatureFlagName.HD_GENERATION, false);
+		assertThat(this.service.isEnabled(FeatureFlagName.HD_GENERATION)).isFalse();
 	}
 }
