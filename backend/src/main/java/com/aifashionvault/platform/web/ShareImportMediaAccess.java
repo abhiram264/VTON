@@ -4,6 +4,7 @@ import java.io.InputStream;
 import java.util.Optional;
 
 import com.aifashionvault.importer.ImportMediaAccess;
+import com.aifashionvault.platform.objectstore.PresignedAccess;
 import com.aifashionvault.shared.StorageKey;
 import com.aifashionvault.shared.UploadId;
 import com.aifashionvault.shared.UserId;
@@ -26,4 +27,16 @@ public interface ShareImportMediaAccess {
 	boolean publishFetchedImage(UserId ownerId, InputStream content, long contentLength, StorageKey destination);
 
 	void deleteObject(StorageKey key);
+
+	/**
+	 * Short-lived, owner-scoped read capability for a resolved import object so
+	 * the client can preview the imported image before saving it. The returned
+	 * capability is a time-boxed signed read (never an object key or a
+	 * permanent URL) and is re-issuable on demand. A seam that cannot mint one
+	 * returns empty rather than fabricating access, so the API answers
+	 * unavailable instead of leaking a preview it cannot authorize.
+	 */
+	default Optional<PresignedAccess> presignPreview(UserId ownerId, StorageKey key) {
+		return Optional.empty();
+	}
 }

@@ -17,6 +17,47 @@ function parseLook(value: unknown): LookResource {
   return { id: row.id, generationId: row.generationId, createdAt: row.createdAt, image: { url: image.url, expiresAt: image.expiresAt } };
 }
 
+// Provenance carried by GET /looks/{id} (LookResource on the server): the exact
+// source garments that produced the render, the provider/model, and the quality
+// outcome. Declared here rather than in features/generation so the C15 detail
+// surface can show provenance without widening the generation client's frozen
+// look shape (pinned by __tests__/look.test.ts).
+export type LookProvenanceItem = { vaultItemId: string; slot: string };
+
+export type LookDetail = LookResource & {
+  items: LookProvenanceItem[];
+  provider: string | null;
+  providerModel: string | null;
+  qualityStatus: string | null;
+};
+
+function parseLookDetail(value: unknown): LookDetail {
+  const base = parseLook(value);
+  const row = value as Record<string, unknown>;
+  const rawItems = row.items;
+  if (rawItems !== undefined && !Array.isArray(rawItems)) {
+    throw new Error('Invalid Look response');
+  }
+  const items: LookProvenanceItem[] = [];
+  for (const entry of (rawItems ?? []) as unknown[]) {
+    if (entry === null || typeof entry !== 'object') {
+      throw new Error('Invalid Look response');
+    }
+    const item = entry as Record<string, unknown>;
+    if (typeof item.vaultItemId !== 'string' || typeof item.slot !== 'string') {
+      throw new Error('Invalid Look response');
+    }
+    items.push({ vaultItemId: item.vaultItemId, slot: item.slot });
+  }
+  return {
+    ...base,
+    items,
+    provider: typeof row.provider === 'string' ? row.provider : null,
+    providerModel: typeof row.providerModel === 'string' ? row.providerModel : null,
+    qualityStatus: typeof row.qualityStatus === 'string' ? row.qualityStatus : null,
+  };
+}
+
 const GENERATION_STATUSES: readonly GenerationStatus[] = [
   'QUEUED',
   'PREFLIGHT',
@@ -82,6 +123,26 @@ export function createLooksApi(config: AvatarApiConfig = defaultConfig) {
       );
       if (!Array.isArray(value)) throw new Error('Invalid Looks response');
       return value.map(parseLook);
+    },
+    // Owner-scoped detail read. A Look the caller does not own answers 404
+    // UNAUTHORIZED_OR_NOT_FOUND, which surfaces as an ApiProblemError carrying
+    // no image, id, or metadata — a foreign deep link discloses nothing.
+    async get(lookId: string): Promise<LookDetail> {
+      const value = await requireOk(
+        await apiRequest(config, `/looks/${encodeURIComponent(lookId)}`, {
+          method: 'GET',
+        }),
+      );
+      return parseLookDetail(value);
+    },
+    // Mounted route: DELETE /looks/{id} logically deletes the Look and removes
+    // only the render object. Vault garments are untouched by construction.
+    async remove(lookId: string): Promise<void> {
+      await requireOk(
+        await apiRequest(config, `/looks/${encodeURIComponent(lookId)}`, {
+          method: 'DELETE',
+        }),
+      );
     },
     async regenerate(lookId: string): Promise<GenerationResource> {
       const payload = await requireOk(

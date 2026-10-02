@@ -24,6 +24,8 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.aifashionvault.integrity.AppIntegrityOperation;
 import com.aifashionvault.integrity.AppIntegrityVerifier;
+import com.aifashionvault.generation.AdmissionCapsProperties;
+import com.aifashionvault.generation.AdmissionPolicy;
 import com.aifashionvault.generation.GenerationStore;
 import com.aifashionvault.generation.JdbcGenerationStore;
 import com.aifashionvault.generation.vton.ProviderRegistry;
@@ -47,6 +49,7 @@ public class GenerationsController {
 		ObjectProvider<ObjectStore> objectStores,
 		ObjectProvider<ProviderRegistry> providerRegistries,
 		ObjectProvider<GenerationMetrics> generationMetrics,
+		ObjectProvider<AdmissionCapsProperties> admissionCaps,
 		GenerationApiProperties properties,
 		AppIntegrityVerifier verifier
 	) {
@@ -58,7 +61,12 @@ public class GenerationsController {
 		}
 		GenerationStore store = first(stores);
 		if (store == null) {
-			store = new JdbcGenerationStore(dataSource);
+			// C19: apply the same configured caps the GenerationConfiguration
+			// bean applies, so a slim context that falls back to constructing
+			// the store here does not silently revert to the shipped defaults.
+			AdmissionCapsProperties caps = admissionCaps.getIfAvailable();
+			AdmissionPolicy policy = caps == null ? AdmissionPolicy.DEFAULT : caps.toPolicy();
+			store = new JdbcGenerationStore(dataSource, Clock.systemUTC(), policy);
 		}
 		GenerationMediaStore mediaStore = resolveMediaStore(mediaStores, objectStores);
 		this.service = new GenerationCreationService(
