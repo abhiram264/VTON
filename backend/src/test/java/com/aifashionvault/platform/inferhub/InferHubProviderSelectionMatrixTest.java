@@ -15,12 +15,16 @@ import com.aifashionvault.platform.environment.VaultEnvironmentProperties;
 import com.aifashionvault.platform.fashn.FashnConfig;
 import com.aifashionvault.platform.objectstore.ClaimCommand;
 import com.aifashionvault.platform.objectstore.ClaimResult;
+import com.aifashionvault.platform.objectstore.GenerationClaimCommand;
+import com.aifashionvault.platform.objectstore.GenerationMediaStore;
 import com.aifashionvault.platform.objectstore.MediaDeclaration;
 import com.aifashionvault.platform.objectstore.ObjectMetadata;
 import com.aifashionvault.platform.objectstore.ObjectRef;
 import com.aifashionvault.platform.objectstore.ObjectStore;
 import com.aifashionvault.platform.objectstore.PresignedAccess;
+import com.aifashionvault.platform.objectstore.ProductInputClaimCommand;
 import com.aifashionvault.platform.objectstore.UploadCapability;
+import com.aifashionvault.shared.StorageKey;
 import com.aifashionvault.shared.UploadId;
 import com.aifashionvault.shared.UserId;
 
@@ -185,6 +189,7 @@ class InferHubProviderSelectionMatrixTest {
                 "vault.inferhub.api-key=" + INFERHUB_KEY,
                 "vault.generation.routing.forced-provider=Try On!")
             .withBean(ObjectStore.class, NoopObjectStore::new)
+            .withBean(GenerationMediaStore.class, NoopObjectStore::new)
             .withBean(VaultEnvironmentProperties.class, () -> properties(FASHN_KEY, INFERHUB_KEY))
             .run(context -> {
                 assertThat(context).hasFailed();
@@ -210,6 +215,7 @@ class InferHubProviderSelectionMatrixTest {
                     "vault.fashn.api-key=" + FASHN_KEY,
                     "vault.inferhub.api-key=" + INFERHUB_KEY)
                 .withBean(ObjectStore.class, NoopObjectStore::new)
+                .withBean(GenerationMediaStore.class, NoopObjectStore::new)
                 .withBean(VaultEnvironmentProperties.class, () -> properties(FASHN_KEY, INFERHUB_KEY))
                 .run(context -> {
                     assertThat(context).hasNotFailed();
@@ -245,6 +251,7 @@ class InferHubProviderSelectionMatrixTest {
                 "vault.fashn.api-key=" + fashnProperty,
                 "vault.inferhub.api-key=" + inferhubProperty)
             .withBean(ObjectStore.class, NoopObjectStore::new)
+            .withBean(GenerationMediaStore.class, NoopObjectStore::new)
             .withBean(VaultEnvironmentProperties.class, () -> properties(fashnProperty, inferhubProperty));
         if (forcedProvider == null) {
             return runner;
@@ -273,7 +280,32 @@ class InferHubProviderSelectionMatrixTest {
      * Nothing in these context tests touches the store; every method fails loudly
      * so an unexpected call is visible instead of silently answered.
      */
-    static final class NoopObjectStore implements ObjectStore {
+    static final class NoopObjectStore implements ObjectStore, GenerationMediaStore {
+        @Override
+        public void putBounded(StorageKey dest, java.io.InputStream source, long maxBytes, String mediaType) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public ClaimResult claim(GenerationClaimCommand command) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public void preflightProductInput(ProductInputClaimCommand command) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public ClaimResult claimProductInput(ProductInputClaimCommand command) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public void releaseProductInput(ProductInputClaimCommand command) {
+            throw new UnsupportedOperationException();
+        }
+
         @Override
         public UploadCapability presignStagingPut(UserId userId, UploadId uploadId, MediaDeclaration declaration) {
             throw new UnsupportedOperationException();
