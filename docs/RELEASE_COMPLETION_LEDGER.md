@@ -131,7 +131,7 @@ Status key: **CONNECTED** (client + mounted backend + screen exist and are wired
 | C17 | INCOMPLETE | `MeController` DELETE (`:33`); `privacy/DefaultAccountDeletionWorkflow`; V021 | `/me` delete mounted; no mobile deletion UI; barrier work pending |
 | C18 | EXTERNALLY-BLOCKED (evidence) | `platform/generation/GenerationProcessorConfiguration.java:113-126` | quality gate code exists; launch-quality evaluation is paid/external |
 | C19 | INCOMPLETE | `admission/` package; `GenerationAdmissionFacade` | caps/admission exist; config exposure + pause semantics pending |
-| C20 | INCOMPLETE | `notification/` package | FCM client/store exist; no device-token registration endpoint (`grep` → none); delivery defaults blank |
+| C20 | PARTIAL (device registry EXECUTED; delivery unmounted) | `DeviceRegistrationController` (`/me/devices`, `/me/notification-preferences`); `JdbcDeviceRegistrationStore`; V025 | Owner-bound registration/removal/preferences shipped and EXECUTED (worker-25, 7 HTTP tests); FCM client/store/worker exist but `FcmDeliveryWorker.enqueue` has **no production caller** — nothing enqueues a notification event; native messaging, refreshable FCM credentials, APNs and mobile registration call pending |
 | C21 | UNMOUNTED | `studio/agent/StudioAgent.java:20-24` | ten-tool allowlist exists; no command endpoint |
 | C22 | INCOMPLETE | `analytics/` package; `mobile/src/config/featureFlags.ts` | analytics exist; `DEFAULT_FEATURE_FLAGS` ship most capabilities **ON** (contra C22) |
 | C23 | INCOMPLETE | all screens | depends on completed feature screens |
@@ -194,7 +194,7 @@ These are **contracts to design**, not existing endpoints. Current state (SOURCE
 | Generation recovery/history lookup + terminal/uncertain semantics | Polling only; no accepted-id persistence (C14) |
 | Look provenance + deletion | `LooksController` list/get/delete mounted; provenance representation partial (C15) |
 | Consent grant/withdrawal + account-deletion request/status | `Consent.java`, `DefaultAccountDeletionWorkflow` exist; no HTTP consent/deletion-status contract (C06/C17) |
-| Device-token registration/preferences + content report | No endpoint exists (C20) |
+| Device-token registration/preferences + content report | Registration/removal/preferences **frozen and shipped** (C20, see CONTRACT_INVENTORY §10); content report not started |
 
 ## 8. Baseline commands (recorded, not executed by C01)
 

@@ -458,3 +458,32 @@ This section is **appended**, not a rewrite. §2 and §4 above are the dated PR-
 
 The full current inventory, per-package status, and externally blocked packages are in
 [docs/RELEASE_COMPLETION_LEDGER.md](RELEASE_COMPLETION_LEDGER.md).
+
+## 10. C20 device-token contract — 2026-10-03 (frozen, EXECUTED)
+
+Frozen DTO seam for device-token registration and preferences (guide §5.3). All routes are
+under `/me` and require a bearer credential; the owner is the authenticated principal and is
+never taken from the body. Implemented in `DeviceRegistrationController` /
+`JdbcDeviceRegistrationStore` over migration `V025__device_registration.sql`.
+
+| Method | Route | Request | Response | Notes |
+|---|---|---|---|---|
+| POST | `/me/devices` | `{deviceToken: string(1..4096, trimmed), platform: "ANDROID"\|"IOS"}` | `200 {id, deviceToken, platform, createdAt, updatedAt, lastSeenAt}` | Idempotent upsert keyed on `deviceToken` (globally unique). Re-registering the same token from a second account **moves** it to that account. |
+| GET | `/me/devices` | — | `200 [DeviceResponse]` | Caller-scoped only. |
+| DELETE | `/me/devices` | `{deviceToken}` | `204` always | Non-disclosing: deletes only when the caller owns the token; another account's delete is a no-op and indistinguishable. |
+| GET | `/me/notification-preferences` | — | `200 {pushEnabled, updatedAt\|null}` | Absent row means `pushEnabled: true`. |
+| PUT | `/me/notification-preferences` | `{pushEnabled: boolean}` | `200 {pushEnabled, updatedAt}` | Owner-scoped upsert. |
+
+Errors: `400 {"code":"INVALID_DEVICE_REGISTRATION"}` for an unsupported `platform`, a blank
+or oversized `deviceToken`, a non-boolean `pushEnabled`, or an unreadable body. Unauthenticated
+requests are `401` like every other route.
+
+Pruning: `FcmSendResult.unregistered()` reports HTTP 404 from FCM HTTP v1, and
+`FcmDeliveryWorker` invokes the token pruner (`DeviceRegistrationStore::prune`) before marking
+the delivery terminally failed, so a dead token is not retried ten times. Physical push
+delivery is **EXTERNALLY-DEPENDENT** (no FCM credentials/device in this run); the lifecycle
+above is **EXECUTED** by `DeviceRegistrationApiTest` (7 HTTP cases, real Postgres).
+
+Known gap (SOURCE-CONFIRMED): `FcmDeliveryWorker.enqueue` has no production caller, so no
+generation completion currently creates a notification event. Delivery remains unmounted
+until a generation-publication owner wires it.
