@@ -1,4 +1,4 @@
-package com.aifashionvault.platform.web;
+package com.aifashionvault.studio;
 
 import javax.sql.DataSource;
 
@@ -6,8 +6,6 @@ import org.springframework.beans.factory.FactoryBean;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-
-import com.aifashionvault.studio.JdbcStudioStore;
 
 /**
  * Studio persistence wiring. The store is only created when a {@link DataSource}

@@ -1,4 +1,4 @@
-package com.aifashionvault.platform.web;
+package com.aifashionvault.studio;
 
 import java.sql.Timestamp;
 import java.time.Clock;
@@ -30,7 +30,6 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
 import com.aifashionvault.platform.security.ExternalTokenVerifier;
 import com.aifashionvault.platform.security.InProcessJwtFixture;
 import com.aifashionvault.shared.UserId;
-import com.aifashionvault.studio.JdbcStudioStore;
 
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;

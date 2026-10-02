@@ -1,4 +1,4 @@
-package com.aifashionvault.platform.web;
+package com.aifashionvault.studio;
 
 import java.time.Clock;
 import java.time.Instant;
@@ -23,11 +23,6 @@ import org.springframework.web.bind.annotation.RestController;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.node.ObjectNode;
 
-import com.aifashionvault.studio.JdbcStudioStore;
-import com.aifashionvault.studio.JdbcStudioStore.SaveResult;
-import com.aifashionvault.studio.JdbcStudioStore.SaveStatus;
-import com.aifashionvault.studio.StudioItem;
-import com.aifashionvault.studio.StudioSession;
 import com.aifashionvault.shared.AvatarProfileId;
 import com.aifashionvault.shared.StudioItemId;
 import com.aifashionvault.shared.StudioSessionId;
@@ -111,7 +106,7 @@ public class StudioController {
 		StudioSession stamped = new StudioSession(
 			next.id(), next.userId(), next.avatarProfileId(), next.createdAt(), clock.instant(), next.items()
 		);
-		SaveResult result = store().save(stamped, expected);
+		JdbcStudioStore.SaveResult result = store().save(stamped, expected);
 		return switch (result.status()) {
 			case SAVED -> response(result.session());
 			case STALE -> throw new Stale();
