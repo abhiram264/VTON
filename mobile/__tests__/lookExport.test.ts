@@ -44,7 +44,11 @@ function exporterWith(
   stager: LookExportStager | null,
   extra: Partial<Parameters<typeof createLookExporter>[0]> = {},
 ) {
-  return createLookExporter({stager, ...extra});
+  return createLookExporter({
+    stager,
+    acknowledgeExport: async () => undefined,
+    ...extra,
+  });
 }
 
 describe('look export (C16)', () => {
@@ -328,5 +332,102 @@ describe('native bridge resolution (C16)', () => {
   test('ignores non-object module entries and returns null when nothing matches', () => {
     expect(resolveNativeStager({ImageExport: 'nope'})).toBeNull();
     expect(resolveNativeStager({})).toBeNull();
+  });
+});
+
+describe('look export acknowledgement (C22)', () => {
+  test('acknowledges the Look after a successful share', async () => {
+    const {stager} = makeStager();
+    const ack = jest.fn(async () => undefined);
+    const exporter = exporterWith(stager, {acknowledgeExport: ack});
+
+    const outcome = await exporter.exportLook(
+      {lookId: 'look-42', imageUrl: SIGNED_URL, disclosureAcknowledged: true},
+      'share',
+    );
+
+    expect(outcome).toEqual({status: 'SHARED'});
+    expect(ack).toHaveBeenCalledWith('look-42');
+  });
+
+  test('acknowledges the Look after a successful save-to-photos', async () => {
+    const {stager} = makeStager();
+    const ack = jest.fn(async () => undefined);
+    const exporter = exporterWith(stager, {acknowledgeExport: ack});
+
+    const outcome = await exporter.exportLook(
+      {lookId: 'look-7', imageUrl: SIGNED_URL, disclosureAcknowledged: true},
+      'save',
+    );
+
+    expect(outcome).toEqual({status: 'SAVED'});
+    expect(ack).toHaveBeenCalledWith('look-7');
+  });
+
+  test('does not acknowledge a cancelled share', async () => {
+    const {stager} = makeStager({
+      shareStaged: async () => ({action: 'dismissedAction'}),
+    });
+    const ack = jest.fn(async () => undefined);
+    const exporter = exporterWith(stager, {acknowledgeExport: ack});
+
+    const outcome = await exporter.exportLook(
+      {lookId: 'look-1', imageUrl: SIGNED_URL, disclosureAcknowledged: true},
+      'share',
+    );
+
+    expect(outcome).toEqual({status: 'CANCELLED'});
+    expect(ack).not.toHaveBeenCalled();
+  });
+
+  test('does not acknowledge a denied permission', async () => {
+    const {stager} = makeStager({
+      saveToPhotos: async () => 'denied',
+    });
+    const ack = jest.fn(async () => undefined);
+    const exporter = exporterWith(stager, {acknowledgeExport: ack});
+
+    const outcome = await exporter.exportLook(
+      {lookId: 'look-1', imageUrl: SIGNED_URL, disclosureAcknowledged: true},
+      'save',
+    );
+
+    expect(outcome).toEqual({status: 'PERMISSION_DENIED'});
+    expect(ack).not.toHaveBeenCalled();
+  });
+
+  test('does not acknowledge a staging failure', async () => {
+    const {stager} = makeStager({
+      stageFromUrl: async () => {
+        throw new Error('staging failed');
+      },
+    });
+    const ack = jest.fn(async () => undefined);
+    const exporter = exporterWith(stager, {acknowledgeExport: ack});
+
+    const outcome = await exporter.exportLook(
+      {lookId: 'look-1', imageUrl: SIGNED_URL, disclosureAcknowledged: true},
+      'share',
+    );
+
+    expect(outcome).toEqual({status: 'STAGING_FAILED'});
+    expect(ack).not.toHaveBeenCalled();
+  });
+
+  test('a failing acknowledgement never changes the export outcome', async () => {
+    const {stager} = makeStager();
+    const ack = jest.fn(async () => {
+      throw new Error('ack endpoint unavailable');
+    });
+    const exporter = exporterWith(stager, {acknowledgeExport: ack});
+
+    const outcome = await exporter.exportLook(
+      {lookId: 'look-9', imageUrl: SIGNED_URL, disclosureAcknowledged: true},
+      'share',
+    );
+
+    // The export succeeded; telemetry failure is invisible to the user.
+    expect(outcome).toEqual({status: 'SHARED'});
+    expect(ack).toHaveBeenCalledWith('look-9');
   });
 });

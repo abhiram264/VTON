@@ -1,4 +1,5 @@
 import {NativeModules, Share} from 'react-native';
+import {looksApi} from '../looks/looksApi';
 
 /**
  * User-directed local export of a rendered Look (C16).
@@ -68,6 +69,12 @@ export type LookExportDeps = {
   stager: LookExportStager | null;
   /** React Native Share fallback for platforms whose bridge omits shareStaged. */
   rnShare: (options: {url: string; title?: string}) => Promise<{action?: string}>;
+  /**
+   * C22 "Look exported": acknowledges a completed local export so the backend
+   * records the lifecycle event. Fire-and-forget by contract — it must never
+   * affect the export outcome.
+   */
+  acknowledgeExport: (lookId: string) => Promise<unknown>;
   maxBytes: number;
   /** Staged files older than this are swept even after a crash. */
   maxStagingAgeMs: number;
@@ -133,6 +140,7 @@ export function createLookExporter(overrides: Partial<LookExportDeps> = {}) {
   const deps: LookExportDeps = {
     stager: resolveNativeStager(NativeModules as unknown as Record<string, unknown>),
     rnShare: options => Share.share(options),
+    acknowledgeExport: lookId => looksApi.ackExport(lookId),
     maxBytes: DEFAULT_MAX_BYTES,
     maxStagingAgeMs: DEFAULT_MAX_STAGING_AGE_MS,
     ...overrides,
@@ -166,6 +174,25 @@ export function createLookExporter(overrides: Partial<LookExportDeps> = {}) {
       : {status: 'SHARED'};
   }
 
+  /**
+   * C22 "Look exported": a completed export is acknowledged for the backend's
+   * lifecycle event. Fire-and-forget — the export has already happened, so a
+   * failed or unavailable ack is swallowed and the outcome is returned
+   * unchanged. A cancelled or failed export is not an export and is not
+   * acknowledged.
+   */
+  function acknowledge(
+    request: LookExportRequest,
+    outcome: LookExportOutcome,
+  ): LookExportOutcome {
+    if (outcome.status === 'SHARED' || outcome.status === 'SAVED') {
+      void deps.acknowledgeExport(request.lookId).catch(() => {
+        // Best-effort telemetry; never surfaces to the user.
+      });
+    }
+    return outcome;
+  }
+
   async function exportLook(
     request: LookExportRequest,
     action: LookExportAction,
@@ -197,11 +224,11 @@ export function createLookExporter(overrides: Partial<LookExportDeps> = {}) {
           return {status: 'SAVE_FAILED'};
         }
         const saved = await stager.saveToPhotos(uri);
-        if (saved === 'saved') return {status: 'SAVED'};
+        if (saved === 'saved') return acknowledge(request, {status: 'SAVED'});
         if (saved === 'denied') return {status: 'PERMISSION_DENIED'};
         return {status: 'SAVE_FAILED'};
       }
-      return await offerImage(stager, uri, request.fileName);
+      return acknowledge(request, await offerImage(stager, uri, request.fileName));
     } catch {
       return action === 'save' ? {status: 'SAVE_FAILED'} : {status: 'SHARE_FAILED'};
     } finally {
