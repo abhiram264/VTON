@@ -144,6 +144,16 @@ export function createLooksApi(config: AvatarApiConfig = defaultConfig) {
         }),
       );
     },
+    // C22 "Look exported": the app acknowledges a local export so the backend
+    // can record the lifecycle event. Fire-and-forget — the export has already
+    // succeeded, so a failed ack must never surface to the user.
+    async ackExport(lookId: string): Promise<void> {
+      await requireOk(
+        await apiRequest(config, `/looks/${encodeURIComponent(lookId)}/export-ack`, {
+          method: 'POST',
+        }),
+      );
+    },
     async regenerate(lookId: string): Promise<GenerationResource> {
       const payload = await requireOk(
         await apiRequest(
