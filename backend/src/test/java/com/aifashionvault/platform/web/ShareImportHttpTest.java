@@ -129,6 +129,9 @@ class ShareImportHttpTest {
 	@Autowired
 	private FakeShareChain fakeChain;
 
+	@Autowired
+	private RecordingProductMetrics productMetrics;
+
 	@DynamicPropertySource
 	static void registerDatasource(DynamicPropertyRegistry registry) {
 		POSTGRES.start();
@@ -152,6 +155,38 @@ class ShareImportHttpTest {
 		jdbc.update("DELETE FROM users");
 		this.fakeMedia.reset();
 		this.fakeChain.reset();
+		this.productMetrics.reset();
+	}
+
+	@Test
+	void importLifecycleEventsAreRecordedForStartAndOutcome() throws Exception {
+		// A resolved image import records started + resolved; a URL that cannot be
+		// resolved records started + failed. This is the C22 clause-1 gap: the
+		// import taxonomy existed but nothing emitted it.
+		String uploadId = fakeMedia.stageVerifiedUpload();
+		postImport(token(), KEY, "{\"kind\":\"IMAGE\",\"uploadId\":\"" + uploadId + "\"}", 201);
+
+		assertThat(productMetrics.names()).containsExactly(
+			com.aifashionvault.analytics.AnalyticsEventName.SHARE_RECEIVED,
+			com.aifashionvault.analytics.AnalyticsEventName.SHARE_RESOLVED);
+
+		productMetrics.reset();
+		postImport(token(), OTHER_KEY, "{\"kind\":\"URL\",\"sourceUrl\":\"" + IMAGE_URL + "\"}", 201);
+
+		assertThat(productMetrics.names()).containsExactly(
+			com.aifashionvault.analytics.AnalyticsEventName.SHARE_RECEIVED,
+			com.aifashionvault.analytics.AnalyticsEventName.SHARE_RESOLUTION_FAILED);
+	}
+
+	@Test
+	void replayedImportDoesNotRecordAnotherStartedEvent() throws Exception {
+		postImport(token(), KEY, "{\"kind\":\"URL\",\"sourceUrl\":\"" + IMAGE_URL + "\"}", 201);
+		productMetrics.reset();
+
+		// A terminal replay is not a new import: no second "started" event.
+		postImport(token(), KEY, "{\"kind\":\"URL\",\"sourceUrl\":\"" + IMAGE_URL + "\"}", 200);
+
+		assertThat(productMetrics.names()).isEmpty();
 	}
 
 	@Test
@@ -823,10 +858,38 @@ class ShareImportHttpTest {
 		ShareImportService fakeShareImportService(
 			javax.sql.DataSource dataSource,
 			ShareImportMediaAccess media,
-			ShareImportResolverChain chains
+			ShareImportResolverChain chains,
+			RecordingProductMetrics productMetrics
 		) {
 			return new ShareImportService(
-				new com.aifashionvault.importer.JdbcShareImportStore(dataSource), media, chains);
+				new com.aifashionvault.importer.JdbcShareImportStore(dataSource), media, chains, productMetrics);
+		}
+
+		/** C22: captures the import lifecycle events the service emits. */
+		@Bean
+		RecordingProductMetrics recordingProductMetrics() {
+			return new RecordingProductMetrics();
+		}
+	}
+
+	/** Captures lifecycle events without any registry. */
+	static final class RecordingProductMetrics implements com.aifashionvault.analytics.ProductMetrics {
+		private final List<com.aifashionvault.analytics.AnalyticsEventName> names = new CopyOnWriteArrayList<>();
+
+		@Override
+		public void record(
+			com.aifashionvault.analytics.AnalyticsEventName eventName,
+			com.aifashionvault.analytics.ProductMetricContext context
+		) {
+			names.add(eventName);
+		}
+
+		void reset() {
+			names.clear();
+		}
+
+		List<com.aifashionvault.analytics.AnalyticsEventName> names() {
+			return List.copyOf(names);
 		}
 	}
 

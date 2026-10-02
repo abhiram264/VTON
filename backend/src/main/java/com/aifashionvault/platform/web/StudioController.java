@@ -30,10 +30,16 @@ import com.aifashionvault.shared.StudioSessionId;
 import com.aifashionvault.shared.StudioSlot;
 import com.aifashionvault.shared.UserId;
 import com.aifashionvault.shared.VaultItemId;
+import com.aifashionvault.featureflag.FeatureFlagName;
+import com.aifashionvault.featureflag.FeatureFlags;
 import com.aifashionvault.platform.studio.StudioDraftCloner;
 import com.aifashionvault.studio.JdbcStudioStore;
 import com.aifashionvault.studio.StudioItem;
 import com.aifashionvault.studio.StudioSession;
+import com.aifashionvault.studio.agent.AgentProblemCode;
+import com.aifashionvault.studio.agent.StudioAgent;
+import com.aifashionvault.studio.agent.StudioAgentTools;
+import com.aifashionvault.studio.agent.StudioCommandPlanner;
 
 /**
  * Mounts the Studio HTTP surface the mobile client already calls (C10):
@@ -57,17 +63,43 @@ import com.aifashionvault.studio.StudioSession;
 @RequestMapping("/studio/sessions")
 public class StudioController {
 
+	/**
+	 * Plain-language explanations for a refused natural-language command. The
+	 * message states what happened; it never implies the draft changed.
+	 */
+	private static final java.util.Map<String, String> MESSAGE_BY_PROBLEM = java.util.Map.of(
+		AgentProblemCode.UNAUTHORIZED_OR_NOT_FOUND.name(),
+		"No item in your Vault matches that, or it is not yours.",
+		AgentProblemCode.STATE_CONFLICT.name(),
+		"That slot conflicts with an item already in the draft. Use \"replace\" or remove it first.",
+		AgentProblemCode.DOMAIN_VALIDATION_FAILED.name(),
+		"That change is not allowed in this draft. Nothing was changed.",
+		AgentProblemCode.DEPENDENCY_UNAVAILABLE.name(),
+		"The Studio data store is unavailable. Nothing was changed.",
+		AgentProblemCode.MALFORMED_CALL.name(),
+		"That command could not be understood. Nothing was changed."
+	);
+
 	private final ObjectProvider<JdbcStudioStore> stores;
 	private final ObjectProvider<StudioDraftCloner> cloners;
+	private final ObjectProvider<StudioAgentTools> agentTools;
+	private final ObjectProvider<StudioCommandPlanner> planners;
+	private final ObjectProvider<FeatureFlags> flagsProvider;
 	private final Clock clock;
 
 	public StudioController(
 		ObjectProvider<JdbcStudioStore> stores,
 		ObjectProvider<StudioDraftCloner> cloners,
+		ObjectProvider<StudioAgentTools> agentTools,
+		ObjectProvider<StudioCommandPlanner> planners,
+		ObjectProvider<FeatureFlags> flagsProvider,
 		ObjectProvider<Clock> clocks
 	) {
 		this.stores = stores;
 		this.cloners = cloners;
+		this.agentTools = agentTools;
+		this.planners = planners;
+		this.flagsProvider = flagsProvider;
 		this.clock = clocks.getIfAvailable(Clock::systemUTC);
 	}
 
@@ -125,6 +157,61 @@ public class StudioController {
 		};
 	}
 
+	@PostMapping("/{id}/natural-language-command")
+	public StudioNaturalLanguageResponse naturalLanguageCommand(
+		@AuthenticationPrincipal UserId owner,
+		@PathVariable String id,
+		@RequestBody ObjectNode body
+	) {
+		if (!naturalLanguageEnabled()) {
+			throw new CapabilityDisabled();
+		}
+		if (body == null) {
+			throw new Invalid();
+		}
+		StudioSession current = owned(owner, id);
+		StudioCommandPlanner planner = planner();
+		StudioCommandPlanner.Plan plan = planner.plan(owner, current.id(), requiredText(body, "text"));
+		return switch (plan) {
+			case StudioCommandPlanner.Resolved resolved -> applied(owner, current, resolved);
+			case StudioCommandPlanner.NeedsSelection selection -> StudioNaturalLanguageResponse.confirm(
+				response(current), selection.prompt(),
+				selection.candidates().stream()
+					.map(candidate -> new CandidateResponse(
+						candidate.id().value().toString(),
+						candidate.label(),
+						selection.slot() == null ? null : selection.slot().name()))
+					.toList());
+			case StudioCommandPlanner.Explanation explanation -> StudioNaturalLanguageResponse.explained(
+				response(current), explanation.message());
+			case StudioCommandPlanner.Refused refused -> StudioNaturalLanguageResponse.refused(
+				response(current), refused.problem().name(), refused.message());
+		};
+	}
+
+	/**
+	 * Runs the planner's calls through the allowlisted agent and answers with the
+	 * authoritative draft. A refused or partial execution reports the failure and
+	 * returns the draft as it actually stands, never a fabricated success.
+	 */
+	private StudioNaturalLanguageResponse applied(
+		UserId owner,
+		StudioSession before,
+		StudioCommandPlanner.Resolved resolved
+	) {
+		StudioAgent.AgentExecution execution = new StudioAgent(tools()).execute(owner, before.id(), resolved.calls());
+		StudioSession after = owned(owner, before.id().value().toString());
+		if (!execution.completed()) {
+			StudioAgent.ToolCallResult failure = execution.results().get(execution.results().size() - 1);
+			String problem = failure.problem() == null
+				? AgentProblemCode.MALFORMED_CALL.name()
+				: failure.problem().name();
+			return StudioNaturalLanguageResponse.refused(response(after), problem, MESSAGE_BY_PROBLEM.getOrDefault(
+				problem, "That command could not be applied. The draft is unchanged."));
+		}
+		return StudioNaturalLanguageResponse.applied(response(after));
+	}
+
 	@PostMapping("/from-look")
 	public ResponseEntity<CloneResponse> fromLook(
 		@AuthenticationPrincipal UserId owner,
@@ -156,6 +243,16 @@ public class StudioController {
 	@ExceptionHandler(Unavailable.class)
 	ResponseEntity<Problem> unavailable() {
 		return problem(HttpStatus.SERVICE_UNAVAILABLE, "STUDIO_UNAVAILABLE");
+	}
+
+	/**
+	 * The capability is off in this release. Distinct from {@code STUDIO_UNAVAILABLE}
+	 * (a missing dependency): this one means the route is not part of the release,
+	 * so a client must stop offering it rather than retry.
+	 */
+	@ExceptionHandler(CapabilityDisabled.class)
+	ResponseEntity<Problem> capabilityDisabled() {
+		return problem(HttpStatus.SERVICE_UNAVAILABLE, "STUDIO_NATURAL_LANGUAGE_DISABLED");
 	}
 
 	@ExceptionHandler({
@@ -219,6 +316,48 @@ public class StudioController {
 			throw new Unavailable();
 		}
 		return cloner;
+	}
+
+	private StudioAgentTools tools() {
+		StudioAgentTools tools;
+		try {
+			tools = agentTools.getIfAvailable();
+		} catch (NoUniqueBeanDefinitionException ex) {
+			throw new Unavailable();
+		}
+		if (tools == null) {
+			throw new Unavailable();
+		}
+		return tools;
+	}
+
+	private StudioCommandPlanner planner() {
+		StudioCommandPlanner planner;
+		try {
+			planner = planners.getIfAvailable();
+		} catch (NoUniqueBeanDefinitionException ex) {
+			throw new Unavailable();
+		}
+		if (planner == null) {
+			throw new Unavailable();
+		}
+		return planner;
+	}
+
+	/**
+	 * The backend is the capability authority (C22): a release that declares
+	 * natural-language Studio unsupported must refuse the route even if a client
+	 * ignores the flags. A missing flag service is therefore DISABLED, not enabled —
+	 * the capability fails closed.
+	 */
+	private boolean naturalLanguageEnabled() {
+		FeatureFlags flags;
+		try {
+			flags = flagsProvider.getIfAvailable();
+		} catch (NoUniqueBeanDefinitionException ex) {
+			return false;
+		}
+		return flags != null && flags.isEnabled(FeatureFlagName.NATURAL_LANGUAGE_STUDIO);
 	}
 
 	private static CloneResponse cloneResponse(StudioSession session, StudioDraftCloner.CloneResult result) {
@@ -366,6 +505,63 @@ public class StudioController {
 	) {
 	}
 
+	/**
+	 * Natural-language outcome. The session fields are the same shape every other
+	 * Studio route returns, so the existing client keeps working; {@code outcome}
+	 * tells a client that understands it whether anything actually changed.
+	 *
+	 * <p>{@code CONFIRM_REQUIRED} means the text was ambiguous: nothing was
+	 * mutated and {@code candidates} lists the owned items the user must choose
+	 * between. {@code REFUSED} means the command was understood but could not be
+	 * applied — the returned draft is the unchanged truth, never a partial write.</p>
+	 */
+	public record StudioNaturalLanguageResponse(
+		String sessionId,
+		String avatarProfileId,
+		List<String> itemIds,
+		Instant updatedAt,
+		String outcome,
+		String message,
+		List<CandidateResponse> candidates
+	) {
+		static StudioNaturalLanguageResponse applied(StudioSessionResponse state) {
+			return new StudioNaturalLanguageResponse(
+				state.sessionId(), state.avatarProfileId(), state.itemIds(), state.updatedAt(),
+				"APPLIED", null, List.of());
+		}
+
+		static StudioNaturalLanguageResponse confirm(
+			StudioSessionResponse state,
+			String prompt,
+			List<CandidateResponse> candidates
+		) {
+			return new StudioNaturalLanguageResponse(
+				state.sessionId(), state.avatarProfileId(), state.itemIds(), state.updatedAt(),
+				"CONFIRM_REQUIRED", prompt, candidates);
+		}
+
+		static StudioNaturalLanguageResponse explained(StudioSessionResponse state, String message) {
+			return new StudioNaturalLanguageResponse(
+				state.sessionId(), state.avatarProfileId(), state.itemIds(), state.updatedAt(),
+				"EXPLAINED", message, List.of());
+		}
+
+		static StudioNaturalLanguageResponse refused(StudioSessionResponse state, String problem, String message) {
+			return new StudioNaturalLanguageResponse(
+				state.sessionId(), state.avatarProfileId(), state.itemIds(), state.updatedAt(),
+				"REFUSED", message, List.of());
+		}
+	}
+
+	/**
+	 * One owned garment the ambiguous command could mean. {@code slot} is the slot
+	 * the command TARGETED, taken from the planner's own resolution, so the
+	 * confirmation re-send never has to re-derive it from the garment's category on
+	 * the client.
+	 */
+	public record CandidateResponse(String vaultItemId, String label, String slot) {
+	}
+
 	public record UnresolvedGarmentResponse(String slot, String vaultItemId, String reason) {
 	}
 
@@ -379,6 +575,9 @@ public class StudioController {
 	}
 
 	private static final class Unavailable extends RuntimeException {
+	}
+
+	private static final class CapabilityDisabled extends RuntimeException {
 	}
 
 	private static final class Invalid extends RuntimeException {

@@ -69,8 +69,9 @@ public class ShareImportConfiguration {
 	FactoryBean<ShareImportService> shareImportService(
 			ObjectProvider<DataSource> dataSources,
 			ObjectProvider<ShareImportMediaAccess> mediaAccesses,
-			ObjectProvider<ShareImportResolverChain> chains) {
-		return new ShareImportServiceFactoryBean(dataSources, mediaAccesses, chains);
+			ObjectProvider<ShareImportResolverChain> chains,
+			ObjectProvider<com.aifashionvault.analytics.ProductMetrics> productMetrics) {
+		return new ShareImportServiceFactoryBean(dataSources, mediaAccesses, chains, productMetrics);
 	}
 
 	private record Adapters(ObjectStore store, ImageInspector inspector) {
@@ -163,15 +164,18 @@ public class ShareImportConfiguration {
 		private final ObjectProvider<DataSource> dataSources;
 		private final ObjectProvider<ShareImportMediaAccess> mediaAccesses;
 		private final ObjectProvider<ShareImportResolverChain> chains;
+		private final ObjectProvider<com.aifashionvault.analytics.ProductMetrics> productMetrics;
 
 		ShareImportServiceFactoryBean(
 				ObjectProvider<DataSource> dataSources,
 				ObjectProvider<ShareImportMediaAccess> mediaAccesses,
-				ObjectProvider<ShareImportResolverChain> chains
+				ObjectProvider<ShareImportResolverChain> chains,
+				ObjectProvider<com.aifashionvault.analytics.ProductMetrics> productMetrics
 		) {
 			this.dataSources = dataSources;
 			this.mediaAccesses = mediaAccesses;
 			this.chains = chains;
+			this.productMetrics = productMetrics;
 		}
 
 		@Override
@@ -182,7 +186,8 @@ public class ShareImportConfiguration {
 			if (dataSource == null || media == null || chain == null) {
 				return null;
 			}
-			return new ShareImportService(new JdbcShareImportStore(dataSource), media, chain);
+			return new ShareImportService(new JdbcShareImportStore(dataSource), media, chain,
+				productMetrics == null ? null : productMetrics.getIfAvailable());
 		}
 
 		@Override

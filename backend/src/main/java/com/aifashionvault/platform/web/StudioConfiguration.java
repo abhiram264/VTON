@@ -7,9 +7,14 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import com.aifashionvault.collection.CollectionStore;
 import com.aifashionvault.look.LookStore;
+import com.aifashionvault.platform.studio.StudioAgentToolAdapter;
 import com.aifashionvault.platform.studio.StudioDraftCloner;
 import com.aifashionvault.studio.JdbcStudioStore;
+import com.aifashionvault.studio.agent.StudioAgentTools;
+import com.aifashionvault.studio.agent.StudioCommandPlanner;
+import com.aifashionvault.vault.JdbcVaultStore;
 
 /**
  * Studio persistence wiring. The store is only created when a {@link DataSource}
@@ -59,6 +64,63 @@ class StudioConfiguration {
 			@Override
 			public Class<?> getObjectType() {
 				return StudioDraftCloner.class;
+			}
+
+			@Override
+			public boolean isSingleton() {
+				return true;
+			}
+		};
+	}
+
+	/**
+	 * The {@link StudioAgentTools} port over the real stores. Null unless every
+	 * store it needs exists, so the natural-language route answers the honest 503
+	 * {@code STUDIO_UNAVAILABLE} instead of planning against nothing.
+	 */
+	@Bean
+	FactoryBean<StudioAgentTools> studioAgentTools(
+		ObjectProvider<JdbcStudioStore> studioStores,
+		ObjectProvider<DataSource> sources,
+		ObjectProvider<CollectionStore> collectionStores
+	) {
+		return new FactoryBean<>() {
+			@Override
+			public StudioAgentTools getObject() {
+				JdbcStudioStore studio = studioStores.getIfAvailable();
+				DataSource source = sources.getIfAvailable();
+				CollectionStore collections = collectionStores.getIfAvailable();
+				if (studio == null || source == null || collections == null) {
+					return null;
+				}
+				return new StudioAgentToolAdapter(studio, new JdbcVaultStore(source), collections);
+			}
+
+			@Override
+			public Class<?> getObjectType() {
+				return StudioAgentTools.class;
+			}
+
+			@Override
+			public boolean isSingleton() {
+				return true;
+			}
+		};
+	}
+
+	/** The deterministic text→tool-call planner; it only exists with the tool port. */
+	@Bean
+	FactoryBean<StudioCommandPlanner> studioCommandPlanner(ObjectProvider<StudioAgentTools> tools) {
+		return new FactoryBean<>() {
+			@Override
+			public StudioCommandPlanner getObject() {
+				StudioAgentTools port = tools.getIfAvailable();
+				return port == null ? null : new StudioCommandPlanner(port);
+			}
+
+			@Override
+			public Class<?> getObjectType() {
+				return StudioCommandPlanner.class;
 			}
 
 			@Override

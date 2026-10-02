@@ -157,7 +157,6 @@ export default function NotificationPreferencesSection({
 const ink = '#1a1a1a';
 const paper = '#f4f4f2';
 const muted = '#3f3a33';
-const accent = '#6b4f2a';
 
 const styles = StyleSheet.create({
   block: {

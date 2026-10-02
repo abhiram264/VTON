@@ -200,6 +200,11 @@ export const studioApi = {
     const outcome = row.outcome === 'CONFIRM_REQUIRED' || row.outcome === 'EXPLAINED' || row.outcome === 'REFUSED'
       ? row.outcome
       : 'APPLIED';
+    // The planner resolves the target slot once for the whole command, so it may
+    // be projected either per candidate or at the top level of the response.
+    // Accept both; a null slot means the command carried none of its own, and
+    // the caller falls back to the item's own slot.
+    const responseSlot = isStudioSlot(row.slot) ? row.slot : null;
     const candidates = Array.isArray(row.candidates)
       ? row.candidates.flatMap(entry => {
           if (entry === null || typeof entry !== 'object') return [];
@@ -208,9 +213,7 @@ export const studioApi = {
           return [{
             vaultItemId: candidate.vaultItemId,
             label: typeof candidate.label === 'string' ? candidate.label : 'Garment',
-            // The planner reports the slot the command TARGETED, so the
-            // confirmation re-send never has to re-derive it.
-            slot: isStudioSlot(candidate.slot) ? candidate.slot : null,
+            slot: isStudioSlot(candidate.slot) ? candidate.slot : responseSlot,
           }];
         })
       : [];
