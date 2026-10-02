@@ -3,6 +3,7 @@ import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-nati
 import { looksApi, type LookDetail } from '../features/looks/looksApi';
 import { createLookExporter, type LookExportAction, type LookExportOutcome } from '../features/export/lookExport';
 import { vaultApi } from '../features/vault/vaultApi';
+import { ApiProblemError } from '../features/my-model/http';
 
 const SLOT_LABELS: Record<string, string> = {
   HEAD: 'Head',
@@ -36,6 +37,25 @@ const EXPORT_OUTCOME_TEXT: Record<LookExportOutcome['status'], string> = {
   DISCLOSURE_REQUIRED: 'Confirm that the copy leaves the app before exporting.',
 };
 
+// A failed load has three different meanings and they must not be collapsed:
+// the look is gone (or is not the caller's) and retrying will never help, the
+// session is signed out and retrying will never help, or the request itself
+// failed and retrying is exactly the right thing to offer.
+type LoadFailure = 'unavailable' | 'signed-out' | 'retryable';
+
+const LOAD_FAILURE_TEXT: Record<LoadFailure, string> = {
+  unavailable: 'This look is not available. It may have been deleted.',
+  'signed-out': 'Sign in again to open this look.',
+  retryable: 'Could not open the look. Check your connection and try again.',
+};
+
+function classifyLoadFailure(error: unknown): LoadFailure {
+  const code = error instanceof ApiProblemError ? error.code : null;
+  if (code === 'UNAUTHORIZED_OR_NOT_FOUND' || code === 'HTTP_404') return 'unavailable';
+  if (code === 'UNAUTHORIZED' || code === 'HTTP_401') return 'signed-out';
+  return 'retryable';
+}
+
 // Provenance names are fetched separately from the Look itself, so "we have
 // not asked yet", "the answer is in", and "we could not ask" stay distinct.
 type VaultNames =
@@ -54,13 +74,14 @@ export default function LookScreen({
   onDeleted?: () => void;
 }) {
   const [look, setLook] = useState<LookDetail | null>(null);
-  const [notice, setNotice] = useState<{ lookId: string; text: string } | null>(null);
+  const [notice, setNotice] = useState<{ lookId: string; failure: LoadFailure } | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [imageUnavailable, setImageUnavailable] = useState(false);
   const [loading, setLoading] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleted, setDeleted] = useState(false);
+  const [deleteFailed, setDeleteFailed] = useState(false);
   const [pendingExport, setPendingExport] = useState<LookExportAction | null>(null);
   const [exportNotice, setExportNotice] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
@@ -87,6 +108,7 @@ export default function LookScreen({
     setImageUnavailable(false);
     setConfirmingDelete(false);
     setDeleted(false);
+    setDeleteFailed(false);
     setPendingExport(null);
     setExportNotice(null);
     setVaultNames({ status: 'loading' });
@@ -111,9 +133,9 @@ export default function LookScreen({
           // the list says so instead of claiming the garments are gone.
           if (!cancelled) setVaultNames({ status: 'unavailable' });
         }
-      } catch {
+      } catch (error) {
         if (!cancelled) {
-          setNotice({ lookId, text: 'Could not open the look.' });
+          setNotice({ lookId, failure: classifyLoadFailure(error) });
           setLoading(false);
         }
       }
@@ -135,10 +157,7 @@ export default function LookScreen({
     } catch {
       setDeleting(false);
       setConfirmingDelete(false);
-      setNotice({
-        lookId,
-        text: 'Could not delete the look. It is still saved.',
-      });
+      setDeleteFailed(true);
     }
   }
 
@@ -163,7 +182,7 @@ export default function LookScreen({
   }
 
   const visibleLook = look?.id === lookId ? look : null;
-  const visibleNotice = notice?.lookId === lookId ? notice.text : null;
+  const visibleNotice = notice?.lookId === lookId ? notice.failure : null;
   const quality =
     visibleLook && visibleLook.qualityStatus !== null
       ? QUALITY_LABELS[visibleLook.qualityStatus] ?? visibleLook.qualityStatus
@@ -176,8 +195,24 @@ export default function LookScreen({
           Loading preview…
         </Text>
       ) : visibleNotice ? (
+        <View style={styles.stack}>
+          <Text accessibilityLiveRegion="polite" style={styles.notice}>
+            {LOAD_FAILURE_TEXT[visibleNotice]}
+          </Text>
+          {visibleNotice === 'retryable' ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Retry opening the look"
+              onPress={() => setAttempt((value) => value + 1)}
+              style={styles.retry}
+            >
+              <Text style={styles.retryLabel}>Retry</Text>
+            </Pressable>
+          ) : null}
+        </View>
+      ) : deleteFailed ? (
         <Text accessibilityLiveRegion="polite" style={styles.notice}>
-          {visibleNotice}
+          Could not delete the look. It is still saved.
         </Text>
       ) : deleted ? (
         <Text accessibilityLiveRegion="polite" style={styles.notice}>
