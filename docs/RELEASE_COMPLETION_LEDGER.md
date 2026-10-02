@@ -300,3 +300,35 @@ plus the focused tests re-run in §7), not taken from a peer report alone.
 
 **Independently re-run in my worktree (EXECUTED, this host):** C02 7/7, C09 14/14,
 C08 10/10, C07 3/3, C14+C16 52/52.
+
+## 12. C12 multi-item generation — operator decision (option C), 2026-10-03
+
+Operator ruling on the C12-vs-C22 `MULTI_ITEM` conflict (C22 classified multi-item
+UNSUPPORTED; C12 requires it to work). Resolution: **enable the backend, keep the mobile
+affordance gated off.**
+
+| Side | State after this change | Evidence |
+|---|---|---|
+| Backend route | **ENABLED.** `vault.generation.multi-item-enabled: true` (`application.yaml:86`); `POST /generations/multi` (`GenerationsController.java`) no longer answers 503 `MULTI_ITEM_DISABLED` on the default config | `GenerationMultiItemContractTest` 8/8, `GenerationMultiItemGateTest` 2/2 (EXECUTED, exit 0) |
+| Backend flag authority | **MULTI_ITEM is now a SUPPORTED capability** (`FeatureFlagName.MULTI_ITEM(true)`) but its advertised default stays OFF because `FeatureFlagProperties.multiItem` ships `false`; it is backend-controllable via override/binding | `FeatureFlagServiceTest` 8/8, `FeatureFlagCapabilityPostureTest` 5/5, `FeatureFlagHttpContractTest` 5/5 (EXECUTED, exit 0) |
+| Mobile client | **UNCHANGED / gated OFF.** `UNSUPPORTED_CAPABILITIES.MULTI_ITEM = true` and the `isFeatureEnabled` short-circuit are left as-is (worker-26's C22 mobile half, not touched). | No mobile file edited; mobile contracts untouched |
+| Architecture gates | Green | `DomainArchitectureTest` 7/7, `ModulithVerificationTest` 1/1 (EXECUTED, exit 0) |
+
+**Status: C12 PARTIALLY MET.**
+
+- **MET:** the backend Studio multi-item create path is mounted, admission-gated, and
+  frozen-intent tested; the capability is backend-authoritative and its real switch is
+  server configuration rather than a client claim.
+- **EXTERNALLY-DEPENDENT:** the end-to-end "submit three distinct garments, edit the
+  draft, final Look shows all three" acceptance cannot be fully exercised until the owner
+  supplies the real image-provider API key — no image generation is permitted in this run
+  (offline echo backstop only). The mobile affordance is intentionally OFF pending that
+  key, which is an owner decision at that point.
+
+**Pre-fix proof for the flag change:** `FeatureFlagCapabilityPostureTest` originally pinned
+`MULTI_ITEM` as unsupported (override → `UnsupportedOperationException`, snapshot false);
+those assertions are retargeted at capabilities that remain unsupported
+(NATURAL_LANGUAGE_STUDIO, HD_GENERATION, NEW_QUALITY_GATE) and a new
+`multiItemIsSupportedAndBackendControllableWhileDefaultingOff` test pins the new contract
+(supported, default OFF, enabled by override/binding). `FeatureFlagServiceTest`'s
+supported-vs-default-enabled coupling was decoupled for the same reason.

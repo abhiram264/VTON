@@ -36,13 +36,32 @@ class FeatureFlagCapabilityPostureTest {
 
 	@Test
 	void unsupportedCapabilitiesDefaultOffInTheAdvertisedSnapshot() {
-		assertThat(this.service.isEnabled(FeatureFlagName.MULTI_ITEM)).isFalse();
-		assertThat(this.service.isEnabled(FeatureFlagName.NATURAL_LANGUAGE_STUDIO)).isFalse();
 		assertThat(this.service.isEnabled(FeatureFlagName.HD_GENERATION)).isFalse();
 		assertThat(this.service.isEnabled(FeatureFlagName.NEW_QUALITY_GATE)).isFalse();
 
-		assertThat(this.service.snapshot().get(FeatureFlagName.MULTI_ITEM)).isFalse();
 		assertThat(this.service.snapshot().get(FeatureFlagName.HD_GENERATION)).isFalse();
+	}
+
+	/**
+	 * C12/MULTI_ITEM is now an IMPLEMENTED capability: its create path is mounted and
+	 * admission-gated, and its real switch is the server-side
+	 * {@code vault.generation.multi-item-enabled} property (shipped OFF). The
+	 * advertised flag therefore defaults OFF while staying genuinely controllable by
+	 * the backend — the opposite of the unsupported capabilities above, which cannot
+	 * be turned on by any means.
+	 */
+	@Test
+	void multiItemIsSupportedAndBackendControllableWhileDefaultingOff() {
+		assertThat(FeatureFlagName.MULTI_ITEM.isSupported()).isTrue();
+		assertThat(this.service.isEnabled(FeatureFlagName.MULTI_ITEM)).isFalse();
+
+		this.service.override(FeatureFlagName.MULTI_ITEM, true);
+		assertThat(this.service.isEnabled(FeatureFlagName.MULTI_ITEM)).isTrue();
+		this.service.clearOverride(FeatureFlagName.MULTI_ITEM);
+		assertThat(this.service.isEnabled(FeatureFlagName.MULTI_ITEM)).isFalse();
+
+		this.properties.setEnabled(FeatureFlagName.MULTI_ITEM, true);
+		assertThat(this.properties.isEnabled(FeatureFlagName.MULTI_ITEM)).isTrue();
 	}
 
 	@Test
@@ -50,28 +69,23 @@ class FeatureFlagCapabilityPostureTest {
 		// A remote/offline flag payload that tries to switch the capability on must
 		// not make it reachable: the authority refuses the enable. Pre-repair this
 		// override succeeded and isEnabled reported true.
-		assertThatThrownBy(() -> this.service.override(FeatureFlagName.MULTI_ITEM, true))
-			.isInstanceOf(UnsupportedOperationException.class);
 		assertThatThrownBy(() -> this.service.override(FeatureFlagName.HD_GENERATION, true))
 			.isInstanceOf(UnsupportedOperationException.class);
+		assertThatThrownBy(() -> this.service.override(FeatureFlagName.NEW_QUALITY_GATE, true))
+			.isInstanceOf(UnsupportedOperationException.class);
 
-		assertThat(this.service.isEnabled(FeatureFlagName.MULTI_ITEM)).isFalse();
 		assertThat(this.service.isEnabled(FeatureFlagName.HD_GENERATION)).isFalse();
+		assertThat(this.service.isEnabled(FeatureFlagName.NEW_QUALITY_GATE)).isFalse();
 	}
 
 	@Test
 	void boundConfigurationCannotEnableAnUnsupportedCapability() {
 		// A properties file / environment value that turns the flag on must not make
 		// it reachable. Pre-repair this reported true.
-		this.properties.setMultiItem(true);
 		this.properties.setHdGeneration(true);
-		this.properties.setNaturalLanguageStudio(true);
 		this.properties.setNewQualityGate(true);
 
-		assertThat(this.properties.isEnabled(FeatureFlagName.MULTI_ITEM)).isFalse();
-		assertThat(this.service.isEnabled(FeatureFlagName.MULTI_ITEM)).isFalse();
 		assertThat(this.service.isEnabled(FeatureFlagName.HD_GENERATION)).isFalse();
-		assertThat(this.service.isEnabled(FeatureFlagName.NATURAL_LANGUAGE_STUDIO)).isFalse();
 		assertThat(this.service.isEnabled(FeatureFlagName.NEW_QUALITY_GATE)).isFalse();
 	}
 
