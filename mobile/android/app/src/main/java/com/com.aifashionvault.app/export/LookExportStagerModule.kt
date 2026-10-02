@@ -48,8 +48,20 @@ class LookExportStagerModule(private val reactContext: ReactApplicationContext) 
 
   override fun getName(): String = MODULE_NAME
 
-  /** One download at a time: the staging target and the share target are both single-valued. */
-  private var busy = false
+  /**
+   * One download at a time: the staging target and the share target are both single-valued.
+   * `@Volatile` because the guard is written on the JS thread and cleared on the download
+   * thread; without it a later request could observe a stale `true` and be refused forever.
+   */
+  @Volatile private var busy = false
+
+  /**
+   * The in-flight download, kept only so [invalidate] can settle it. The download itself
+   * receives the promise as an argument: assigning a field AFTER `Thread.start()` would be a
+   * data race (the worker has no happens-before edge to that write and could read null,
+   * leaving the JS promiseleft unsettled).
+   */
+  @Volatile private var pendingPromise: Promise? = null
 
   @ReactMethod
   fun stageFromUrl(url: String?, maxBytes: Double, promise: Promise) {
@@ -62,25 +74,23 @@ class LookExportStagerModule(private val reactContext: ReactApplicationContext) 
       promise.reject(ExportStagerOutcome.ERROR_BUSY, "An export is already in progress")
       return
     }
+    // Claimed and published BEFORE the worker exists, so the worker cannot miss either one.
     busy = true
+    pendingPromise = promise
     // Network I/O never runs on the JS thread.
     Thread {
           try {
-            download(url!!, maxBytes)
+            download(url!!, maxBytes, promise)
           } finally {
             busy = false
+            pendingPromise = null
           }
         }
         .apply { name = "LookExportDownload" }
         .start()
-    pendingPromise = promise
   }
 
-  private var pendingPromise: Promise? = null
-
-  private fun download(url: String, requestedMaxBytes: Double) {
-    val promise = pendingPromise ?: return
-    pendingPromise = null
+  private fun download(url: String, requestedMaxBytes: Double, promise: Promise) {
     val destination = ExportStaging.newStagedFile(reactContext.cacheDir)
     var connection: HttpURLConnection? = null
     try {
