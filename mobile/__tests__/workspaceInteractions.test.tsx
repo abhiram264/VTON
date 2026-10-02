@@ -155,7 +155,7 @@ test('Home loads recent Looks and opens the selected Look', async () => {
       <HomeScreen onImport={noop} onOpenLook={open} onProfile={noop} onQuickTry={noop} />
     </NavigationContainer>
   );
-  fireEvent.press(await screen.findByRole('button', { name: 'Recent Look look-1' }));
+  fireEvent.press(await screen.findByRole('button', { name: 'Look from 30 Aug 2026' }));
   expect(open).toHaveBeenCalledWith('look-1');
   expect(screen.queryByText('No recent Looks yet.')).toBeNull();
 });
