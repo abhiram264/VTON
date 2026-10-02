@@ -143,7 +143,8 @@ public final class InferHubMapper {
     /**
      * Maps one synchronous chat-completions response onto the provider seam. The
      * generation is complete when submit returns, so the accepted submission carries a
-     * synthetic job id and the extracted inline data-URI (decoded later, in openOutput).
+     * synthetic job id and the extracted inline data-URI (persisted durably at submit,
+     * streamed back in openOutput).
      */
     Mapped mapRun(InferHubHttpResponse response) {
         if (response.outcome() == InferHubHttpResponse.Outcome.UNSENT) {
@@ -299,6 +300,74 @@ public final class InferHubMapper {
 
     String newJobId() {
         return PROVIDER_KEY.value() + "-" + UUID.randomUUID();
+    }
+
+    /**
+     * Re-stamps an adapter-minted job id with the owner scope the durable output is filed
+     * under, so {@code getStatus}/{@code openOutput} can rebuild the object key from the id
+     * alone — which is all the worker has after a restart. The scope is the owner UUID already
+     * embedded in the resolved avatar storage key, so the persisted output stays inside the
+     * {@code temp/<owner>/} prefix that account erasure purges.
+     */
+    ProviderJobId scopedJobId(ProviderJobId jobId, String ownerScope) {
+        String prefix = PROVIDER_KEY.value() + "-";
+        String value = jobId.value();
+        if (!value.startsWith(prefix) || value.length() == prefix.length()) {
+            throw new InferHubProviderException(failure(ProviderFailureCategory.PROTOCOL_VIOLATION, false, "OUTPUT_REF"));
+        }
+        return new ProviderJobId(prefix + ownerScope + "-" + value.substring(prefix.length()));
+    }
+
+    /**
+     * The owner scope embedded in a job id minted by {@link #scopedJobId}, empty for any id
+     * this adapter did not mint (e.g. a probe): an unknown id must resolve to OUTPUT_MISSING,
+     * never to another owner's object.
+     */
+    Optional<String> jobOwnerScope(ProviderJobId jobId) {
+        String value = jobId.value();
+        String prefix = PROVIDER_KEY.value() + "-";
+        if (!value.startsWith(prefix)) {
+            return Optional.empty();
+        }
+        String rest = value.substring(prefix.length());
+        if (rest.length() < 38 || rest.charAt(36) != '-') {
+            return Optional.empty();
+        }
+        String scope = rest.substring(0, 36);
+        return isUuid(scope) ? Optional.of(scope) : Optional.empty();
+    }
+
+    /**
+     * The owner scope of an owner-scoped storage key ({@code temp/<owner>/...} or
+     * {@code users/<owner>/...}). Empty when the key carries no owner segment, so the caller
+     * fails closed instead of filing a durable object outside the erasure prefix.
+     */
+    Optional<String> ownerScope(StorageKey storageKey) {
+        String value = storageKey.value();
+        String prefix;
+        if (value.startsWith("temp/")) {
+            prefix = "temp/";
+        } else if (value.startsWith("users/")) {
+            prefix = "users/";
+        } else {
+            return Optional.empty();
+        }
+        String rest = value.substring(prefix.length());
+        int slash = rest.indexOf('/');
+        if (slash <= 0) {
+            return Optional.empty();
+        }
+        String scope = rest.substring(0, slash);
+        return isUuid(scope) ? Optional.of(scope) : Optional.empty();
+    }
+
+    private static boolean isUuid(String value) {
+        try {
+            UUID.fromString(value);
+            return true;
+        } catch (IllegalArgumentException ex) {
+            return false;
+        }
     }
 
     ProviderOutputRef outputRef(ProviderJobId jobId) {
