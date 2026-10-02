@@ -6,7 +6,19 @@ import type { AuthSession } from '../src/config/firebase';
 import type { SharePayload } from '../src/features/share/types';
 
 jest.mock('../src/features/vault/vaultApi', () => ({ vaultApi: { list: jest.fn().mockResolvedValue([]) } }));
-jest.mock('../src/features/collections/collectionsApi', () => ({ collectionsApi: { list: jest.fn().mockResolvedValue([]) } }));
+jest.mock('../src/features/collections/collectionsApi', () => {
+  const stub = {
+    list: jest.fn().mockResolvedValue([]),
+    create: jest.fn(),
+    rename: jest.fn(),
+    remove: jest.fn(),
+    addItem: jest.fn(),
+    removeItem: jest.fn(),
+  };
+  // ShareImportScreen builds its own client from the same config so its picker
+  // cannot resolve a different API base URL; the factory must exist here too.
+  return { collectionsApi: stub, createCollectionsApi: () => stub };
+});
 jest.mock('../src/features/looks/looksApi', () => ({ looksApi: { list: jest.fn().mockResolvedValue([]) } }));
 
 // Probe: records every payload the navigator hands to the Share Import

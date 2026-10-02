@@ -147,6 +147,7 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 	private final WorkOutboxStore workOutboxStore;
 	private final CallbackInboxStore callbackInboxStore;
 	private final GenerationMetrics metrics;
+	private final com.aifashionvault.analytics.ProductMetrics productMetrics;
 	private final GenerationCapacityLeaseStore capacityLeaseStore;
 	private final NotificationEventStore notificationEventStore;
 	private final DoubleSupplier randomFraction;
@@ -155,28 +156,63 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 	private final RetryDecisionEngine retryDecisionEngine = new RetryDecisionEngine();
 
 
- 	public GenerationWorkProcessor(
- 		GenerationStore generationStore,
- 		LookStore lookStore,
- 		NotificationStore notificationStore,
- 		GenerationWorkQueue queue,
- 		VtonProvider provider,
- 		AuthorizedGenerationMediaResolver mediaResolver,
- 		PrivacyApprovedInputTransfer inputTransfer,
- 		QualityGate qualityGate,
- 		GenerationMediaStore mediaStore,
- 		ObjectStore objectStore,
- 		Clock clock,
- 		ProviderRegistry providerRegistry,
- 		WorkOutboxStore workOutboxStore,
- 		CallbackInboxStore callbackInboxStore,
- 		GenerationMetrics metrics,
- 		GenerationCapacityLeaseStore capacityLeaseStore,
- 		NotificationEventStore notificationEventStore,
- 		DoubleSupplier randomFraction,
- 		GlobalCostCircuitBreaker costCircuitBreaker,
- 		ProviderHealthGate providerHealthGate
- 	) {
+	public GenerationWorkProcessor(
+		GenerationStore generationStore,
+		LookStore lookStore,
+		NotificationStore notificationStore,
+		GenerationWorkQueue queue,
+		VtonProvider provider,
+		AuthorizedGenerationMediaResolver mediaResolver,
+		PrivacyApprovedInputTransfer inputTransfer,
+		QualityGate qualityGate,
+		GenerationMediaStore mediaStore,
+		ObjectStore objectStore,
+		Clock clock,
+		ProviderRegistry providerRegistry,
+		WorkOutboxStore workOutboxStore,
+		CallbackInboxStore callbackInboxStore,
+		GenerationMetrics metrics,
+		GenerationCapacityLeaseStore capacityLeaseStore,
+		NotificationEventStore notificationEventStore,
+		DoubleSupplier randomFraction,
+		GlobalCostCircuitBreaker costCircuitBreaker,
+		ProviderHealthGate providerHealthGate
+	) {
+		this(generationStore, lookStore, notificationStore, queue, provider, mediaResolver, inputTransfer,
+			qualityGate, mediaStore, objectStore, clock, providerRegistry, workOutboxStore, callbackInboxStore,
+			metrics, capacityLeaseStore, notificationEventStore, randomFraction, costCircuitBreaker,
+			providerHealthGate, null);
+	}
+
+	/**
+	 * Product-lifecycle analytics is an ADDITIVE, optional dependency (C22). The
+	 * existing constructor delegates here with {@code null}, so every current caller
+	 * keeps compiling and a deployment without the bean simply records no lifecycle
+	 * events — observability never gates generation.
+	 */
+	public GenerationWorkProcessor(
+		GenerationStore generationStore,
+		LookStore lookStore,
+		NotificationStore notificationStore,
+		GenerationWorkQueue queue,
+		VtonProvider provider,
+		AuthorizedGenerationMediaResolver mediaResolver,
+		PrivacyApprovedInputTransfer inputTransfer,
+		QualityGate qualityGate,
+		GenerationMediaStore mediaStore,
+		ObjectStore objectStore,
+		Clock clock,
+		ProviderRegistry providerRegistry,
+		WorkOutboxStore workOutboxStore,
+		CallbackInboxStore callbackInboxStore,
+		GenerationMetrics metrics,
+		GenerationCapacityLeaseStore capacityLeaseStore,
+		NotificationEventStore notificationEventStore,
+		DoubleSupplier randomFraction,
+		GlobalCostCircuitBreaker costCircuitBreaker,
+		ProviderHealthGate providerHealthGate,
+		com.aifashionvault.analytics.ProductMetrics productMetrics
+	) {
  		this.generationStore = require(generationStore, "generationStore");
  		this.lookStore = require(lookStore, "lookStore");
  		this.notificationStore = require(notificationStore, "notificationStore");
@@ -192,6 +228,7 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
  		this.workOutboxStore = workOutboxStore;
  		this.callbackInboxStore = callbackInboxStore;
  		this.metrics = metrics;
+		this.productMetrics = productMetrics;
  		this.capacityLeaseStore = capacityLeaseStore;
  		this.notificationEventStore = notificationEventStore;
  		this.randomFraction = randomFraction == null
@@ -1014,6 +1051,7 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 				recordTerminalCategory(GenerationMetrics.TERMINAL_COMPLETED);
 				recordGenerationLatency(job);
 				recordCost(job, finished);
+				recordProductLifecycle(job, finished, com.aifashionvault.analytics.AnalyticsEventName.GENERATION_COMPLETED);
 				releaseCapacity(attempt);
 				notifyReady(job, existing.get());
 			}
@@ -1088,6 +1126,7 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 		if (won) {
 			recordTerminalCategory(GenerationMetrics.TERMINAL_COMPLETED);
 			recordGenerationLatency(job);
+			recordProductLifecycle(job, finished, com.aifashionvault.analytics.AnalyticsEventName.GENERATION_COMPLETED);
 		}
 		if (!won) {
 			generationStore.completeAttempt(finished);
@@ -1169,6 +1208,7 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 			recordTerminalCategory(GenerationMetrics.TERMINAL_FAILED);
 			recordGenerationLatency(job);
 			recordCost(job, finished);
+			recordProductLifecycle(job, finished, com.aifashionvault.analytics.AnalyticsEventName.GENERATION_QUALITY_REJECTED);
 			releaseCapacity(attempt);
 			notifyFailed(job);
 		}
@@ -1857,6 +1897,7 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 					: terminalCategory);
 			recordGenerationLatency(job);
 			recordCost(job, finished);
+			recordProductLifecycle(latest, finished, com.aifashionvault.analytics.AnalyticsEventName.GENERATION_FAILED);
 			releaseCapacity(attempt);
 			notifyFailed(job);
 		}
@@ -2921,6 +2962,52 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 		if (metrics != null) {
 			metrics.recordTerminal(category);
 		}
+	}
+
+	/**
+	 * C22 lifecycle event for a durable terminal transition. Payloads carry only the
+	 * coarse, non-identifying context {@link ProductMetricContext} already defines
+	 * (outcome, mode, provider/model, item count, latency, cost) — never image bytes,
+	 * prompts, tokens or signed URLs. Best-effort: a metrics failure must never affect
+	 * generation, and a deployment without the bean records nothing.
+	 */
+	private void recordProductLifecycle(
+		GenerationJob job,
+		GenerationAttempt attempt,
+		com.aifashionvault.analytics.AnalyticsEventName eventName
+	) {
+		if (productMetrics == null || job == null || eventName == null) {
+			return;
+		}
+		try {
+			Instant now = clock.instant();
+			productMetrics.record(eventName, new com.aifashionvault.analytics.ProductMetricContext(
+				now,
+				eventName.wireName(),
+				job.requestedMode(),
+				null,
+				attempt == null ? null : attempt.provider(),
+				attempt == null ? null : attempt.model(),
+				attempt == null || attempt.latencyMs() == null || attempt.latencyMs() < 0
+					? null
+					: attempt.latencyMs().longValue(),
+				(long) job.productVaultItemIds().size(),
+				attempt == null ? null : attemptCost(attempt)));
+		}
+		catch (RuntimeException ignored) {
+			// Observability is deliberately off the product critical path.
+		}
+	}
+
+	/** The attempt's actual cost when known, else its estimate, else null (never invented). */
+	private static java.math.BigDecimal attemptCost(GenerationAttempt attempt) {
+		if (PricingSnapshot.COST_FINAL.equals(attempt.costStatus())) {
+			return attempt.actualCost();
+		}
+		if (PricingSnapshot.COST_UNKNOWN.equals(attempt.costStatus())) {
+			return null;
+		}
+		return attempt.estimatedCost() != null ? attempt.estimatedCost() : attempt.actualCost();
 	}
 
 	private void recordQueueWait(GenerationJob job) {
