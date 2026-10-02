@@ -3,6 +3,7 @@ import LookScreen from '../src/screens/LookScreen';
 import { looksApi, type LookDetail } from '../src/features/looks/looksApi';
 import { createLookExporter } from '../src/features/export/lookExport';
 import { vaultApi } from '../src/features/vault/vaultApi';
+import { ApiProblemError } from '../src/features/my-model/http';
 
 jest.mock('../src/features/looks/looksApi', () => ({
   looksApi: {
@@ -123,25 +124,47 @@ describe('LookScreen', () => {
     expect(screen.queryByText(/no longer in your Vault/)).toBeNull();
   });
 
-  test('an unresolvable look id shows an honest error, not a blank screen', async () => {
-    get.mockRejectedValue(new Error('HTTP_404'));
+  test('a missing or foreign look reads as gone, never as a retryable connection problem', async () => {
+    // The server answers 404 UNAUTHORIZED_OR_NOT_FOUND for a Look that was
+    // deleted or is not the caller's, so nothing owner-only reaches the screen
+    // and retrying is not offered: it can never succeed.
+    get.mockRejectedValue(new ApiProblemError('UNAUTHORIZED_OR_NOT_FOUND'));
 
     await render(<LookScreen lookId={LOOK_ID} />);
 
-    expect(await screen.findByText('Could not open the look.')).toBeTruthy();
-    expect(screen.queryByRole('image')).toBeNull();
-  });
-
-  test('a look the caller does not own discloses no image and no provenance', async () => {
-    // The server answers 404 UNAUTHORIZED_OR_NOT_FOUND for a foreign Look, so
-    // nothing owner-only ever reaches the screen.
-    get.mockRejectedValue(new Error('UNAUTHORIZED_OR_NOT_FOUND'));
-
-    await render(<LookScreen lookId={LOOK_ID} />);
-
-    expect(await screen.findByText('Could not open the look.')).toBeTruthy();
+    expect(
+      await screen.findByText('This look is not available. It may have been deleted.'),
+    ).toBeTruthy();
     expect(screen.queryByRole('image')).toBeNull();
     expect(screen.queryByText(/Made from/)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Retry opening the look' })).toBeNull();
+  });
+
+  test('a signed-out session says so instead of blaming the connection', async () => {
+    get.mockRejectedValue(new ApiProblemError('UNAUTHORIZED'));
+
+    await render(<LookScreen lookId={LOOK_ID} />);
+
+    expect(await screen.findByText('Sign in again to open this look.')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Retry opening the look' })).toBeNull();
+  });
+
+  test('a transient failure offers a retry that actually re-reads the look', async () => {
+    get.mockRejectedValueOnce(new Error('Network request failed'));
+    get.mockResolvedValue({ ...STORED_LOOK });
+
+    await render(<LookScreen lookId={LOOK_ID} />);
+
+    expect(
+      await screen.findByText('Could not open the look. Check your connection and try again.'),
+    ).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Retry opening the look' }));
+    });
+
+    expect(get).toHaveBeenCalledTimes(2);
+    expect(await screen.findByRole('image')).toBeTruthy();
   });
 
   test('a broken preview offers a retry the user can actually press, keeping the honest error copy', async () => {
