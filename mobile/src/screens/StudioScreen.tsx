@@ -141,7 +141,7 @@ export default function StudioScreen({ studioSessionId, sourceLookId, selectedVa
     let current = true;
     setItemsLoaded(false);
     imageRetried.current.clear();
-    const draftItemIds = activeSession?.itemIds ?? [];
+    const draftItemIds = itemsKey ? itemsKey.split(',') : [];
     vaultApi.list().then(items => {
       if (!current) return;
       setItemInfo(Object.fromEntries(items.map(item => [item.id, { name: item.name, slot: slotForCategory(item.category), imageUrl: null }])));
