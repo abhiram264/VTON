@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import {
   collectionsApi,
   type Collection,
@@ -36,6 +36,9 @@ export default function VaultScreen({ onProfile, onSelect, selectionUnavailable 
   const [collections, setCollections] = useState<Collection[]>([]);
   const [collectionId, setCollectionId] = useState<string | null>(null);
   const [collectionMode, setCollectionMode] = useState<'browse' | 'manage'>('browse');
+  const [previews, setPreviews] = useState<Record<string, string>>({});
+  const [previewFailures, setPreviewFailures] = useState(0);
+  const [previewAttempt, setPreviewAttempt] = useState(0);
   const [status, setStatus] = useState<'loading' | 'ready' | 'failed'>('loading');
   const [attempt, setAttempt] = useState(0);
   const [collectionVersion, setCollectionVersion] = useState(0);
@@ -109,6 +112,44 @@ export default function VaultScreen({ onProfile, onSelect, selectionUnavailable 
     return () => { active = false; };
   }, [collectionId, collectionVersion, option.value, selectedCollection]);
 
+  // Each list row shows the owner-authorized image capability the item route
+  // mints. The capability is short-lived, so it is re-minted whenever the list
+  // reloads or the user asks for a refresh; a row whose capability cannot be
+  // read keeps its name and the list offers one retry, because an unreadable
+  // preview is a retryable problem, never a missing garment.
+  useEffect(() => {
+    if (items.length === 0) {
+      setPreviews({});
+      setPreviewFailures(0);
+      return;
+    }
+    let active = true;
+    void Promise.all(
+      items.map(item =>
+        vaultApi.image(item.id).then(
+          value => [item.id, value.url] as const,
+          () => [item.id, null] as const,
+        ),
+      ),
+    ).then(entries => {
+      if (!active) return;
+      const next: Record<string, string> = {};
+      let failures = 0;
+      for (const [id, url] of entries) {
+        if (url === null) {
+          failures += 1;
+          continue;
+        }
+        next[id] = url;
+      }
+      setPreviews(next);
+      setPreviewFailures(failures);
+    });
+    return () => {
+      active = false;
+    };
+  }, [items, previewAttempt]);
+
   // A detail view replaces the list rather than overlaying it: no modal
   // dependency is installed, and the list stays mounted behind so returning
   // does not refetch.
@@ -136,17 +177,24 @@ export default function VaultScreen({ onProfile, onSelect, selectionUnavailable 
     {status === 'ready' && option.value === 'COLLECTIONS' && !collectionId && collectionMode === 'manage' ? <CollectionsPicker vaultItemId={null} manageOnly onError={() => undefined} onChange={onCollectionsChanged} /> : null}
     {status === 'ready' && option.value === 'COLLECTIONS' && !collectionId && collectionMode === 'browse' ? collections.map(collection => <Action key={collection.id} label={collection.name} onPress={() => { setCollectionId(collection.id); setItems([]); setStatus('loading'); }} />) : null}
     {status === 'ready' && (option.value !== 'COLLECTIONS' || collectionId) && items.length === 0 ? <Text accessibilityLiveRegion="polite">No Vault items in {selectedCollection?.name ?? option.label}.</Text> : null}
-    {status === 'ready' ? items.map(item => <Action
-      key={item.id}
-      label={item.name}
-      onPress={() => {
-        if (onSelect) {
-          onSelect(item.id);
-          return;
-        }
-        setDetailId(item.id);
-      }}
-    />) : null}
+    {status === 'ready' && previewFailures > 0 ? <Action label="Refresh previews" onPress={() => setPreviewAttempt(value => value + 1)} /> : null}
+    {status === 'ready' ? items.map(item => <View key={item.id} style={styles.row}>
+      {previews[item.id] ? <Image
+        source={{ uri: previews[item.id] }}
+        accessibilityLabel={`Preview of ${item.name}`}
+        style={styles.thumbnail}
+      /> : null}
+      <Action
+        label={item.name}
+        onPress={() => {
+          if (onSelect) {
+            onSelect(item.id);
+            return;
+          }
+          setDetailId(item.id);
+        }}
+      />
+    </View>) : null}
   </ScrollView>;
 }
 
@@ -280,4 +328,4 @@ function ItemDetail({ itemId, onBack, onChanged, onRemoved }: {
 }
 
 function Action({ label, onPress, disabled = false }: { label: string; onPress: () => void; disabled?: boolean }) { return <Pressable accessibilityRole="button" accessibilityLabel={label} accessibilityState={{ disabled }} disabled={disabled} onPress={onPress} style={styles.profile}><Text style={styles.profileLabel}>{label}</Text></Pressable>; }
-const styles = StyleSheet.create({ page: { padding: 20, gap: 14, backgroundColor: '#f4f4f2' }, headingRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }, title: { fontSize: 28, fontWeight: '700', color: '#1a1a1a' }, heading: { fontSize: 20, fontWeight: '700' }, item: { minHeight: 44, justifyContent: 'center', paddingHorizontal: 12, color: '#563c1d', fontWeight: '600' }, profile: { minHeight: 44, justifyContent: 'center', paddingHorizontal: 12 }, profileLabel: { color: '#563c1d', fontWeight: '600' }, label: { fontWeight: '700', color: '#24180b' }, input: { minHeight: 44, borderWidth: 1, borderColor: '#6b4f2a', borderRadius: 8, paddingHorizontal: 12, backgroundColor: '#ffffff', color: '#1a1a1a' }, filters: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 }, filter: { minHeight: 44, justifyContent: 'center', borderWidth: 1, borderColor: '#6b4f2a', borderRadius: 22, paddingHorizontal: 14 }, selected: { borderWidth: 3, backgroundColor: '#eee2d0' }, filterLabel: { color: '#3f3a33' }, selectedLabel: { fontWeight: '700', color: '#24180b' } });
+const styles = StyleSheet.create({ page: { padding: 20, gap: 14, backgroundColor: '#f4f4f2' }, row: { flexDirection: 'row', alignItems: 'center', gap: 10 }, thumbnail: { width: 56, height: 56, borderRadius: 8, backgroundColor: '#e6e1d8' }, headingRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }, title: { fontSize: 28, fontWeight: '700', color: '#1a1a1a' }, heading: { fontSize: 20, fontWeight: '700' }, item: { minHeight: 44, justifyContent: 'center', paddingHorizontal: 12, color: '#563c1d', fontWeight: '600' }, profile: { minHeight: 44, justifyContent: 'center', paddingHorizontal: 12 }, profileLabel: { color: '#563c1d', fontWeight: '600' }, label: { fontWeight: '700', color: '#24180b' }, input: { minHeight: 44, borderWidth: 1, borderColor: '#6b4f2a', borderRadius: 8, paddingHorizontal: 12, backgroundColor: '#ffffff', color: '#1a1a1a' }, filters: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 }, filter: { minHeight: 44, justifyContent: 'center', borderWidth: 1, borderColor: '#6b4f2a', borderRadius: 22, paddingHorizontal: 14 }, selected: { borderWidth: 3, backgroundColor: '#eee2d0' }, filterLabel: { color: '#3f3a33' }, selectedLabel: { fontWeight: '700', color: '#24180b' } });

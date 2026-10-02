@@ -56,7 +56,42 @@ beforeEach(() => {
     { id: 'item-1', category: 'TOP', name: 'Silk top' },
     { id: 'item-2', category: 'BOTTOM', name: 'Trousers' },
   ]);
+  jest.mocked(vaultApi.image).mockResolvedValue({
+    url: 'https://signed.example.invalid/item?X-Amz-Signature=read-token',
+    expiresAt: '2026-09-01T00:05:00Z',
+  });
   jest.mocked(collectionsApi.list).mockResolvedValue([COLLECTION]);
+});
+
+test('list rows carry the owner-authorized image capability', async () => {
+  await mount(<VaultScreen onProfile={noop} />);
+
+  expect(vaultApi.image).toHaveBeenCalledWith('item-1');
+  expect(screen.getByLabelText('Preview of Silk top')).toBeTruthy();
+  expect(screen.getByLabelText('Preview of Trousers')).toBeTruthy();
+  // The capability is minted per read, so the raw object key never appears.
+  expect(screen.queryByLabelText('Refresh previews')).toBeNull();
+});
+
+test('an unreadable preview keeps the garment and offers a refresh', async () => {
+  jest.mocked(vaultApi.image).mockRejectedValue(new Error('VAULT_MEDIA_UNAVAILABLE'));
+
+  await mount(<VaultScreen onProfile={noop} />);
+
+  // The garment is still listed: an unreadable preview is not a missing item.
+  expect(screen.getByRole('button', { name: 'Silk top' })).toBeTruthy();
+  expect(screen.queryByLabelText('Preview of Silk top')).toBeNull();
+  const refresh = screen.getByLabelText('Refresh previews');
+  const before = jest.mocked(vaultApi.image).mock.calls.length;
+
+  jest.mocked(vaultApi.image).mockResolvedValue({
+    url: 'https://signed.example.invalid/item?X-Amz-Signature=refreshed',
+    expiresAt: '2026-09-01T00:05:00Z',
+  });
+  await interact(() => fireEvent.press(refresh));
+
+  expect(jest.mocked(vaultApi.image).mock.calls.length).toBeGreaterThan(before);
+  expect(screen.getByLabelText('Preview of Silk top')).toBeTruthy();
 });
 
 describe('VaultScreen collections', () => {

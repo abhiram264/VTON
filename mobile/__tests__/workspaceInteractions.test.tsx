@@ -10,7 +10,15 @@ import { looksApi } from '../src/features/looks/looksApi';
 import { studioApi } from '../src/features/studio/studioApi';
 import { generationApi } from '../src/features/generation/generationApi';
 
-jest.mock('../src/features/vault/vaultApi', () => ({ vaultApi: { list: jest.fn() } }));
+jest.mock('../src/features/vault/vaultApi', () => ({
+  vaultApi: {
+    list: jest.fn(),
+    image: jest.fn().mockResolvedValue({
+      url: 'https://signed.example.invalid/item?X-Amz-Signature=read-token',
+      expiresAt: '2026-09-01T00:05:00Z',
+    }),
+  },
+}));
 jest.mock('../src/features/collections/collectionsApi', () => ({ collectionsApi: { list: jest.fn() } }));
 jest.mock('../src/features/looks/looksApi', () => ({ looksApi: { list: jest.fn(), regenerate: jest.fn() } }));
 jest.mock('../src/features/studio/studioApi', () => ({ studioApi: { get: jest.fn().mockResolvedValue({ sessionId: 'session-1', itemIds: [] }), command: jest.fn() } }));
