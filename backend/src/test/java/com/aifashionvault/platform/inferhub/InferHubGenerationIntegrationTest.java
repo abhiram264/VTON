@@ -163,7 +163,7 @@ class InferHubGenerationIntegrationTest {
 			+ "generation_notification_delivery, generation_notification_event, generation_provider_capacity_slot, "
 			+ "generation_attempt, generation_render_step_item, generation_render_step, generation_job_product, "
 			+ "generation_job, vault_item, studio_item, studio_session, avatar_image, avatar_profile, identity_mapping, "
-			+ "users CASCADE");
+			+ "consent, users CASCADE");
 		queue.sent.clear();
 		queue.deleted.clear();
 		objects.clear();
@@ -227,6 +227,7 @@ class InferHubGenerationIntegrationTest {
 		byte[] candidate = expectOwnerVerifiedRun();
 
 		Owner owner = seedOwner();
+		grantTransferConsent(owner.userId());
 		UUID jobId = create(owner, "t301-slice");
 
 		processor.process(new GenerationWorkLease(jobId, "t301-receipt"));
@@ -267,6 +268,7 @@ class InferHubGenerationIntegrationTest {
 		expectOwnerVerifiedRun();
 
 		Owner owner = seedOwner();
+		grantTransferConsent(owner.userId());
 		processor.process(new GenerationWorkLease(create(owner, "t301-wire"), "t301-receipt"));
 
 		http.verify();
@@ -371,6 +373,70 @@ class InferHubGenerationIntegrationTest {
 			throw new IllegalStateException("in-memory PNG encoding", ex);
 		}
 		return bytes.toByteArray();
+	}
+
+	/**
+	 * C06: the body image must not reach a third-party provider without an active
+	 * consent. Nothing was declared at the wire seam, so any provider call fails the
+	 * test; the job must instead end terminally with the consent reason and leave no
+	 * published Look behind.
+	 */
+	@Test
+	void aJobWithoutTransferConsentFailsTerminallyAndNeverReachesTheProvider() throws Exception {
+		http.reset();
+		Owner owner = seedOwner();
+		UUID jobId = create(owner, "t-c06-noconsent");
+
+		processor.process(new GenerationWorkLease(jobId, "t-c06-receipt"));
+
+		// No wire expectation was declared, so a transfer attempt would have thrown
+		// instead of reaching this assertion.
+		http.verify();
+		assertThat(jdbc.queryForObject(
+			"SELECT status FROM generation_job WHERE id = ?", String.class, jobId)).isEqualTo("FAILED");
+		assertThat(jdbc.queryForObject(
+			"SELECT terminal_reason FROM generation_job WHERE id = ?", String.class, jobId))
+			.isEqualTo("CONSENT_REQUIRED");
+		assertThat(count("look")).isZero();
+		assertThat(count("generation_attempt")).isEqualTo(1);
+		assertThat(jdbc.queryForObject(
+			"SELECT technical_outcome FROM generation_attempt WHERE generation_job_id = ?", String.class, jobId))
+			.isEqualTo("FAILED");
+	}
+
+	/**
+	 * The mirror: withdrawing a granted consent stops the next transfer for the same
+	 * owner, so withdrawal takes effect for work not yet sent rather than only for
+	 * newly uploaded photos.
+	 */
+	@Test
+	void withdrawingConsentStopsTheNextTransferForTheSameOwner() throws Exception {
+		expectOwnerVerifiedRun();
+		Owner owner = seedOwner();
+		grantTransferConsent(owner.userId());
+		UUID firstJob = create(owner, "t-c06-first");
+		processor.process(new GenerationWorkLease(firstJob, "t-c06-first-receipt"));
+		http.verify();
+		assertThat(count("look")).isEqualTo(1);
+
+		jdbc.update("UPDATE consent SET revoked_at = ? WHERE user_id = ? AND purpose = ?",
+			Timestamp.from(Instant.now()), owner.userId(), "third_party_ai_transfer");
+
+		UUID secondJob = create(owner, "t-c06-second");
+		processor.process(new GenerationWorkLease(secondJob, "t-c06-second-receipt"));
+
+		assertThat(jdbc.queryForObject(
+			"SELECT terminal_reason FROM generation_job WHERE id = ?", String.class, secondJob))
+			.isEqualTo("CONSENT_REQUIRED");
+		// The earlier Look survives: the refusal stops new transfers, it does not undo
+		// work already published under a then-valid consent.
+		assertThat(count("look")).isEqualTo(1);
+	}
+
+	private void grantTransferConsent(UUID userId) {
+		jdbc.update("INSERT INTO consent (id, user_id, purpose, version, granted_at, revoked_at) "
+				+ "VALUES (?, ?, ?, ?, ?, NULL)",
+			UUID.randomUUID(), userId, "third_party_ai_transfer", "2026-10-03", Timestamp.from(Instant.now()));
 	}
 
 	private UUID create(Owner owner, String key) throws Exception {

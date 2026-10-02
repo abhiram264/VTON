@@ -12,14 +12,27 @@ import com.aifashionvault.platform.objectstore.ObjectMetadata;
 import com.aifashionvault.platform.objectstore.ObjectRef;
 import com.aifashionvault.platform.objectstore.ObjectStore;
 import com.aifashionvault.platform.objectstore.PresignedAccess;
+import com.aifashionvault.privacy.ConsentPurpose;
+import com.aifashionvault.privacy.ConsentService;
 import com.aifashionvault.shared.StorageDomain;
+import com.aifashionvault.shared.UserId;
 
 public final class PrivacyApprovedInputTransfer {
 
     private final PrivacyTransferPolicy policy;
     private final ObjectStore store;
+    private final ConsentService consents;
 
     public PrivacyApprovedInputTransfer(PrivacyTransferPolicy policy, ObjectStore store) {
+        this(policy, store, null);
+    }
+
+    /**
+     * @param consents the owner's consent records. When absent the transfer is
+     *     not consent-checked, which is the posture of the slim contexts that
+     *     build this class without a DataSource; every deployment wires it.
+     */
+    public PrivacyApprovedInputTransfer(PrivacyTransferPolicy policy, ObjectStore store, ConsentService consents) {
         if (policy == null) {
             throw new IllegalArgumentException("privacy transfer policy is required");
         }
@@ -28,6 +41,7 @@ public final class PrivacyApprovedInputTransfer {
         }
         this.policy = policy;
         this.store = store;
+        this.consents = consents;
     }
 
     public PreparedInput prepare(
@@ -35,6 +49,22 @@ public final class PrivacyApprovedInputTransfer {
         Set<InputTransferMethod> providerSupported,
         Duration providerRequiredTtl
     ) {
+        return prepare(media, providerSupported, providerRequiredTtl, null);
+    }
+
+    /**
+     * Consent-checked transfer. A body image may only reach a third-party
+     * provider while its owner holds an active third-party AI transfer consent;
+     * the check runs before the object is even read, so a withdrawal stops the
+     * next transfer rather than the next upload.
+     */
+    public PreparedInput prepare(
+        PrivateMediaRef media,
+        Set<InputTransferMethod> providerSupported,
+        Duration providerRequiredTtl,
+        UserId owner
+    ) {
+        requireTransferConsent(owner);
         if (media == null) {
             throw new IllegalArgumentException("private media is required");
         }
@@ -60,6 +90,16 @@ public final class PrivacyApprovedInputTransfer {
         Duration ttl = shorter(providerRequiredTtl, policy.maxSignedReadTtl());
         PresignedAccess access = store.presignGet(object, ttl);
         return new PreparedInput(decision.method(), Optional.empty(), Optional.of(access));
+    }
+
+    private void requireTransferConsent(UserId owner) {
+        if (consents == null) {
+            return;
+        }
+        if (owner == null || !consents.isActive(owner, ConsentPurpose.THIRD_PARTY_AI_TRANSFER)) {
+            throw new ConsentRequiredForTransferException(
+                "third-party AI transfer consent is not active for this owner");
+        }
     }
 
     private static ObjectRef objectRef(String key) {
