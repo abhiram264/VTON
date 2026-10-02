@@ -1,7 +1,9 @@
 package com.aifashionvault.platform.web;
 
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.HttpStatus;
@@ -41,7 +43,20 @@ public class ConsentsController {
 
 	@GetMapping
 	public ConsentsResponse list(@AuthenticationPrincipal UserId userId) {
-		List<ConsentResource> consents = service().list(userId).stream().map(ConsentsController::resource).toList();
+		List<Consent> history = service().list(userId);
+		// A purpose can carry several non-revoked records when the policy version was
+		// revised. Only the newest non-revoked record is the grant in force, so the
+		// surface reports `active` for that row alone — otherwise two rows would both
+		// claim to be active for the same purpose.
+		Map<String, Consent> effective = new LinkedHashMap<>();
+		for (Consent consent : history) {
+			if (consent.revokedAt() == null) {
+				effective.put(consent.purpose(), consent);
+			}
+		}
+		List<ConsentResource> consents = history.stream()
+			.map(consent -> resource(consent, consent.equals(effective.get(consent.purpose()))))
+			.toList();
 		return new ConsentsResponse(consents);
 	}
 
@@ -57,7 +72,7 @@ public class ConsentsController {
 		}
 		try {
 			Consent granted = service().grant(userId, parsed, request.version());
-			return ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON).body(resource(granted));
+			return ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON).body(resource(granted, true));
 		} catch (IllegalArgumentException ex) {
 			throw ConsentProblem.versionInvalid();
 		}
@@ -90,9 +105,8 @@ public class ConsentsController {
 		return ConsentPurpose.fromWire(value).orElseThrow(ConsentProblem::purposeInvalid);
 	}
 
-	private static ConsentResource resource(Consent consent) {
-		return new ConsentResource(consent.purpose(), consent.version(), consent.grantedAt(), consent.revokedAt(),
-			consent.revokedAt() == null);
+	private static ConsentResource resource(Consent consent, boolean active) {
+		return new ConsentResource(consent.purpose(), consent.version(), consent.grantedAt(), consent.revokedAt(), active);
 	}
 
 	public record ConsentResource(String purpose, String version, Instant grantedAt, Instant revokedAt, boolean active) {

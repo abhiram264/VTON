@@ -1,6 +1,7 @@
 package com.aifashionvault.privacy;
 
 import java.time.Clock;
+import java.time.Instant;
 import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
@@ -9,64 +10,79 @@ import com.aifashionvault.shared.ConsentId;
 import com.aifashionvault.shared.UserId;
 
 /**
- * The consent surface: read, grant and withdraw the bounded {@link ConsentPurpose}
- * set, recording the policy version the user actually agreed to. A withdrawal is
- * distinguishable from a purpose that was never granted ({@link #withdraw} returns
- * false), which is what makes "withdrawn" reportable honestly.
+ * Consent lifecycle: record a grant naming its purpose and policy version,
+ * withdraw it, and answer whether the owner currently holds it.
+ *
+ * <p>Enforcement belongs at the processing boundary, not here: this service
+ * only answers {@link #isActive}. A caller that transfers a body image to a
+ * third party must consult it first, so withdrawal takes effect for work
+ * admitted after the withdrawal rather than only for newly uploaded photos.</p>
+ *
+ * <p>Idempotency: granting a purpose the owner already holds at the same
+ * policy version returns the existing record instead of appending a duplicate.
+ * Granting a different version is a new record, so a policy revision is
+ * distinguishable from the version the owner actually agreed to. Withdrawal
+ * marks the existing record revoked rather than deleting it — the grant
+ * history is the evidence that consent was held at the time it was used.</p>
  */
 public final class ConsentService {
 
-	/** Policy versions are short, opaque release identifiers, never free text. */
-	static final int MAX_VERSION_LENGTH = 64;
-
 	private final ConsentStore store;
 	private final Clock clock;
+	private final String policyVersion;
 
-	public ConsentService(ConsentStore store, Clock clock) {
-		this.store = Objects.requireNonNull(store, "consent store is required");
-		this.clock = Objects.requireNonNull(clock, "clock is required");
-	}
-
-	public List<Consent> list(UserId ownerId) {
-		return store.list(requireOwner(ownerId));
-	}
-
-	public Consent grant(UserId ownerId, ConsentPurpose purpose, String policyVersion) {
-		UserId owner = requireOwner(ownerId);
-		ConsentPurpose required = Objects.requireNonNull(purpose, "consent purpose is required");
-		return store.grant(owner, new ConsentId(UUID.randomUUID()), required, requireVersion(policyVersion), clock.instant());
-	}
-
-	/** Returns true when an active grant was revoked; false when nothing was active. */
-	public boolean withdraw(UserId ownerId, ConsentPurpose purpose) {
-		UserId owner = requireOwner(ownerId);
-		ConsentPurpose required = Objects.requireNonNull(purpose, "consent purpose is required");
-		return store.withdraw(owner, required, clock.instant());
-	}
-
-	public boolean isActive(UserId ownerId, ConsentPurpose purpose) {
-		return store.active(requireOwner(ownerId), Objects.requireNonNull(purpose, "consent purpose is required")).isPresent();
-	}
-
-	/** The gate: throws unless the owner holds an active grant for the purpose. */
-	public Consent requireActive(UserId ownerId, ConsentPurpose purpose) {
-		ConsentPurpose required = Objects.requireNonNull(purpose, "consent purpose is required");
-		return store.active(requireOwner(ownerId), required)
-			.orElseThrow(() -> new ConsentRequiredException(required));
-	}
-
-	static String requireVersion(String policyVersion) {
-		if (policyVersion == null) {
-			throw new IllegalArgumentException("policy version is required");
+	public ConsentService(ConsentStore store, Clock clock, String policyVersion) {
+		this.store = Objects.requireNonNull(store, "store is required");
+		this.clock = clock == null ? Clock.systemUTC() : clock;
+		if (policyVersion == null || policyVersion.isBlank()) {
+			throw new IllegalArgumentException("policyVersion is required");
 		}
-		String normalized = policyVersion.strip();
-		if (normalized.isEmpty() || normalized.length() > MAX_VERSION_LENGTH) {
-			throw new IllegalArgumentException("policy version must be 1-" + MAX_VERSION_LENGTH + " characters");
-		}
-		return normalized;
+		this.policyVersion = policyVersion.strip();
 	}
 
-	private static UserId requireOwner(UserId ownerId) {
-		return Objects.requireNonNull(ownerId, "consent owner is required");
+	public String policyVersion() {
+		return this.policyVersion;
+	}
+
+	/** Records the grant at the service's current policy version. */
+	public Consent grant(UserId userId, ConsentPurpose purpose) {
+		return grant(userId, purpose, this.policyVersion);
+	}
+
+	public Consent grant(UserId userId, ConsentPurpose purpose, String version) {
+		Objects.requireNonNull(userId, "userId is required");
+		Objects.requireNonNull(purpose, "purpose is required");
+		if (version == null || version.isBlank()) {
+			throw new IllegalArgumentException("version is required");
+		}
+		String trimmed = version.strip();
+		return this.store.active(userId, purpose.wireName())
+			.filter(existing -> existing.version().equals(trimmed))
+			.orElseGet(() -> this.store.insert(new Consent(
+				new ConsentId(UUID.randomUUID()),
+				userId,
+				purpose.wireName(),
+				trimmed,
+				Instant.now(this.clock),
+				null)));
+	}
+
+	/** @return true when a grant existed and is now withdrawn */
+	public boolean withdraw(UserId userId, ConsentPurpose purpose) {
+		Objects.requireNonNull(userId, "userId is required");
+		Objects.requireNonNull(purpose, "purpose is required");
+		return this.store.revoke(userId, purpose.wireName(), Instant.now(this.clock)) > 0;
+	}
+
+	public boolean isActive(UserId userId, ConsentPurpose purpose) {
+		if (userId == null || purpose == null) {
+			return false;
+		}
+		return this.store.active(userId, purpose.wireName()).isPresent();
+	}
+
+	/** The owner's consent history, oldest first, for the consent surface. */
+	public List<Consent> list(UserId userId) {
+		return userId == null ? List.of() : this.store.list(userId);
 	}
 }

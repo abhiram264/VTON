@@ -17,6 +17,12 @@ import org.springframework.context.annotation.Configuration;
 @Configuration(proxyBeanMethods = false)
 class ConsentConfiguration {
 
+	/**
+	 * The policy version the consent surface shows and records. Overridable so a
+	 * policy revision ships as configuration rather than a code change.
+	 */
+	static final String DEFAULT_POLICY_VERSION = "2026-10-01";
+
 	@Bean
 	FactoryBean<ConsentStore> consentStore(ObjectProvider<DataSource> dataSources) {
 		return new FactoryBean<>() {
@@ -39,12 +45,19 @@ class ConsentConfiguration {
 	}
 
 	@Bean
-	FactoryBean<ConsentService> consentService(ObjectProvider<ConsentStore> stores) {
+	FactoryBean<ConsentService> consentService(
+		ObjectProvider<ConsentStore> stores,
+		org.springframework.core.env.Environment environment
+	) {
 		return new FactoryBean<>() {
 			@Override
 			public ConsentService getObject() {
 				ConsentStore store = stores.getIfAvailable();
-				return store == null ? null : new ConsentService(store, Clock.systemUTC());
+				if (store == null) {
+					return null;
+				}
+				String version = environment.getProperty("vault.privacy.consent-policy-version", DEFAULT_POLICY_VERSION);
+				return new ConsentService(store, Clock.systemUTC(), version);
 			}
 
 			@Override

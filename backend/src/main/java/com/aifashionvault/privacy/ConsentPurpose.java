@@ -1,22 +1,22 @@
 package com.aifashionvault.privacy;
 
-import java.util.Locale;
-import java.util.Optional;
-
 /**
- * The bounded set of processing purposes a consumer can grant or withdraw.
+ * The consent purposes this product actually asks for.
  *
- * <p>A purpose is recorded as its stable wire name, so the persisted consent row
- * survives renames of the enum constant. Anything outside this set is refused at
- * the API boundary rather than stored as free text: an unknown purpose would be a
- * consent the product can never check.</p>
+ * <p>A closed vocabulary, not free text: consent is enforced by matching a
+ * named purpose at the point of processing, and a typo in a string literal
+ * would silently create a grant that never matches. The wire values are the
+ * stored {@code purpose} strings.</p>
  */
 public enum ConsentPurpose {
-	/** Body-image (avatar photo) processing inside the product. */
+
+	/** Processing the user's body photo to build their model. */
 	BODY_IMAGE_PROCESSING("body_image_processing"),
-	/** Handing the body image to a third-party AI provider for generation. */
+
+	/** Sending the user's body photo to a third-party AI image provider. */
 	THIRD_PARTY_AI_TRANSFER("third_party_ai_transfer"),
-	/** Keeping the body image and generated results for the stated retention window. */
+
+	/** Keeping the body photo and generated results for the stated retention window. */
 	RETENTION("retention");
 
 	private final String wireName;
@@ -26,19 +26,24 @@ public enum ConsentPurpose {
 	}
 
 	public String wireName() {
-		return wireName;
+		return this.wireName;
 	}
 
-	public static Optional<ConsentPurpose> fromWire(String value) {
+	/**
+	 * Parses a stored/requested purpose string back into the closed vocabulary.
+	 * An unrecognised value is empty rather than a silent new purpose: a purpose
+	 * the product cannot enforce must never be recorded.
+	 */
+	public static java.util.Optional<ConsentPurpose> fromWire(String value) {
 		if (value == null) {
-			return Optional.empty();
+			return java.util.Optional.empty();
 		}
-		String normalized = value.strip().toLowerCase(Locale.ROOT);
+		String normalized = value.strip().toLowerCase(java.util.Locale.ROOT);
 		for (ConsentPurpose purpose : values()) {
 			if (purpose.wireName.equals(normalized)) {
-				return Optional.of(purpose);
+				return java.util.Optional.of(purpose);
 			}
 		}
-		return Optional.empty();
+		return java.util.Optional.empty();
 	}
 }

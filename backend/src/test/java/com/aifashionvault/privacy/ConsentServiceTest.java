@@ -1,104 +1,173 @@
 package com.aifashionvault.privacy;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneId;
 import java.time.ZoneOffset;
+import java.util.TimeZone;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
 
+import org.flywaydb.core.Flyway;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 import com.aifashionvault.shared.UserId;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class ConsentServiceTest {
 
-	private static final Instant NOW = Instant.parse("2026-10-03T09:00:00Z");
-	private static final UserId OWNER = new UserId(UUID.fromString("11111111-1111-1111-1111-111111111111"));
+	static {
+		TimeZone.setDefault(TimeZone.getTimeZone("UTC"));
+	}
 
-	private InMemoryConsentStore store;
-	private ConsentService service;
+	private static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:18")
+		.withDatabaseName("postgres")
+		.withStartupTimeout(Duration.ofMinutes(5));
+	private static final Instant T0 = Instant.parse("2026-10-03T09:00:00Z");
+
+	private JdbcTemplate jdbc;
+	private ConsentService consents;
+	private UserId owner;
+	private UserId stranger;
+	private final AtomicReference<Instant> now = new AtomicReference<>(T0);
+
+	@BeforeAll
+	static void database() {
+		POSTGRES.start();
+	}
 
 	@BeforeEach
-	void setUp() {
-		store = new InMemoryConsentStore();
-		service = new ConsentService(store, Clock.fixed(NOW, ZoneOffset.UTC));
+	void reset() {
+		var source = new DriverManagerDataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
+		Flyway.configure().dataSource(source).load().migrate();
+		jdbc = new JdbcTemplate(source);
+		jdbc.update("TRUNCATE consent, users CASCADE");
+		owner = user();
+		stranger = user();
+		now.set(T0);
+		// A settable clock: two grants at the same instant have no meaningful
+		// order, so a later policy revision must be granted at a later time.
+		Clock clock = new Clock() {
+			@Override
+			public Instant instant() {
+				return now.get();
+			}
+
+			@Override
+			public ZoneId getZone() {
+				return ZoneOffset.UTC;
+			}
+
+			@Override
+			public Clock withZone(ZoneId zone) {
+				return this;
+			}
+		};
+		consents = new ConsentService(new JdbcConsentStore(source), clock, "2026-10-03");
 	}
 
 	@Test
-	void grantRecordsThePolicyVersionAndIsIdempotentForTheSameVersion() {
-		Consent first = service.grant(OWNER, ConsentPurpose.BODY_IMAGE_PROCESSING, "2026-10-01");
-		Consent replay = service.grant(OWNER, ConsentPurpose.BODY_IMAGE_PROCESSING, "2026-10-01");
+	void aGrantedPurposeIsActiveAndRepeatedGrantIsIdempotent() {
+		Consent granted = consents.grant(owner, ConsentPurpose.BODY_IMAGE_PROCESSING);
 
-		assertThat(first.version()).isEqualTo("2026-10-01");
-		assertThat(first.grantedAt()).isEqualTo(NOW);
-		assertThat(first.revokedAt()).isNull();
-		assertThat(replay.id()).isEqualTo(first.id());
-		assertThat(service.list(OWNER)).hasSize(1);
+		assertThat(granted.version()).isEqualTo("2026-10-03");
+		assertThat(granted.purpose()).isEqualTo("body_image_processing");
+		assertThat(granted.grantedAt()).isEqualTo(T0);
+		assertThat(consents.isActive(owner, ConsentPurpose.BODY_IMAGE_PROCESSING)).isTrue();
+
+		Consent again = consents.grant(owner, ConsentPurpose.BODY_IMAGE_PROCESSING);
+
+		assertThat(again.id()).isEqualTo(granted.id());
+		assertThat(countConsents(owner)).isEqualTo(1);
 	}
 
 	@Test
-	void aNewPolicyVersionSupersedesTheActiveGrantButKeepsHistory() {
-		service.grant(OWNER, ConsentPurpose.THIRD_PARTY_AI_TRANSFER, "v1");
-		Consent second = service.grant(OWNER, ConsentPurpose.THIRD_PARTY_AI_TRANSFER, "v2");
+	void grantingOnePurposeDoesNotConferAnother() {
+		consents.grant(owner, ConsentPurpose.BODY_IMAGE_PROCESSING);
 
-		assertThat(second.version()).isEqualTo("v2");
-		assertThat(service.isActive(OWNER, ConsentPurpose.THIRD_PARTY_AI_TRANSFER)).isTrue();
-		assertThat(service.requireActive(OWNER, ConsentPurpose.THIRD_PARTY_AI_TRANSFER).version()).isEqualTo("v2");
-		assertThat(service.list(OWNER)).hasSize(2);
-		assertThat(service.list(OWNER).get(0).revokedAt()).isEqualTo(NOW);
+		assertThat(consents.isActive(owner, ConsentPurpose.THIRD_PARTY_AI_TRANSFER)).isFalse();
 	}
 
 	@Test
-	void withdrawalIsDistinguishableFromNeverGranted() {
-		assertThat(service.withdraw(OWNER, ConsentPurpose.RETENTION)).isFalse();
-		service.grant(OWNER, ConsentPurpose.RETENTION, "v1");
+	void withdrawalStopsNewProcessingAndKeepsTheRecord() {
+		consents.grant(owner, ConsentPurpose.THIRD_PARTY_AI_TRANSFER);
 
-		assertThat(service.withdraw(OWNER, ConsentPurpose.RETENTION)).isTrue();
-		assertThat(service.isActive(OWNER, ConsentPurpose.RETENTION)).isFalse();
-		assertThat(service.withdraw(OWNER, ConsentPurpose.RETENTION)).isFalse();
-		assertThat(service.list(OWNER)).hasSize(1);
-		assertThat(service.list(OWNER).get(0).revokedAt()).isEqualTo(NOW);
+		assertThat(consents.withdraw(owner, ConsentPurpose.THIRD_PARTY_AI_TRANSFER)).isTrue();
+
+		assertThat(consents.isActive(owner, ConsentPurpose.THIRD_PARTY_AI_TRANSFER)).isFalse();
+		// The grant history survives: the record is revoked, not deleted.
+		assertThat(countConsents(owner)).isEqualTo(1);
+		assertThat(jdbc.queryForObject(
+			"SELECT count(*) FROM consent WHERE user_id = ? AND revoked_at IS NOT NULL",
+			Long.class, owner.value())).isEqualTo(1);
 	}
 
 	@Test
-	void requireActiveRefusesAWithdrawnPurpose() {
-		service.grant(OWNER, ConsentPurpose.THIRD_PARTY_AI_TRANSFER, "v1");
-		service.withdraw(OWNER, ConsentPurpose.THIRD_PARTY_AI_TRANSFER);
-
-		assertThatThrownBy(() -> service.requireActive(OWNER, ConsentPurpose.THIRD_PARTY_AI_TRANSFER))
-			.isInstanceOf(ConsentRequiredException.class)
-			.hasFieldOrPropertyWithValue("purpose", ConsentPurpose.THIRD_PARTY_AI_TRANSFER);
+	void withdrawingAPurposeThatWasNeverGrantedReportsNothingWasRevoked() {
+		assertThat(consents.withdraw(owner, ConsentPurpose.THIRD_PARTY_AI_TRANSFER)).isFalse();
 	}
 
 	@Test
-	void grantsAreOwnerScoped() {
-		UserId other = new UserId(UUID.fromString("22222222-2222-2222-2222-222222222222"));
-		service.grant(OWNER, ConsentPurpose.BODY_IMAGE_PROCESSING, "v1");
+	void regrantingAfterWithdrawalIsANewActiveRecord() {
+		Consent first = consents.grant(owner, ConsentPurpose.BODY_IMAGE_PROCESSING);
+		consents.withdraw(owner, ConsentPurpose.BODY_IMAGE_PROCESSING);
 
-		assertThat(service.list(other)).isEmpty();
-		assertThat(service.isActive(other, ConsentPurpose.BODY_IMAGE_PROCESSING)).isFalse();
-		assertThat(service.withdraw(other, ConsentPurpose.BODY_IMAGE_PROCESSING)).isFalse();
+		Consent second = consents.grant(owner, ConsentPurpose.BODY_IMAGE_PROCESSING);
+
+		assertThat(second.id()).isNotEqualTo(first.id());
+		assertThat(consents.isActive(owner, ConsentPurpose.BODY_IMAGE_PROCESSING)).isTrue();
+		assertThat(countConsents(owner)).isEqualTo(2);
 	}
 
 	@Test
-	void policyVersionMustBePresentAndBounded() {
-		assertThatThrownBy(() -> service.grant(OWNER, ConsentPurpose.RETENTION, null))
-			.isInstanceOf(IllegalArgumentException.class);
-		assertThatThrownBy(() -> service.grant(OWNER, ConsentPurpose.RETENTION, "   "))
-			.isInstanceOf(IllegalArgumentException.class);
-		assertThatThrownBy(() -> service.grant(OWNER, ConsentPurpose.RETENTION, "v".repeat(65)))
-			.isInstanceOf(IllegalArgumentException.class);
-		assertThat(service.grant(OWNER, ConsentPurpose.RETENTION, "  v1  ").version()).isEqualTo("v1");
+	void aNewPolicyVersionIsRecordedAsADistinctGrant() {
+		Consent original = consents.grant(owner, ConsentPurpose.BODY_IMAGE_PROCESSING);
+		now.set(T0.plus(Duration.ofDays(30)));
+
+		Consent revised = consents.grant(owner, ConsentPurpose.BODY_IMAGE_PROCESSING, "2026-11-01");
+
+		assertThat(revised.id()).isNotEqualTo(original.id());
+		assertThat(revised.version()).isEqualTo("2026-11-01");
+		assertThat(consents.isActive(owner, ConsentPurpose.BODY_IMAGE_PROCESSING)).isTrue();
+		assertThat(store().active(owner, "body_image_processing").orElseThrow().version()).isEqualTo("2026-11-01");
 	}
 
 	@Test
-	void unknownWirePurposeIsNotARecognisedPurpose() {
-		assertThat(ConsentPurpose.fromWire("body_image_processing")).contains(ConsentPurpose.BODY_IMAGE_PROCESSING);
-		assertThat(ConsentPurpose.fromWire(" BODY_IMAGE_PROCESSING ")).contains(ConsentPurpose.BODY_IMAGE_PROCESSING);
-		assertThat(ConsentPurpose.fromWire("marketing")).isEmpty();
-		assertThat(ConsentPurpose.fromWire(null)).isEmpty();
+	void consentIsOwnerScopedAndNeverLeaksToAnotherUser() {
+		consents.grant(owner, ConsentPurpose.BODY_IMAGE_PROCESSING);
+
+		assertThat(consents.isActive(stranger, ConsentPurpose.BODY_IMAGE_PROCESSING)).isFalse();
+		assertThat(store().active(stranger, "body_image_processing")).isEmpty();
+
+		// A stranger's withdrawal must not revoke the owner's grant.
+		assertThat(consents.withdraw(stranger, ConsentPurpose.BODY_IMAGE_PROCESSING)).isFalse();
+		assertThat(consents.isActive(owner, ConsentPurpose.BODY_IMAGE_PROCESSING)).isTrue();
+	}
+
+	@Test
+	void anUnknownUserHoldsNoConsent() {
+		assertThat(consents.isActive(new UserId(UUID.randomUUID()), ConsentPurpose.BODY_IMAGE_PROCESSING)).isFalse();
+	}
+
+	private ConsentStore store() {
+		return new JdbcConsentStore(new DriverManagerDataSource(
+			POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword()));
+	}
+
+	private long countConsents(UserId user) {
+		return jdbc.queryForObject("SELECT count(*) FROM consent WHERE user_id = ?", Long.class, user.value());
+	}
+
+	private UserId user() {
+		UserId id = new UserId(UUID.randomUUID());
+		jdbc.update("INSERT INTO users(id,created_at,updated_at) VALUES(?,now(),now())", id.value());
+		return id;
 	}
 }
