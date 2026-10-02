@@ -2,6 +2,7 @@ package com.aifashionvault.platform.web;
 
 import java.net.URI;
 import java.time.Clock;
+import java.util.List;
 import jakarta.servlet.http.HttpServletRequest;
 
 import javax.sql.DataSource;
@@ -23,12 +24,13 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.aifashionvault.integrity.AppIntegrityOperation;
 import com.aifashionvault.integrity.AppIntegrityVerifier;
+import com.aifashionvault.generation.AdmissionCapsProperties;
+import com.aifashionvault.generation.AdmissionPolicy;
 import com.aifashionvault.generation.GenerationStore;
 import com.aifashionvault.generation.JdbcGenerationStore;
+import com.aifashionvault.generation.vton.ProviderRegistry;
 import com.aifashionvault.platform.objectstore.GenerationMediaStore;
 import com.aifashionvault.platform.objectstore.ObjectStore;
-import com.aifashionvault.platform.fashn.FashnConfig;
-import com.aifashionvault.platform.environment.VaultEnvironmentProperties;
 import com.aifashionvault.admission.JdbcGenerationRateLimiter;
 import com.aifashionvault.platform.generation.GenerationMetrics;
 import com.aifashionvault.shared.UserId;
@@ -45,9 +47,10 @@ public class GenerationsController {
 		ObjectProvider<DataSource> dataSources,
 		ObjectProvider<GenerationMediaStore> mediaStores,
 		ObjectProvider<ObjectStore> objectStores,
+		ObjectProvider<ProviderRegistry> providerRegistries,
 		ObjectProvider<GenerationMetrics> generationMetrics,
+		ObjectProvider<AdmissionCapsProperties> admissionCaps,
 		GenerationApiProperties properties,
-		VaultEnvironmentProperties vaultProperties,
 		AppIntegrityVerifier verifier
 	) {
 		this.integrity = new AppIntegrityBoundary(verifier, properties.isAttestationRequired());
@@ -58,13 +61,33 @@ public class GenerationsController {
 		}
 		GenerationStore store = first(stores);
 		if (store == null) {
-			store = new JdbcGenerationStore(dataSource);
+			// C19: apply the same configured caps the GenerationConfiguration
+			// bean applies, so a slim context that falls back to constructing
+			// the store here does not silently revert to the shipped defaults.
+			AdmissionCapsProperties caps = admissionCaps.getIfAvailable();
+			AdmissionPolicy policy = caps == null ? AdmissionPolicy.DEFAULT : caps.toPolicy();
+			store = new JdbcGenerationStore(dataSource, Clock.systemUTC(), policy);
 		}
 		GenerationMediaStore mediaStore = resolveMediaStore(mediaStores, objectStores);
 		this.service = new GenerationCreationService(
 			store, new JdbcTemplate(dataSource), properties, Clock.systemUTC(),
 			mediaStore, new JdbcGenerationRateLimiter(dataSource, Clock.systemUTC()),
-			generationMetrics.getIfAvailable(), FashnConfig.anyProviderConfigured(vaultProperties));
+			generationMetrics.getIfAvailable(), providerAvailable(providerRegistries));
+	}
+
+	/**
+	 * Availability is decided by the composed {@link ProviderRegistry} bean, not by a
+	 * raw API-key predicate. {@code ProviderRegistryComposition} yields a null
+	 * FactoryBean when no {@code VtonProvider} is registered, and every provider bean
+	 * is itself gated on its own prerequisite (a non-blank real key, or the
+	 * development-only opt-in for the offline echo backstop). So "a registry exists"
+	 * is exactly "a provider is genuinely usable", and a keyless deployment with no
+	 * registered provider still fails closed with GENERATION_PROVIDER_UNAVAILABLE.
+	 * Keying off the raw keys instead made the registered offline backstop
+	 * unreachable: it has no key by design, so every create 503'd before validation.
+	 */
+	static boolean providerAvailable(ObjectProvider<ProviderRegistry> providerRegistries) {
+		return first(providerRegistries) != null;
 	}
 
 	@PostMapping
@@ -81,6 +104,27 @@ public class GenerationsController {
 			.location(URI.create("/generations/" + body.id()))
 			.contentType(MediaType.APPLICATION_JSON)
 			.body(body);
+	}
+
+	@PostMapping("/multi")
+	public ResponseEntity<GenerationResponse> createMulti(
+		@AuthenticationPrincipal UserId userId,
+		@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+		@RequestBody(required = false) GenerationMultiRequest request,
+		HttpServletRequest httpRequest
+	) {
+		this.integrity.verify(httpRequest, AppIntegrityOperation.GENERATION_CREATION);
+		GenerationResponse body = service().createMulti(userId, idempotencyKey, request,
+			httpRequest.getHeader("X-Device-Id"), httpRequest.getRemoteAddr());
+		return ResponseEntity.accepted()
+			.location(URI.create("/generations/" + body.id()))
+			.contentType(MediaType.APPLICATION_JSON)
+			.body(body);
+	}
+
+	@GetMapping
+	public List<GenerationResponse> list(@AuthenticationPrincipal UserId userId) {
+		return service().list(userId);
 	}
 
 	@GetMapping("/{generationId}")

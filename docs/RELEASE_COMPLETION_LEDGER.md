@@ -223,3 +223,39 @@ with its real LocalStack prerequisites.
   C22 (analytics/flags) must all have evidence before any "all V1 features" claim.
 - **Extended roadmap (R01–R09):** out of scope for the first store release; kept in
   guide §13 so "whole project" has an explicit boundary.
+
+## 10. Acceptance clauses verified UNMET at integration `0800318` (2026-10-03)
+
+This is a point-in-time record, not a defect list. Each clause below was checked by a
+command against the **integrated branch** (`friday-guide-c01-c30` at `0800318`). Work that
+a peer is actively implementing is labelled **in flight**, not broken. Re-verify before
+acceptance; do not carry this list forward as current.
+
+| Requirement | Clause | Evidence (at `0800318`) | State |
+|---|---|---|---|
+| C08 | item 1: "Vault **list** shows owner-authorized thumbnails/full images" | `git show friday-guide-c01-c30:mobile/src/screens/VaultScreen.tsx` renders the signed preview only in the item **detail** view (lines ~144-234); the list rows are text-only | **UNMET at `0800318`; RESOLVED later** — worker-01 landed Vault list thumbnails with refresh at `5755d44` (`feat(mobile): Vault list shows owner-authorized thumbnails with refresh`) |
+| C08 | image capability route reachable | `git ls-tree friday-guide-c01-c30 -- .../platform/web` lists no `VaultImageController.java`; the route exists only on `swarm/fr_640bdd25a4/worker-06` (`a004579`) | **IN FLIGHT** (worker-06) — until merged, a live preview call 404s and the UI correctly shows "gone" |
+| C03 | signup, password reset, signout, durable RN persistence | `git grep -n "signOut\|createUserWithEmailAndPassword\|sendPasswordResetEmail\|getReactNativePersistence" friday-guide-c01-c30 -- mobile/src` → only a comment in `config/firebase.ts`; `mobile/src/features/auth` is empty | **IN FLIGHT** (workers 08/17/26) — C03 is materially incomplete on the branch |
+| C12 | Studio multi-item create mounted | `git grep -n "generations/multi" friday-guide-c01-c30 -- backend/src/main/java` → no matches | **IN FLIGHT** (worker-05) — see CONTRACT_INVENTORY §9.1 (frozen seam) |
+
+Cross-checks that PASSED at `0800318` (no action needed): C09 `collectionsApi` matches
+`CollectionsController` exactly; C19 spend caps wired via `@ConfigurationProperties` with
+500/25/250 USD/1d defaults preserved; C17 commits the `deleted_at` barrier before media
+purge; OFFLINE-ECHO is dev-only and fail-closed; the C08 mobile image client and worker-06's
+unmerged route agree on `GET /vault/items/{id}/image` → `{url, expiresAt}`.
+
+### 10.1 Cross-checks at the next integration head `d2e3478`
+
+Checked after worker-08 merged (C04 native picker + C03 account-session isolation):
+
+- **C04 (PASS):** the merged native module's `getName()` returns `"PhotoPicker"` and it
+  exposes `@ReactMethod choosePhoto`/`takePhoto`, registered in `MainApplication.kt` —
+  exactly the `NativeModules.PhotoPicker` shape `mobile/src/features/my-model/photoSource.ts`
+  requires. Native bridge presence confirmed in source; on-device capture proof remains
+  EXTERNALLY-DEPENDENT.
+- **C07 (PASS):** the mobile confirmer now calls `POST /share/imports/{importId}/confirm`
+  (`features/share/importClient.ts:283-298`) and `ShareImportScreen` presents the saved
+  state only from that response; the backend route is mounted (`SharesController.java:80`).
+  Both sides agree.
+- **Corroboration:** peer worker-03 independently reproduced the C01 route census
+  (37 mappings, 10 controllers) and verified the C22 analytics tests at `ae358d7`.
