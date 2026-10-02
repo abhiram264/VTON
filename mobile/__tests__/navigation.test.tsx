@@ -9,7 +9,19 @@ jest.mock('../src/features/my-model/photoSource', () => ({
 }));
 
 jest.mock('../src/features/vault/vaultApi', () => ({ vaultApi: { list: jest.fn().mockResolvedValue([]) } }));
-jest.mock('../src/features/collections/collectionsApi', () => ({ collectionsApi: { list: jest.fn().mockResolvedValue([]) } }));
+jest.mock('../src/features/collections/collectionsApi', () => {
+  const stub = {
+    list: jest.fn().mockResolvedValue([]),
+    create: jest.fn(),
+    rename: jest.fn(),
+    remove: jest.fn(),
+    addItem: jest.fn(),
+    removeItem: jest.fn(),
+  };
+  // ShareImportScreen builds its own client from the same config so its picker
+  // cannot resolve a different API base URL; the factory must exist here too.
+  return { collectionsApi: stub, createCollectionsApi: () => stub };
+});
 jest.mock('../src/features/looks/looksApi', () => ({ looksApi: { list: jest.fn().mockResolvedValue([]) } }));
 test('launches into the four primary tabs in documented order', async () => {
   await render(<App />);

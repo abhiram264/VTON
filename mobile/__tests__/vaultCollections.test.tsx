@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import VaultScreen from '../src/screens/VaultScreen';
+import { ApiProblemError } from '../src/features/my-model/http';
 import { collectionsApi } from '../src/features/collections/collectionsApi';
 import { vaultApi } from '../src/features/vault/vaultApi';
 
@@ -162,5 +163,57 @@ describe('VaultScreen collections', () => {
     expect(collectionsApi.remove).toHaveBeenCalledWith('collection-1');
     // Deleting a collection is not a garment delete.
     expect(vaultApi.remove).not.toHaveBeenCalled();
+  });
+});
+
+describe('Vault failure states', () => {
+  test('an expired session is not offered a retry that cannot succeed', async () => {
+    jest
+      .mocked(vaultApi.list)
+      .mockRejectedValue(new ApiProblemError('UNAUTHORIZED'));
+
+    await mount(<VaultScreen onProfile={noop} />);
+
+    expect(
+      screen.getByText('Your session has expired. Sign in again to see your Vault.'),
+    ).toBeTruthy();
+    expect(screen.queryByLabelText('Retry Vault')).toBeNull();
+  });
+
+  test('a transient failure keeps the working retry', async () => {
+    jest
+      .mocked(vaultApi.list)
+      .mockRejectedValueOnce(new ApiProblemError('HTTP_503'))
+      .mockResolvedValueOnce([
+        { id: 'item-1', category: 'TOP', name: 'Silk top' },
+      ]);
+
+    await mount(<VaultScreen onProfile={noop} />);
+
+    expect(screen.getByText('Could not load Vault items.')).toBeTruthy();
+    const retry = screen.getByLabelText('Retry Vault');
+
+    await interact(() => fireEvent.press(retry));
+
+    expect(screen.getByRole('button', { name: 'Silk top' })).toBeTruthy();
+  });
+
+  test('an expired session on the item detail is not offered a retry either', async () => {
+    jest.mocked(vaultApi.list).mockResolvedValue([
+      { id: 'item-1', category: 'TOP', name: 'Silk top' },
+    ]);
+    jest
+      .mocked(vaultApi.get)
+      .mockRejectedValue(new ApiProblemError('UNAUTHORIZED'));
+
+    await mount(<VaultScreen onProfile={noop} />);
+    await interact(() =>
+      fireEvent.press(screen.getByRole('button', { name: 'Silk top' })),
+    );
+
+    expect(
+      screen.getByText('Your session has expired. Sign in again to see this item.'),
+    ).toBeTruthy();
+    expect(screen.queryByLabelText('Retry item')).toBeNull();
   });
 });
