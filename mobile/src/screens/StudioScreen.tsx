@@ -15,6 +15,11 @@ type Props = {
   onAvatar: () => void;
   onOpenLook: (lookId: string) => void;
   onProfile: () => void;
+  // A route param that has been acted on must not survive in the navigator, or
+  // re-entering this tab re-applies a stale selection (the garment comes back
+  // after the user removed it; the same Look is cloned into a second draft).
+  // The screen cannot clear its own route params, so it reports consumption.
+  onConsumed?: () => void;
 };
 
 type ItemInfo = { name: string; slot: StudioSlot; imageUrl: string | null };
@@ -34,7 +39,7 @@ const PHASE_LABELS: Record<CoarseGenerationPhase, string> = {
   FAILED: 'Failed',
 };
 
-export default function StudioScreen({ studioSessionId, sourceLookId, selectedVaultItemId, onAddFromVault, onAvatar, onOpenLook, onProfile }: Props) {
+export default function StudioScreen({ studioSessionId, sourceLookId, selectedVaultItemId, onAddFromVault, onAvatar, onOpenLook, onProfile, onConsumed }: Props) {
   const trimmedSessionId = studioSessionId?.trim() ?? '';
   const trimmedSourceLookId = sourceLookId?.trim() ?? '';
   const [command, setCommand] = useState('');
@@ -47,8 +52,17 @@ export default function StudioScreen({ studioSessionId, sourceLookId, selectedVa
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
   const [phase, setPhase] = useState<CoarseGenerationPhase | null>(null);
   const [unresolved, setUnresolved] = useState<{ vaultItemId: string; reason: string }[]>([]);
+  const [candidates, setCandidates] = useState<{ vaultItemId: string; label: string; slot: StudioSlot | null }[]>([]);
   const commandLock = useRef(false);
   const imageRetried = useRef<Set<string>>(new Set());
+  // Held in a ref so the load/selection effects depend on the route params, not
+  // on a fresh callback identity each render.
+  const consumed = useRef(onConsumed);
+  consumed.current = onConsumed;
+  // The selection effect re-runs as the draft changes; a given param value is
+  // acted on (and reported consumed) exactly once. A cleared param resets the
+  // memo so a genuine later re-selection still applies.
+  const consumedItemId = useRef<string | null>(null);
   const commandRequest = useRef(0);
   const operationRef = useRef(0);
   const mounted = useRef(true);
@@ -104,12 +118,16 @@ export default function StudioScreen({ studioSessionId, sourceLookId, selectedVa
       if (trimmedSessionId && state.sessionId !== trimmedSessionId) throw new Error('Studio session mismatch');
       setStudioState(state);
       setSessionStatus('ready');
+      if (trimmedSourceLookId) consumed.current?.();
     }).catch(() => {
       if (!current) return;
       setStudioState(null);
       setSessionStatus('failed');
       if (trimmedSourceLookId) {
         setNotice('Could not load that Look into a Studio draft. It may no longer be available.');
+        // The param is spent either way: leaving it would re-clone on every
+        // re-entry instead of showing this draft's own failure state.
+        consumed.current?.();
       }
     });
     return () => { current = false; };
@@ -124,7 +142,7 @@ export default function StudioScreen({ studioSessionId, sourceLookId, selectedVa
     let current = true;
     setItemsLoaded(false);
     imageRetried.current.clear();
-    const draftItemIds = activeSession?.itemIds ?? [];
+    const draftItemIds = itemsKey ? itemsKey.split(',') : [];
     vaultApi.list().then(items => {
       if (!current) return;
       setItemInfo(Object.fromEntries(items.map(item => [item.id, { name: item.name, slot: slotForCategory(item.category), imageUrl: null }])));
@@ -165,10 +183,22 @@ export default function StudioScreen({ studioSessionId, sourceLookId, selectedVa
   // through the same owned, revisioned Studio commands as the manual controls.
   useEffect(() => {
     const itemId = selectedVaultItemId?.trim() ?? '';
+    if (!itemId) {
+      consumedItemId.current = null;
+      return;
+    }
+    if (consumedItemId.current === itemId) return;
     // Wait for the Vault categories before deciding add-vs-replace: an empty
     // slot map would classify an occupied slot as empty and add a second item
     // instead of replacing the existing one.
-    if (!itemId || !activeSession || !itemsLoaded || activeSession.itemIds.includes(itemId)) return;
+    if (!activeSession || !itemsLoaded) return;
+    // Already in the outfit: it was applied by an earlier pass and must not be
+    // re-applied when the user later removes it.
+    if (activeSession.itemIds.includes(itemId)) {
+      consumedItemId.current = itemId;
+      consumed.current?.();
+      return;
+    }
     let current = true;
     const sessionId = activeSession.sessionId;
     const expectedUpdatedAt = activeSession.updatedAt;
@@ -181,6 +211,8 @@ export default function StudioScreen({ studioSessionId, sourceLookId, selectedVa
       if (!current) return;
       if (state.sessionId !== sessionId) throw new Error('Studio session mismatch');
       setStudioState(state);
+      consumedItemId.current = itemId;
+      consumed.current?.();
     }).catch(() => {
       if (current) setNotice(replacing ? 'Could not replace that slot item.' : 'Could not add the selected Vault item to this Studio session.');
     });
@@ -241,12 +273,25 @@ export default function StudioScreen({ studioSessionId, sourceLookId, selectedVa
     commandLock.current = true;
     setBusy(true);
     setNotice(null);
+    setCandidates([]);
     try {
-      const state = await studioApi.command(sessionId, text);
+      const result = await studioApi.command(sessionId, text);
       if (commandRequest.current !== request) return;
-      if (state.sessionId !== sessionId) throw new Error('Studio session mismatch');
-      setStudioState(state);
-      setCommand(current => current === submittedCommand ? '' : current);
+      if (result.state.sessionId !== sessionId) throw new Error('Studio session mismatch');
+      // Only APPLIED means the draft actually changed. CONFIRM_REQUIRED,
+      // EXPLAINED and REFUSED all leave it exactly as it was, so the typed
+      // command is kept and the server's own words are shown.
+      if (result.outcome === 'APPLIED') {
+        setStudioState(result.state);
+        setCommand(current => current === submittedCommand ? '' : current);
+      } else if (result.outcome === 'CONFIRM_REQUIRED') {
+        setCandidates(result.candidates);
+        setNotice(result.message ?? 'That command is ambiguous. Pick the garment you meant.');
+      } else {
+        setNotice(result.message ?? (result.outcome === 'REFUSED'
+          ? 'That command was not applied.'
+          : 'That command made no change.'));
+      }
     } catch {
       if (commandRequest.current === request) setNotice('Could not apply command. Use manual controls below.');
     } finally {
@@ -254,6 +299,34 @@ export default function StudioScreen({ studioSessionId, sourceLookId, selectedVa
         commandLock.current = false;
         if (mounted.current) setBusy(false);
       }
+    }
+  }
+
+  // Confirming an ambiguous command re-sends the STRUCTURED owned command (the
+  // same manual-control route), with the planner's own slot and the draft's
+  // current token, so a concurrent manual edit still wins with a conflict
+  // instead of being overwritten. The candidate's label is display-only.
+  async function confirmCandidate(candidate: { vaultItemId: string; label: string; slot: StudioSlot | null }) {
+    if (!activeSession || busy) return;
+    const sessionId = activeSession.sessionId;
+    setBusy(true);
+    setNotice(null);
+    try {
+      const state = await studioApi.addItem(
+        sessionId,
+        candidate.vaultItemId,
+        candidate.slot ?? itemInfo[candidate.vaultItemId]?.slot ?? 'ACCESSORY',
+        activeSession.updatedAt,
+      );
+      if (!mounted.current) return;
+      if (state.sessionId !== sessionId) throw new Error('Studio session mismatch');
+      setStudioState(state);
+      setCandidates([]);
+      setCommand('');
+    } catch {
+      if (mounted.current) setNotice('Could not add that garment. Pick it from your Vault instead.');
+    } finally {
+      if (mounted.current) setBusy(false);
     }
   }
 
@@ -338,6 +411,14 @@ export default function StudioScreen({ studioSessionId, sourceLookId, selectedVa
         <>
           <TextInput accessibilityLabel="Natural-language command" accessibilityState={{ disabled: !activeSession || busy }} editable={Boolean(activeSession) && !busy} multiline onChangeText={setCommand} placeholder="Describe an outfit change" style={styles.input} value={command} />
           <Action label="Apply command" onPress={applyCommand} disabled={!activeSession || command.trim().length === 0 || busy} />
+          {candidates.length > 0 ? (
+            <View testID="studio-candidates" style={styles.slotItems}>
+              <Text style={styles.slotLabel}>Which garment did you mean?</Text>
+              {candidates.map(candidate => (
+                <Action key={candidate.vaultItemId} label={candidate.label} onPress={() => confirmCandidate(candidate)} disabled={busy} />
+              ))}
+            </View>
+          ) : null}
         </>
       ) : null}
       {notice ? <Text accessibilityLiveRegion="polite" testID="studio-notice">{notice}</Text> : null}

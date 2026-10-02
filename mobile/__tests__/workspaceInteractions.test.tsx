@@ -20,7 +20,19 @@ jest.mock('../src/features/vault/vaultApi', () => ({
     }),
   },
 }));
-jest.mock('../src/features/collections/collectionsApi', () => ({ collectionsApi: { list: jest.fn() } }));
+jest.mock('../src/features/collections/collectionsApi', () => {
+  const stub = {
+    list: jest.fn().mockResolvedValue([]),
+    create: jest.fn(),
+    rename: jest.fn(),
+    remove: jest.fn(),
+    addItem: jest.fn(),
+    removeItem: jest.fn(),
+  };
+  // ShareImportScreen builds its own client from the same config so its picker
+  // cannot resolve a different API base URL; the factory must exist here too.
+  return { collectionsApi: stub, createCollectionsApi: () => stub };
+});
 jest.mock('../src/features/looks/looksApi', () => ({ looksApi: { list: jest.fn(), regenerate: jest.fn() } }));
 jest.mock('../src/features/studio/studioApi', () => ({ studioApi: { get: jest.fn().mockResolvedValue({ sessionId: 'session-1', itemIds: [] }), command: jest.fn() } }));
 jest.mock('../src/features/generation/generationApi', () => ({ generationApi: { get: jest.fn(), list: jest.fn().mockResolvedValue([]) }, pollGeneration: jest.requireActual('../src/features/generation/generationApi').pollGeneration, isTerminalGeneration: jest.requireActual('../src/features/generation/generationApi').isTerminalGeneration }));
@@ -161,7 +173,12 @@ test('Apply command calls the Studio client with trimmed text', async () => {
     .spyOn(featureFlags, 'isFeatureEnabled')
     .mockImplementation(name => name === 'NATURAL_LANGUAGE_STUDIO');
   try {
-    jest.mocked(studioApi.command).mockResolvedValue({ sessionId: 'session-1', itemIds: [] });
+    jest.mocked(studioApi.command).mockResolvedValue({
+      state: { sessionId: 'session-1', itemIds: [] },
+      outcome: 'APPLIED',
+      message: null,
+      candidates: [],
+    });
     await render(<StudioScreen studioSessionId="session-1" onAddFromVault={noop} onAvatar={noop} onOpenLook={noop} onProfile={noop} />);
     await fireEvent.changeText(screen.getByLabelText('Natural-language command'), '  remove the hat  ');
     await fireEvent.press(screen.getByRole('button', { name: 'Apply command' }));

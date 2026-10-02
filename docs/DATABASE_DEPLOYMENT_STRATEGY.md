@@ -62,7 +62,7 @@ CONTRACT
    - `FORBIDDEN_FILE_PREFIXES`: `U*`, `R__`, `B__`.
    - Undo migrations (`U*`), repeatable migrations (`R__`), and baseline migrations (`B__`) are strictly forbidden. History is single-track and forward-only.
 4. **Strict Contiguity**:
-   Versions must start at `001` and increment consecutively without gaps or duplicates (`V001`, `V002`, ... `V024`).
+   Versions must start at `001` and increment consecutively without gaps or duplicates (`V001`, `V002`, ... `V025`).
    - Under `outOfOrder=false`, any missing migration version is ignored during migrate execution and subsequently triggers a startup-blocking validation failure with `RESOLVED_VERSIONED_MIGRATION_NOT_APPLIED`.
 
 ---
@@ -103,13 +103,14 @@ CONTRACT
 | `V022` | `V022__generation_admission.sql` | Generation Admission Circuit |
 | `V023` | `V023__provider_performance.sql` | Provider Performance |
 | `V024` | `V024__notification_fencing_and_provider_constraints__contract.sql` | Notification Fencing & Provider Constraints |
+| `V025` | `V025__device_registration.sql` | Device Registration & Notification Preferences |
 
 ### Next Version Reservation
 
-- `RESERVED_NEXT_VERSION = 25`.
-- `V024` is claimed by `V024__notification_fencing_and_provider_constraints__contract.sql`.
-- **Next Free Migration Number**: `V025`.
-- `RESERVED_CEILING_ASSERTION`: No migration file with version $\ge 25$ may exist in the repository while the reservation is outstanding.
+- `RESERVED_NEXT_VERSION = 26`.
+- `V025` is claimed by `V025__device_registration.sql` (device-token registration lifecycle, C20).
+- **Next Free Migration Number**: `V026`.
+- `RESERVED_CEILING_ASSERTION`: No migration file with version $\ge 26$ may exist in the repository while the reservation is outstanding.
 
 ---
 
@@ -205,20 +206,20 @@ To guarantee auditability and enforce the §59 rule, all destructive database ch
 When any new migration lands in the repository, the engineer landing the change must update all four canary test families. Ceiling and list definitions must be updated to accommodate the new migration without weakening the underlying assertions:
 
 1. **`DomainArchitectureTest`**:
-   - Method: `flywayAllowsOnlyTheFrozenV024MigrationAbovePublishedV017()`
+   - Method: `flywayAllowsOnlyTheFrozenV025MigrationAbovePublishedV017()`
    - Action: Update the hard-coded migration allowlist and rename the method to the new highest allowed version.
 2. **`FlywayFoundationTest`**:
    - Methods:
-     - `flywayAppliesV001ThroughV024OnEmptyDatabase()`: Update the expected schema history size assertion (`assertThat(history).hasSize(NEW_COUNT)`).
+     - `flywayAppliesV001ThroughV025OnEmptyDatabase()`: Update the expected schema history size assertion (`assertThat(history).hasSize(NEW_COUNT)`).
      - `publishedV001ThroughV023MatchFrozenSourceChecksums()`: Verify all published migration checksums.
-     - `publishedV002ValidatesAndUpgradesToV024WithoutChecksumRepair()`: Update target upgrade version and assertions.
-     - `v012BaselineMigratesToV024WithoutDataLoss()`: Update the baseline migration target and test assertions.
+     - `publishedV002ValidatesAndUpgradesToV025WithoutChecksumRepair()`: Update target upgrade version and assertions.
+     - `v012BaselineMigratesToV025WithoutDataLoss()`: Update the baseline migration target and test assertions.
      - `reapplyingMigrationsOnSecondEmptyDatabaseMatchesChecksums()`: Ensure the new checksum is validated during replay.
 3. **`AvatarSchemaConstraintsTest`**:
-   - Method: `flywayHistoryIsExactlyVersionsOneThroughTwentyFour()`
+   - Method: `flywayHistoryIsExactlyVersionsOneThroughTwentyFive()`
    - Action: Update the schema history size assertion (`assertThat(history).hasSize(NEW_COUNT)`).
 4. **`FlywayDeploymentPolicyTest`**:
-   - Fields: `PUBLISHED_CEILING_VERSION = 23`, `RESERVED_NEXT_VERSION = 25`, `CLAIMED_V024 = V024__notification_fencing_and_provider_constraints__contract.sql`
+   - Fields: `PUBLISHED_CEILING_VERSION = 23`, `RESERVED_NEXT_VERSION = 26`, `CLAIMED_V025 = V025__device_registration.sql`
    - Action: Advance the published ceiling and claimed migration allowlist, then reserve the next unused version (bump cost is exactly the policy constants/allowlist).
 
 ---
@@ -230,7 +231,7 @@ Both this policy document and the static verification test (`FlywayDeploymentPol
 | Seam Identifier | Value / Pattern | Scope & Purpose |
 | `MIGRATION_FILE_PATTERN` | `^V(\d{3})__[a-z0-9_]+\.sql$` | Required filename regex for all migration files. |
 | `PUBLISHED_CEILING_VERSION` | `23` | Migrations `V001`..`V023` grandfathered; content rules apply only to version $> 23$. |
-| `RESERVED_NEXT_VERSION` | `25` | V024 is claimed; V025 is reserved. No migration at version 25 or above may exist until the reservation changes. |
+| `RESERVED_NEXT_VERSION` | `26` | V025 is claimed; V026 is reserved. No migration at version 26 or above may exist until the reservation changes. |
 | `FORBIDDEN_FILE_PREFIXES` | `U*`, `R__`, `B__` | Undo, repeatable, and baseline migration files are forbidden. |
 | `DESTRUCTIVE_PATTERN` | `(?i)\b(DROP\s+TABLE|DROP\s+COLUMN|DROP\s+CONSTRAINT|TRUNCATE|ALTER\s+COLUMN)` | Matches destructive DDL statements requiring contract tag. |
 | `CONCURRENT_INDEX_PATTERN` | `(?i)(CREATE|DROP)(\s+UNIQUE)?\s+INDEX\s+CONCURRENTLY` | Matches concurrent index statements requiring file isolation. |
@@ -238,5 +239,5 @@ Both this policy document and the static verification test (`FlywayDeploymentPol
 | `CONTRACT_DESCRIPTION_SUFFIX` | `__contract` | Required suffix on migrations matching `DESTRUCTIVE_PATTERN`, except the exact claimed V024 filename. |
 | `CONCURRENT_FILE_ISOLATION` | File contains only concurrent index statements | Files with `CONCURRENTLY` cannot mix other DDL/DML. |
 | `NOT_NULL_DEFAULT_RULE` | Add column NOT NULL must include DEFAULT | PostgreSQL 18 metadata-only expand requirement (new tables exempt). |
-| `RESERVED_CEILING_ASSERTION` | No migration $\ge 25$ while reserved | Protects version reservation from collision. |
+| `RESERVED_CEILING_ASSERTION` | No migration $\ge 26$ while reserved | Protects version reservation from collision. |
 | `CONFIG_DRIFT_ASSERTION` | `application.yaml` has no out-of-order or baseline | Guards Flyway defaults against configuration drift. |

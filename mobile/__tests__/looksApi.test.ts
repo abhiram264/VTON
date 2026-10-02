@@ -121,4 +121,27 @@ describe('looksApi detail and delete', () => {
     const api = createLooksApi({ baseUrl: BASE_URL, getAccessToken: () => TOKEN });
     await expect(api.remove(LOOK_ID)).rejects.toThrow('UNAUTHORIZED_OR_NOT_FOUND');
   });
+
+  // C22 "Look exported": the export acknowledgement posts to the mounted ack route.
+  test('ackExport posts to the mounted export-ack route and accepts the empty 204 body', async () => {
+    fetchMock.mockImplementation(input => {
+      expect(requestUrl(input)).toBe(`${BASE_URL}/looks/${LOOK_ID}/export-ack`);
+      return noContentResponse();
+    });
+
+    const api = createLooksApi({ baseUrl: BASE_URL, getAccessToken: () => TOKEN });
+    await expect(api.ackExport(LOOK_ID)).resolves.toBeUndefined();
+
+    const [, init] = fetchMock.mock.calls[0];
+    expect(init?.method).toBe('POST');
+  });
+
+  test('an ack the server refuses rejects so the caller can stay fire-and-forget', async () => {
+    fetchMock.mockImplementation(() =>
+      jsonResponse(404, { code: 'UNAUTHORIZED_OR_NOT_FOUND' }),
+    );
+
+    const api = createLooksApi({ baseUrl: BASE_URL, getAccessToken: () => TOKEN });
+    await expect(api.ackExport(LOOK_ID)).rejects.toThrow('UNAUTHORIZED_OR_NOT_FOUND');
+  });
 });

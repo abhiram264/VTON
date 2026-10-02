@@ -50,6 +50,7 @@ public class GenerationsController {
 		ObjectProvider<ProviderRegistry> providerRegistries,
 		ObjectProvider<GenerationMetrics> generationMetrics,
 		ObjectProvider<AdmissionCapsProperties> admissionCaps,
+		ObjectProvider<com.aifashionvault.analytics.ProductMetrics> productMetrics,
 		GenerationApiProperties properties,
 		AppIntegrityVerifier verifier
 	) {
@@ -72,7 +73,8 @@ public class GenerationsController {
 		this.service = new GenerationCreationService(
 			store, new JdbcTemplate(dataSource), properties, Clock.systemUTC(),
 			mediaStore, new JdbcGenerationRateLimiter(dataSource, Clock.systemUTC()),
-			generationMetrics.getIfAvailable(), providerAvailable(providerRegistries));
+			generationMetrics.getIfAvailable(), providerAvailable(providerRegistries),
+			productMetrics.getIfAvailable());
 	}
 
 	/**

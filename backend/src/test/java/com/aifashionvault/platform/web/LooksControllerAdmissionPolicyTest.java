@@ -140,6 +140,40 @@ class LooksControllerAdmissionPolicyTest {
 		verify(fixture.generations).createAccepted(any());
 	}
 
+	/**
+	 * C19 acceptance: a server-side global pause blocks NEW admission while history
+	 * and deletion remain usable. The tests above prove the blocking half; this proves
+	 * the other half — a paused server must still let an owner read their existing Looks
+	 * and delete them, otherwise the pause would strand a user's data.
+	 */
+	@Test
+	void pausedServerStillServesHistoryAndDeletion() {
+		Fixture fixture = new Fixture(true, true);
+		when(fixture.looks.listForUser(OWNER)).thenReturn(List.of(look()));
+		when(fixture.looks.findByIdForUser(LOOK_ID, OWNER)).thenReturn(Optional.of(look()));
+		when(fixture.looks.findByIdForCleanup(LOOK_ID, OWNER)).thenReturn(Optional.of(look()));
+		when(fixture.looks.logicallyDeleteForUser(LOOK_ID, OWNER)).thenReturn(true);
+		when(fixture.objects.presignGet(any(), any())).thenReturn(new com.aifashionvault.platform.objectstore.PresignedAccess(
+			new com.aifashionvault.platform.objectstore.ObjectRef(
+				com.aifashionvault.shared.StorageDomain.LOOK, KEY.value()),
+			"GET",
+			java.net.URI.create("https://objects.invalid/look.jpg"),
+			java.util.Map.of(),
+			NOW.plusSeconds(300)));
+
+		// History: the list and the single-Look read both still work while paused.
+		assertThat(fixture.controller.list(OWNER)).hasSize(1);
+		assertThat(fixture.controller.get(OWNER, LOOK_ID.value().toString()).id())
+			.isEqualTo(LOOK_ID.value());
+
+		// Deletion: the owner can still remove their Look while paused.
+		fixture.controller.delete(OWNER, LOOK_ID.value().toString());
+		verify(fixture.looks).logicallyDeleteForUser(LOOK_ID, OWNER);
+
+		// And none of that created a chargeable job.
+		verify(fixture.generations, never()).createAccepted(any());
+	}
+
 	private static LooksController.AdmissionRejected catchAdmissionRejected(LooksController controller) {
 		try {
 			controller.regenerate(OWNER, LOOK_ID.value().toString(), "replay-key");

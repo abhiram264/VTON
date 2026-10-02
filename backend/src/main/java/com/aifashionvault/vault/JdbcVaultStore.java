@@ -29,10 +29,13 @@ import com.aifashionvault.vault.VaultContracts.Patch;
 
 public final class JdbcVaultStore {
 	private static final ObjectMapper JSON = new ObjectMapper();
-	private static final String COLUMNS = "v.id, v.user_id, v.storage_key, v.source_reference_id, v.name, v.brand, v.category, v.subcategory, v.color, v.pattern, v.attributes::text attributes, v.created_at";
+	private static final String COLUMNS = "v.id, v.user_id, v.storage_key, v.source_reference_id, "
+		+ "(SELECT s.url FROM source_reference s WHERE s.id = v.source_reference_id) source_url, "
+		+ "v.name, v.brand, v.category, v.subcategory, v.color, v.pattern, v.attributes::text attributes, v.created_at";
 	private static final RowMapper<VaultItem> MAPPER = (rs, row) -> new VaultItem(
 		new VaultItemId(rs.getObject("id", UUID.class)), new UserId(rs.getObject("user_id", UUID.class)),
 		new StorageKey(rs.getString("storage_key")), sourceId(rs.getObject("source_reference_id", UUID.class)),
+		rs.getString("source_url"),
 		rs.getString("name"), rs.getString("brand"), category(rs.getString("category")), rs.getString("subcategory"),
 		rs.getString("color"), rs.getString("pattern"), json(rs.getString("attributes")), rs.getTimestamp("created_at").toInstant());
 

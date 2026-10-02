@@ -1,5 +1,6 @@
 package com.aifashionvault.featureflag;
 
+import java.util.List;
 import java.util.Map;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -42,13 +43,21 @@ class FeatureFlagServiceTest {
 			FeatureFlagName.NEW_QUALITY_GATE
 		);
 
+		// Every literal is covered: MULTI_ITEM (C12) and NATURAL_LANGUAGE_STUDIO
+		// (C21) have mounted backing paths, so they are supported but ship OFF;
+		// unsupported capabilities always report disabled whatever the config says.
 		for (FeatureFlagName name : FeatureFlagName.values()) {
 			boolean expectedSupported =
-				name == FeatureFlagName.TRYON_MAX
+				name == FeatureFlagName.MULTI_ITEM
+					|| name == FeatureFlagName.NATURAL_LANGUAGE_STUDIO
+					|| name == FeatureFlagName.TRYON_MAX
 					|| name == FeatureFlagName.SHARE_IMPORT_ANDROID
 					|| name == FeatureFlagName.SHARE_IMPORT_IOS;
 			assertThat(name.isSupported()).isEqualTo(expectedSupported);
-			assertThat(this.service.isEnabled(name)).isEqualTo(expectedSupported);
+			// Supported reports its bound value; the two new capabilities ship
+			// default-OFF, which is what keeps them out of a release.
+			assertThat(this.service.isEnabled(name))
+				.isEqualTo(expectedSupported && this.properties.isEnabled(name));
 		}
 	}
 
@@ -136,17 +145,19 @@ class FeatureFlagServiceTest {
 
 	// C22: the fail-closed authority refuses to enable an unsupported capability at
 	// the API boundary (override / binding surface) rather than silently accepting it.
+	// HD_GENERATION and NEW_QUALITY_GATE are the stable unsupported exemplars;
+	// NATURAL_LANGUAGE_STUDIO is owned by the C21 change and intentionally not pinned.
 	@Test
 	void enablingAnUnsupportedCapabilityIsRefusedAtTheApiBoundary() {
-		assertThatThrownBy(() -> this.service.override(FeatureFlagName.MULTI_ITEM, true))
-			.isInstanceOf(UnsupportedOperationException.class);
 		assertThatThrownBy(() -> this.service.override(FeatureFlagName.HD_GENERATION, true))
 			.isInstanceOf(UnsupportedOperationException.class);
-		assertThatThrownBy(() -> this.properties.setEnabled(FeatureFlagName.MULTI_ITEM, true))
+		assertThatThrownBy(() -> this.service.override(FeatureFlagName.NEW_QUALITY_GATE, true))
+			.isInstanceOf(UnsupportedOperationException.class);
+		assertThatThrownBy(() -> this.properties.setEnabled(FeatureFlagName.HD_GENERATION, true))
 			.isInstanceOf(UnsupportedOperationException.class);
 
 		// Disabling an unsupported capability is always allowed and stays off.
-		this.service.override(FeatureFlagName.MULTI_ITEM, false);
-		assertThat(this.service.isEnabled(FeatureFlagName.MULTI_ITEM)).isFalse();
+		this.service.override(FeatureFlagName.HD_GENERATION, false);
+		assertThat(this.service.isEnabled(FeatureFlagName.HD_GENERATION)).isFalse();
 	}
 }

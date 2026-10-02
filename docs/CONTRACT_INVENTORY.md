@@ -502,3 +502,117 @@ existing `GET /share/imports/{importId}` status route; the status body
 | No capability | media seam cannot mint a signed read → `503 DEPENDENCY_UNAVAILABLE` (never a fabricated preview) |
 
 The route is additive: a client that ignores it keeps the current status-only behavior.
+
+### 9.3 DTO change — vault item read carries `sourceUrl` (C16 item 5)
+
+**Status: MOUNTED at integration `91cbb6b` (worker-06).** Additive, nullable field on the
+existing owner-scoped vault item representation; recorded here because it changes a shared
+DTO that the mobile client parses.
+
+| Aspect | Contract |
+|---|---|
+| Field | `sourceUrl`, type `string \| null`, on `VaultItemResponse` |
+| Where | BOTH `GET /vault/items` (list) and `GET /vault/items/{id}` (detail) — one response mapper serves both |
+| Value | `source_reference.url` verbatim: the retailer product URL captured at import. **Untrusted**; the client must route it through its http/https-only external-navigation helper rather than handing it to the OS directly |
+| Nullability | `null` for a photo-created item that has no source, so the field is null rather than absent |
+| Not exposed | `raw_metadata` stays server-side. `sourceReferenceId` is unchanged (still the opaque id) |
+| Ownership | unchanged: foreign/unknown/malformed id → `404 VAULT_ITEM_NOT_FOUND` (opaque), so no other owner's URL is ever disclosed |
+
+Consumers that ignore the field are unaffected. Two shape oracles were updated deliberately,
+not weakened: `VaultControllerTest`'s strict `containsExactly(...)` property list now includes
+`sourceUrl` and additionally forbids `rawMetadata`/`raw_metadata`/`x-amz-`; `VaultItemTest`'s
+record-component name and type lists include `sourceUrl:String`.
+
+This is what makes the guide's "original product source links with safe external navigation"
+reachable: `source_reference.url` was already persisted by the import confirm path
+(`JdbcShareImportStore`), but the read exposed only the opaque `sourceReferenceId`, so the
+merged mobile `openSourceLink` had no data source.
+
+## 10. C20 device-token contract — 2026-10-03 (frozen, EXECUTED)
+
+Frozen DTO seam for device-token registration and preferences (guide §5.3). All routes are
+under `/me` and require a bearer credential; the owner is the authenticated principal and is
+never taken from the body. Implemented in `DeviceRegistrationController` /
+`JdbcDeviceRegistrationStore` over migration `V025__device_registration.sql`.
+
+| Method | Route | Request | Response | Notes |
+|---|---|---|---|---|
+| POST | `/me/devices` | `{deviceToken: string(1..4096, trimmed), platform: "ANDROID"\|"IOS"}` | `200 {id, deviceToken, platform, createdAt, updatedAt, lastSeenAt}` | Idempotent upsert keyed on `deviceToken` (globally unique). Re-registering the same token from a second account **moves** it to that account. |
+| GET | `/me/devices` | — | `200 [DeviceResponse]` | Caller-scoped only. |
+| DELETE | `/me/devices` | `{deviceToken}` | `204` always | Non-disclosing: deletes only when the caller owns the token; another account's delete is a no-op and indistinguishable. |
+| GET | `/me/notification-preferences` | — | `200 {pushEnabled, updatedAt\|null}` | Absent row means `pushEnabled: true`. |
+| PUT | `/me/notification-preferences` | `{pushEnabled: boolean}` | `200 {pushEnabled, updatedAt}` | Owner-scoped upsert. |
+
+Errors: `400 {"code":"INVALID_DEVICE_REGISTRATION"}` for an unsupported `platform`, a blank
+or oversized `deviceToken`, a non-boolean `pushEnabled`, or an unreadable body. Unauthenticated
+requests are `401` like every other route.
+
+Pruning: `FcmSendResult.unregistered()` reports HTTP 404 from FCM HTTP v1, and
+`FcmDeliveryWorker` invokes the token pruner (`DeviceRegistrationStore::prune`) before marking
+the delivery terminally failed, so a dead token is not retried ten times. Physical push
+delivery is **EXTERNALLY-DEPENDENT** (no FCM credentials/device in this run); the lifecycle
+above is **EXECUTED** by `DeviceRegistrationApiTest` (7 HTTP cases, real Postgres).
+
+Known gap (SOURCE-CONFIRMED): `FcmDeliveryWorker.enqueue` has no production caller, so no
+generation completion currently creates a notification event. Delivery remains unmounted
+until a generation-publication owner wires it.
+
+## 11. C06 consent contract — 2026-10-03 (frozen, EXECUTED)
+
+Frozen DTO seam for the body-image-processing and third-party-AI-transfer consents (guide
+§5.3). Implemented in `platform/web/ConsentsController` over the existing `V006`-era `consent`
+table (migration `V010__create_consents.sql` — no new migration). The mobile client
+(`mobile/src/features/consent/consentApi.ts`) was written against this shape and agrees with
+it field for field.
+
+Every route is authenticated; the owner is the authenticated principal and never appears in a
+body or path, so consent is always scoped to the caller. **Both supported purposes are always
+enumerated**, so a client never has to tell "absent" apart from "not granted".
+
+Purpose literals are the **snake_case stored values**, not the enum names:
+
+| Enum | Wire literal |
+|---|---|
+| `ConsentPurpose.BODY_IMAGE_PROCESSING` | `body_image_processing` |
+| `ConsentPurpose.THIRD_PARTY_AI_TRANSFER` | `third_party_ai_transfer` |
+
+| Method | Route | Request | Response |
+|---|---|---|---|
+| GET | `/consents` | — | `200 {policyVersion, purposes:[ConsentState]}` |
+| POST | `/consents/{purpose}` | no body (the **server** picks the policy version) | `200 ConsentState` |
+| DELETE | `/consents/{purpose}` | — | `200 ConsentState` (idempotent) |
+
+`ConsentState` — every field always present (nulls included), so a client can parse strictly:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `purpose` | string | one of the two literals above |
+| `active` | boolean | whether the owner currently holds this consent |
+| `version` | string \| null | policy version the **active** grant was recorded under; null when `active` is false |
+| `grantedAt` | ISO-8601 UTC \| null | grant time of the active consent; null when `active` is false |
+| `policyVersion` | string | the version the server would record for a **new** grant, so `version != policyVersion` tells the client an active grant predates the current policy |
+
+Semantics:
+
+- `active` is answered by `ConsentService.isActive` — the same primitive the server-side
+  provider-transfer gate consults — so this surface can never report a purpose as granted
+  while the enforcement gate would refuse it.
+- A repeated `POST` for the same purpose is idempotent: one active record, same state.
+- `DELETE` is idempotent: repeating it stays `200` with `active:false`, never `404`. The
+  withdrawn record is kept (evidence), only `revoked_at` is set.
+- The recorded policy version comes from `vault.privacy.consent-policy-version`
+  (default `2026-10-03`), so publishing a new consent text is a visible deployment change
+  rather than a code edit.
+
+Errors: `400 {"code":"CONSENT_PURPOSE_UNKNOWN"}` for a purpose outside the two literals;
+`503 {"code":"CONSENT_UNAVAILABLE"}` when the server has no consent store configured — an
+unanswerable question is **never** answered "granted". Unauthenticated requests are `401`
+like every other route.
+
+Enforcement (EXECUTED): `PrivacyApprovedInputTransfer.prepare(..., owner)` checks the
+owner's active `third_party_ai_transfer` consent **before** the object is read or a signed
+read is minted, so a withdrawal stops the next transfer rather than the next upload. A job
+without consent fails terminally with `TerminalReason.CONSENT_REQUIRED` and publishes no Look.
+`GenerationProcessorConfiguration` builds the transfer component only when **both** an
+`ObjectStore` and a `ConsentService` are present, so a deployment missing the consent service
+builds no generation processor at all (fail closed) instead of transferring unchecked.

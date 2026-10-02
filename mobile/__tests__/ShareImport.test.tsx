@@ -637,9 +637,23 @@ describe('ShareImportScreen flow', () => {
   });
 
   test('choosing a collection sends exactly that one collectionId, and a second choice replaces it', async () => {
+    // The picker parses the real CollectionsController representation, so the
+    // fixture carries the fields the route actually returns.
     const collections = [
-      {id: 'col-1', name: 'Work', items: []},
-      {id: 'col-2', name: 'Weekend', items: []},
+      {
+        id: 'col-1',
+        name: 'Work',
+        createdAt: '2026-09-01T00:00:00Z',
+        updatedAt: '2026-09-01T00:00:00Z',
+        items: [],
+      },
+      {
+        id: 'col-2',
+        name: 'Weekend',
+        createdAt: '2026-09-01T00:00:00Z',
+        updatedAt: '2026-09-01T00:00:00Z',
+        items: [],
+      },
     ];
     fetchMock.mockImplementation((input: RequestInfo | URL) => {
       const url = requestUrl(input);
