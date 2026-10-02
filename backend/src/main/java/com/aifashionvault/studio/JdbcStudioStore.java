@@ -33,6 +33,13 @@ import com.aifashionvault.shared.VaultItemId;
  * profile or vault item that belongs to another user is refused before any row is
  * mutated. Slot-conflict and duplicate-garment rules are already enforced by the
  * {@link StudioSession} value type, so a conflicting draft cannot reach this store.</p>
+ *
+ * <p><b>Canonical item order.</b> {@code studio_item} has no global ordering column
+ * (its unique key is {@code (studio_session_id, slot, position)}, so {@code position} is
+ * a position <em>within a slot</em>). Reads therefore return items in the deterministic
+ * canonical order {@code slot ASC, position ASC, id ASC}, which is <em>not</em>
+ * necessarily the caller's insertion order. Callers that need a specific slot sequence
+ * must order by slot themselves rather than relying on the persisted list order.</p>
  */
 public final class JdbcStudioStore {
 
