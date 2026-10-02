@@ -13,7 +13,6 @@ import {
   purposeState,
 } from './consentApi';
 import type { ConsentSnapshot, ConsentState } from './consentApi';
-import { ApiProblemError } from '../my-model/http';
 
 const BASE_URL = 'https://api.test';
 const POLICY = '2026-10-03';

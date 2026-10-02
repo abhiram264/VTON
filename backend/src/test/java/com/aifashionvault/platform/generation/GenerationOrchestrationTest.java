@@ -163,6 +163,7 @@ class GenerationOrchestrationTest {
 	private TestCostCircuitBreaker costCircuitBreaker;
 	private RecordingCapacityLeaseStore capacityStore;
 	private TestProviderHealthGate providerHealthGate;
+	private RecordingProductMetrics productMetrics;
 
 	@BeforeEach
 	void setUp() {
@@ -180,6 +181,7 @@ class GenerationOrchestrationTest {
 		provider = new RecordingVtonProvider();
 		costCircuitBreaker = new TestCostCircuitBreaker();
 		providerHealthGate = new TestProviderHealthGate();
+		productMetrics = new RecordingProductMetrics();
 		processor = processor(provider);
 		lease = new GenerationWorkLease(JOB_ID.value(), "receipt-1");
 	}
@@ -201,6 +203,71 @@ class GenerationOrchestrationTest {
 		assertThat(operations).containsSubsequence("LOOK_INSERTED", "LOOK_READY");
 		assertThat(queue.deleted()).containsExactly(lease);
 		assertThat(generationStore.findJob(JOB_ID).orElseThrow().completedAt()).isEqualTo(NOW);
+	}
+
+	/**
+	 * C22: a terminal completion records a product lifecycle event through the
+	 * existing ProductMetrics seam, carrying only coarse context (no bytes, prompts,
+	 * tokens or signed URLs).
+	 */
+	@Test
+	void terminalCompletionRecordsAProductLifecycleEvent() {
+		generationStore.insertJob(queuedJob());
+
+		processor.process(lease);
+
+		assertThat(productMetrics.names())
+			.containsExactly(com.aifashionvault.analytics.AnalyticsEventName.GENERATION_COMPLETED);
+		com.aifashionvault.analytics.ProductMetricContext context = productMetrics.contexts().getFirst();
+		assertThat(context.occurredAt()).isEqualTo(NOW);
+		assertThat(context.outcome()).isEqualTo("generation_completed");
+		assertThat(context.itemCount()).isEqualTo(1L);
+		assertThat(context.provider()).isEqualTo(provider.providerKey().value());
+		assertThat(context.cost()).isNotNull();
+	}
+
+	/**
+	 * C22: a terminal failure records the failure lifecycle event instead, so event
+	 * counts reflect saved outcomes rather than button taps.
+	 */
+	@Test
+	void terminalFailureRecordsTheFailureLifecycleEvent() {
+		generationStore.insertJob(queuedJob());
+		provider.submitResult(new com.aifashionvault.generation.vton.GenerationSubmission.Rejected(
+			new com.aifashionvault.generation.vton.ProviderFailure(
+				com.aifashionvault.generation.vton.ProviderFailureCategory.INVALID_REQUEST,
+				false,
+				"TEST_TERMINAL_REJECTION")));
+
+		processor.process(lease);
+
+		assertThat(productMetrics.names())
+			.containsExactly(com.aifashionvault.analytics.AnalyticsEventName.GENERATION_FAILED);
+		assertThat(productMetrics.contexts().getFirst().outcome()).isEqualTo("generation_failed");
+	}
+
+	/** Captures the lifecycle events the processor emits, without any registry. */
+	private static final class RecordingProductMetrics implements com.aifashionvault.analytics.ProductMetrics {
+		private final List<com.aifashionvault.analytics.AnalyticsEventName> names = new CopyOnWriteArrayList<>();
+		private final List<com.aifashionvault.analytics.ProductMetricContext> contexts =
+			new CopyOnWriteArrayList<>();
+
+		@Override
+		public void record(
+			com.aifashionvault.analytics.AnalyticsEventName eventName,
+			com.aifashionvault.analytics.ProductMetricContext context
+		) {
+			names.add(eventName);
+			contexts.add(context);
+		}
+
+		List<com.aifashionvault.analytics.AnalyticsEventName> names() {
+			return List.copyOf(names);
+		}
+
+		List<com.aifashionvault.analytics.ProductMetricContext> contexts() {
+			return List.copyOf(contexts);
+		}
 	}
 
 	@Test
@@ -2478,7 +2545,8 @@ class GenerationOrchestrationTest {
 			null,
 			() -> 0.0,
 			costCircuitBreaker,
-			providerHealthGate);
+			providerHealthGate,
+			productMetrics);
 	}
 
 	private GenerationWorkProcessor processor(

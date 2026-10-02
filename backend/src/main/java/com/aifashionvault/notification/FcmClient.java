@@ -235,6 +235,11 @@ public final class FcmClient {
 		String providerMessageId
 	) {
 
+		/** FCM HTTP v1 reports an unregistered/expired device token as 404. */
+		public boolean unregistered() {
+			return !accepted && statusCode == 404;
+		}
+
 		static FcmSendResult accepted(int statusCode, String providerMessageId) {
 			return new FcmSendResult(statusCode, true, false, null, providerMessageId);
 		}
