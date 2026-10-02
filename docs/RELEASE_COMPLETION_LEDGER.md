@@ -411,3 +411,41 @@ only re-ran the suites as a second pair of eyes.
 **Limit:** this is code-level proof. The end-to-end "withdrawn consent blocks a real
 provider transfer" cannot be exercised without the image-provider key, which this run
 forbids.
+
+### 13.5 Correction — the §4 C20 "nothing enqueues a notification event" claim is stale
+
+§4's C20 row states that `FcmDeliveryWorker.enqueue` has **no production caller**, so
+"nothing enqueues a notification event". That is not the shape of the production path, and
+the gap as described does not exist at this head.
+
+SOURCE-CONFIRMED: the enqueue path is not `FcmDeliveryWorker.enqueue` (a convenience
+overload) but the generation processor's own fan-out:
+
+- `GenerationWorkProcessor.insertNotificationEvent(...)` is called on the real terminal
+  transitions (`GenerationWorkProcessor.java:2434` `NotificationEvent.lookReady`,
+  `:2454` `NotificationEvent.generationFailed`).
+- It inserts the durable event and then calls `addressRegisteredDevices(...)`, which
+  honours the owner's push preference and creates one claimable delivery row per
+  registered device via the idempotent `ensureDelivery(event.id(), deviceToken)`
+  (`:2978-3006`).
+- `NotificationConfiguration.FcmDeliveryScheduler.poll` is `@Scheduled` on
+  `vault.notification.poll-delay` and calls `worker.processNext(...)` (`:205-216`), which
+  claims due deliveries via `store.claimDue(now)`.
+
+EXECUTED (this host, worktree at the current integration tip, exit 0):
+
+- `NotificationDeliveryFanOutTest` 5/5 — including
+  `readyEventAddressesEveryRegisteredDeviceAndBecomesClaimable`, which asserts both
+  registered device tokens get a delivery row **and** that `eventStore.claimDue(NOW)` is
+  present ("a delivery row is what makes it sendable"), plus `noRegisteredDeviceCreatesNoDelivery`
+  and `pushDisabledOwnerReceivesNoDelivery`.
+- `FcmDeliveryTest` 20/20, `NotificationTest` 21/21, `NotificationConfigurationTest` 7/7.
+  53 tests, 0 failures, 0 errors.
+
+What genuinely remains for C20 is the external half only, and it is unchanged by this
+correction: real FCM/APNs **credentials and a push provider**, and physical delivery proof.
+That is EXTERNALLY-DEPENDENT (no Firebase project supplied for this run), which is exactly
+how the guide classifies it. The in-repo lifecycle — registration, preferences, event
+creation, per-device fan-out, scheduled claim/retry/terminal marking — is EXECUTED.
+
+Recorded here rather than edited into §4 so the dated row is preserved.
