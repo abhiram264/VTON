@@ -543,34 +543,81 @@ describe('ShareImportScreen flow', () => {
     );
   }
 
-  test('READY carries the importId into the confirm action and reuses the same import', async () => {
+  test('READY saves through POST /share/imports/{id}/confirm and never claims saved before persistence', async () => {
+    const confirmed = {
+      id: 'vault-item-1',
+      sourceReferenceId: 'source-ref-1',
+      createdAt: '2026-10-03T00:00:00Z',
+    };
     fetchMock
       .mockResolvedValueOnce(jsonResponse(201, ready()))
-      .mockResolvedValueOnce(jsonResponse(201, ready()));
+      .mockResolvedValueOnce(jsonResponse(201, confirmed));
     const view = await render(
       <ShareImportScreen payload={{ kind: 'url', url: SOURCE_URL }} api={api()} />,
     );
     expect(await view.findByText('Shared item ready')).toBeTruthy();
 
-    // The resolved importId must reach the confirm affordance: pre-fix the
-    // READY branch dropped it, so no forward action existed at all.
-    const confirm = await view.findByText('Confirm Item');
+    const save = await view.findByText('Save to Vault');
     await act(async () => {
-      fireEvent.press(confirm);
+      fireEvent.press(save);
     });
-    // Honest copy: no confirm route is mounted, so the affordance must not
-    // claim the item was saved or kept.
-    expect(await view.findByText('Item is ready. Saving it to your Vault is not available yet.')).toBeTruthy();
-    // One share creates at most one import: the confirm replays the same
-    // idempotency key, so the second POST is bound to the SAME importId.
+
+    // Persistence goes through the mounted confirm route, bound to the
+    // resolved importId — never by replaying resolution.
+    const confirmPosts = fetchMock.mock.calls.filter(call =>
+      requestUrl(call[0]).endsWith(`/share/imports/${IMPORT_ID}/confirm`),
+    );
+    expect(confirmPosts).toHaveLength(1);
+    expect(confirmPosts[0][1].method).toBe('POST');
+    // Only the persisted confirm response may present the saved state.
+    expect(await view.findByText('Saved to your Vault')).toBeTruthy();
+    // One share still creates at most one import: the save path never POSTs
+    // /share/imports again.
     const importPosts = fetchMock.mock.calls.filter(call =>
       requestUrl(call[0]).endsWith('/share/imports'),
     );
-    expect(importPosts).toHaveLength(2);
-    expect(importPosts[1][1].headers['Idempotency-Key']).toBe(
-      importPosts[0][1].headers['Idempotency-Key'],
-    );
+    expect(importPosts).toHaveLength(1);
     expect(view.queryByText(/https?:\/\//)).toBeNull();
+  });
+
+  test('a transient confirm failure keeps READY and a retry converges on one saved item', async () => {
+    const confirmed = {id: 'vault-item-1', sourceReferenceId: 'source-ref-1'};
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(201, ready()))
+      .mockRejectedValueOnce(new Error('network down'))
+      .mockResolvedValueOnce(jsonResponse(201, confirmed));
+    const view = await render(
+      <ShareImportScreen payload={{ kind: 'url', url: SOURCE_URL }} api={api()} />,
+    );
+    expect(await view.findByText('Shared item ready')).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.press(await view.findByText('Save to Vault'));
+    });
+    // A failed confirm must not claim the item was kept.
+    expect(await view.findByText('Could not save this item to your Vault. Try again.')).toBeTruthy();
+    expect(view.queryByText('Saved to your Vault')).toBeNull();
+
+    await act(async () => {
+      fireEvent.press(await view.findByText('Save to Vault'));
+    });
+    expect(await view.findByText('Saved to your Vault')).toBeTruthy();
+
+    // Both attempts targeted the SAME importId: the server derives saved-item
+    // identity from (owner, import), so a lost-response retry cannot create a
+    // second item — and no new import was created either.
+    const confirmPaths = fetchMock.mock.calls
+      .map(call => requestUrl(call[0]))
+      .filter(url => url.includes('/confirm'));
+    expect(confirmPaths).toEqual([
+      `${BASE_URL}/share/imports/${IMPORT_ID}/confirm`,
+      `${BASE_URL}/share/imports/${IMPORT_ID}/confirm`,
+    ]);
+    expect(
+      fetchMock.mock.calls.filter(call =>
+        requestUrl(call[0]).endsWith('/share/imports'),
+      ),
+    ).toHaveLength(1);
   });
 
   test('URL payload renders READY with the exact URL request mapping', async () => {

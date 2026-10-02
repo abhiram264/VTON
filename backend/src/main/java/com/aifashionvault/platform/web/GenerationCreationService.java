@@ -57,6 +57,13 @@ public class GenerationCreationService {
 	static final int MAX_MULTI_ITEMS = 64;
 	static final String DEFAULT_MULTI_MODE = "standard";
 
+	/**
+	 * Upper bound on the recovery list. The bound is a response-size guard, not a
+	 * quota: it keeps one owner's history from growing a single response without
+	 * limit. Recovery only needs the most recent window.
+	 */
+	static final int MAX_RECENT_GENERATIONS = 50;
+
     private final GenerationStore store;
     private final JdbcTemplate jdbc;
     private final GenerationApiProperties properties;
@@ -365,6 +372,28 @@ public class GenerationCreationService {
 	}
 
 	public GenerationResponse get(UserId userId, String generationId) { return toResponse(requireOwnedJob(userId, generationId)); }
+
+	/**
+	 * Recent generations for one owner, newest first and bounded.
+	 *
+	 * <p>This is the server-backed recovery surface the client needs: after a
+	 * process restart the app must rebuild its in-flight/recent state from the
+	 * server, not from a process-local variable that died with the process.
+	 * Owner scoping comes from the store query, so a caller can only ever see
+	 * its own rows.</p>
+	 */
+	public List<GenerationResponse> list(UserId userId) {
+		if (userId == null) {
+			throw problem(HttpStatus.UNAUTHORIZED, NOT_FOUND);
+		}
+		List<GenerationJob> jobs = store.listJobsByUser(userId);
+		int from = Math.max(0, jobs.size() - MAX_RECENT_GENERATIONS);
+		List<GenerationResponse> recent = new java.util.ArrayList<>(jobs.size() - from);
+		for (int index = jobs.size() - 1; index >= from; index--) {
+			recent.add(toResponse(jobs.get(index)));
+		}
+		return List.copyOf(recent);
+	}
 
 	public GenerationResponse cancel(UserId userId, String generationId) {
 		GenerationJob job = requireOwnedJob(userId, generationId);
