@@ -11,6 +11,7 @@ import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
 
 import com.aifashionvault.platform.environment.ConditionalOnNonBlankApiKey;
+import com.aifashionvault.platform.objectstore.GenerationMediaStore;
 import com.aifashionvault.platform.objectstore.ObjectStore;
 
 /**
@@ -53,9 +54,10 @@ public class InferHubConfig {
     InferHubVtonProvider inferHubVtonProvider(
         InferHubMapper inferHubMapper,
         InferHubClient inferHubClient,
-        ObjectStore objectStore
+        ObjectStore objectStore,
+        GenerationMediaStore generationMediaStore
     ) {
-        return new InferHubVtonProvider(inferHubMapper, inferHubClient, objectStore);
+        return new InferHubVtonProvider(inferHubMapper, inferHubClient, objectStore, generationMediaStore);
     }
 
     static RestClient.Builder inferHubRestClientBuilder(String apiKey) {

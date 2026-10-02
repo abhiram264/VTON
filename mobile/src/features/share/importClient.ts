@@ -13,6 +13,8 @@ import type {
   ShareImportConfirmCorrections,
   ShareImportConfirmedItem,
   ShareImportConfirmer,
+  ShareImportPreview,
+  ShareImportPreviewLoader,
   ShareImportRequest,
   ShareImportResolver,
   ShareImportResponse,
@@ -289,12 +291,15 @@ export function createShareImportConfirmer(
     if (signal.aborted) {
       throw new Error('Aborted');
     }
-    // Only fields the caller actually supplied are sent: an omitted correction
-    // must stay omitted so the server keeps its own value rather than being
-    // handed an explicit null it would have to interpret.
+    // Only send the keys the owner actually corrected: an absent body and an
+    // empty body both mean "confirm with the resolved metadata".
     const body: Record<string, string> = {};
-    if (corrections?.name !== undefined) body.name = corrections.name;
-    if (corrections?.category !== undefined) body.category = corrections.category;
+    if (corrections?.name !== undefined) {
+      body.name = corrections.name;
+    }
+    if (corrections?.category !== undefined) {
+      body.category = corrections.category;
+    }
     if (corrections?.collectionId !== undefined) {
       body.collectionId = corrections.collectionId;
     }
@@ -318,6 +323,65 @@ export function createShareImportConfirmer(
       sourceReferenceId: payload.sourceReferenceId,
       createdAt:
         typeof payload.createdAt === 'string' ? payload.createdAt : undefined,
+    };
+  };
+}
+
+function isPreview(value: unknown): value is ShareImportPreview {
+  if (value === null || typeof value !== 'object') {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.importId === 'string' &&
+    typeof record.previewUrl === 'string' &&
+    record.previewUrl.length > 0 &&
+    typeof record.previewExpiresAt === 'string' &&
+    !Number.isNaN(Date.parse(record.previewExpiresAt))
+  );
+}
+
+/**
+ * Owner-scoped preview of a resolved import. `previewUrl` is a short-lived
+ * signed read (re-issue by calling again), never the item's identity.
+ *
+ * The caller treats a preview failure as "no preview", not as a failed import:
+ * this route is presentation-only and must never block saving an item the
+ * server has already resolved.
+ */
+export function createShareImportPreviewLoader(
+  config: AvatarApiConfig = productionApiConfig,
+): ShareImportPreviewLoader {
+  return async function loadPreview(
+    importId: string,
+    signal: AbortSignal,
+  ): Promise<ShareImportPreview> {
+    if (signal.aborted) {
+      throw new Error('Aborted');
+    }
+    const payload = (await requireOk(
+      await apiRequest(
+        config,
+        `${STATUS_PATH}/${encodeURIComponent(importId)}/preview`,
+        {method: 'GET'},
+      ),
+    )) as unknown;
+    if (!isPreview(payload)) {
+      throw new Error('Invalid preview response');
+    }
+    if (signal.aborted) {
+      throw new Error('Aborted');
+    }
+    return {
+      importId: payload.importId,
+      previewUrl: payload.previewUrl,
+      previewExpiresAt: payload.previewExpiresAt,
+      sourceTitle:
+        typeof payload.sourceTitle === 'string' ? payload.sourceTitle : undefined,
+      sourceSiteName:
+        typeof payload.sourceSiteName === 'string'
+          ? payload.sourceSiteName
+          : undefined,
     };
   };
 }

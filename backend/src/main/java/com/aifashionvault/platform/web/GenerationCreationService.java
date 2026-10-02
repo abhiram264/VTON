@@ -291,24 +291,64 @@ public class GenerationCreationService {
 			}
 		}
 		Instant now = clock.instant();
+		// Same abuse-control admission as the manual path (C19: every generation entry
+		// point shares one admission policy). Reserved only after validation and only
+		// for a genuinely new intent; released on replay or on any failure so a
+		// rejected request cannot burn a slot.
+		com.aifashionvault.admission.GenerationRateLimiter.Reservation reservation = null;
+		if (rateLimiter != null) {
+			String safeDevice = deviceId == null || deviceId.isBlank() ? "http-session" : deviceId;
+			String safeIp = ipAddress == null || ipAddress.isBlank() ? "unknown" : ipAddress;
+			reservation = rateLimiter.reserve(new com.aifashionvault.admission.GenerationAdmissionRequest(
+				userId, safeDevice, safeIp, com.aifashionvault.admission.GenerationRiskTier.ORDINARY, now));
+			if (!reservation.decision().allowed()) {
+				throw problem(HttpStatus.TOO_MANY_REQUESTS, reservation.decision().reason());
+			}
+		}
 		GenerationJob job = new GenerationJob(
 			new GenerationJobId(UUID.randomUUID()), userId, studioSessionId, GenerationJob.QUEUED, mode,
 			new ClientRequestId(key), now, null, avatar.imageId(), List.copyOf(items), null, null,
 			fingerprint, avatar.revision(), 0, now, null, 1, items.size(), 1,
 			now.plus(GenerationJob.ORCHESTRATION_DEADLINE), null,
 			RetryPolicySnapshot.forStepCountV2(items.size()), Optional.empty());
-		return switch (store.createAccepted(job)) {
+		GenerationStore.CreateAcceptedResult outcome;
+		try {
+			outcome = store.createAccepted(job);
+		}
+		catch (RuntimeException failure) {
+			if (reservation != null) {
+				releaseReservation(reservation, failure);
+			}
+			throw failure;
+		}
+		return switch (outcome) {
 			case GenerationStore.CreateAcceptedResult.Created created -> {
+				if (reservation != null) {
+					rateLimiter.commit(reservation);
+				}
 				if (metrics != null) {
 					metrics.recordGenerationCount();
 				}
 				yield toResponse(created.job());
 			}
-			case GenerationStore.CreateAcceptedResult.Replayed replayed -> toResponse(replayed.job());
-			case GenerationStore.CreateAcceptedResult.FingerprintConflict ignored ->
+			case GenerationStore.CreateAcceptedResult.Replayed replayed -> {
+				if (reservation != null) {
+					rateLimiter.release(reservation);
+				}
+				yield toResponse(replayed.job());
+			}
+			case GenerationStore.CreateAcceptedResult.FingerprintConflict ignored -> {
+				if (reservation != null) {
+					rateLimiter.release(reservation);
+				}
 				throw problem(HttpStatus.CONFLICT, IDEMPOTENCY_KEY_CONFLICT);
-			case GenerationStore.CreateAcceptedResult.QuotaRejected rejected ->
+			}
+			case GenerationStore.CreateAcceptedResult.QuotaRejected rejected -> {
+				if (reservation != null) {
+					rateLimiter.release(reservation);
+				}
 				throw problem(HttpStatus.TOO_MANY_REQUESTS, rejected.reason());
+			}
 		};
 	}
 
