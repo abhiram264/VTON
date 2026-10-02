@@ -1,6 +1,11 @@
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import VaultScreen from '../src/screens/VaultScreen';
 import { ApiProblemError } from '../src/features/my-model/http';
+import { openSourceLink } from '../src/features/export/sourceLink';
+
+jest.mock('../src/features/export/sourceLink', () => ({
+  openSourceLink: jest.fn().mockResolvedValue({ opened: true }),
+}));
 import { collectionsApi } from '../src/features/collections/collectionsApi';
 import { vaultApi } from '../src/features/vault/vaultApi';
 
@@ -215,5 +220,57 @@ describe('Vault failure states', () => {
       screen.getByText('Your session has expired. Sign in again to see this item.'),
     ).toBeTruthy();
     expect(screen.queryByLabelText('Retry item')).toBeNull();
+  });
+});
+
+describe('Vault item source link', () => {
+  test('a safe source link is opened through the guarded external navigation', async () => {
+    jest.mocked(vaultApi.list).mockResolvedValue([
+      { id: 'item-1', category: 'TOP', name: 'Silk top' },
+    ]);
+    jest.mocked(vaultApi.get).mockResolvedValue({
+      id: 'item-1',
+      category: 'TOP',
+      name: 'Silk top',
+      sourceUrl: 'https://shop.example.invalid/p/123456',
+    });
+
+    await mount(<VaultScreen onProfile={noop} />);
+    await interact(() =>
+      fireEvent.press(screen.getByRole('button', { name: 'Silk top' })),
+    );
+
+    await interact(() =>
+      fireEvent.press(
+        screen.getByRole('button', { name: 'Open original listing' }),
+      ),
+    );
+
+    expect(openSourceLink).toHaveBeenCalledWith(
+      'https://shop.example.invalid/p/123456',
+    );
+  });
+
+  test('no source link is offered when the server returned none', async () => {
+    jest.mocked(vaultApi.list).mockResolvedValue([
+      { id: 'item-1', category: 'TOP', name: 'Silk top' },
+    ]);
+    jest.mocked(vaultApi.get).mockResolvedValue({
+      id: 'item-1',
+      category: 'TOP',
+      name: 'Silk top',
+      sourceUrl: null,
+    });
+
+    await mount(<VaultScreen onProfile={noop} />);
+    await interact(() =>
+      fireEvent.press(screen.getByRole('button', { name: 'Silk top' })),
+    );
+
+    // A photo-created garment has no source; offering a dead link would be a
+    // dead affordance.
+    expect(
+      screen.queryByRole('button', { name: 'Open original listing' }),
+    ).toBeNull();
   });
 });

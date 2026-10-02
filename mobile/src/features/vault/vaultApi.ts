@@ -14,6 +14,11 @@ export type VaultItemSummary = {
   subcategory?: string | null;
   color?: string | null;
   sourceReferenceId?: string | null;
+  // The retailer URL the item was imported from, verbatim and UNTRUSTED: it is
+  // surfaced through openSourceLink, which refuses anything that is not an
+  // absolute http/https URL with a host and no userinfo. Null when the item has
+  // no source (a photo-created garment). The server never exposes raw_metadata.
+  sourceUrl?: string | null;
   createdAt?: string | null;
 };
 
@@ -46,6 +51,7 @@ function parseItem(value: unknown): VaultItemSummary {
     subcategory: optionalText(item.subcategory),
     color: optionalText(item.color),
     sourceReferenceId: optionalText(item.sourceReferenceId),
+    sourceUrl: optionalText(item.sourceUrl),
     createdAt: optionalText(item.createdAt),
   };
 }
