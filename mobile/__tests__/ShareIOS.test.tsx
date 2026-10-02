@@ -2,7 +2,7 @@ import { act, render, screen } from '@testing-library/react-native';
 import App from '../App';
 import { Linking, NativeModules } from 'react-native';
 import * as featureFlags from '../src/config/featureFlags';
-import { generationApi } from '../src/features/generation/generationApi';
+import { looksApi } from '../src/features/looks/looksApi';
 
 // Lowercase canonical UUIDs per the frozen look deep-link seam. The look and
 // share handlers remember ids for the process lifetime (spec dedupe), so
@@ -124,7 +124,7 @@ describe('iOS look deep link handling', () => {
     // Never-settling promise: the fetch result is not under test, and no
     // post-act state update can leak an act() warning.
     return jest
-      .spyOn(generationApi, 'getLook')
+      .spyOn(looksApi, 'get')
       .mockReturnValue(
         new Promise<never>(() => undefined),
       ) as unknown as jest.Mock;
