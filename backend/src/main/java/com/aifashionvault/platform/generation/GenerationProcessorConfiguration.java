@@ -285,6 +285,7 @@ public class GenerationProcessorConfiguration {
 		ObjectProvider<com.aifashionvault.analytics.ProductMetrics> productMetrics,
 		ObjectProvider<GenerationCapacityLeaseStore> capacityLeases,
 		ObjectProvider<NotificationEventStore> notificationEvents,
+		ObjectProvider<com.aifashionvault.notification.DeviceRegistrationStore> deviceRegistrations,
 		ObjectProvider<GlobalCostCircuitBreaker> costCircuitBreakers,
 		ObjectProvider<ProviderHealthGate> providerHealthGates
 	) {
@@ -330,7 +331,8 @@ public class GenerationProcessorConfiguration {
 				null,
 				costCircuitBreaker,
 				providerHealthGates.getIfAvailable(this::providerHealthGate),
-				productMetrics.getIfAvailable());
+				productMetrics.getIfAvailable(),
+				deviceRegistrations.getIfAvailable());
 		});
 	}
 
