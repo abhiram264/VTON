@@ -483,3 +483,22 @@ implementation merge lands and this heading is updated.
 The request discriminant is **not** `productUploadId` (C12 item 1): the manual path keeps
 `GenerationRequest(UUID productUploadId)` unchanged, and multi-item intent carries ordered
 Vault item ids plus an optional Studio session.
+
+### 9.2 Frozen seam — C07 share-import preview (`GET /share/imports/{importId}/preview`)
+
+**Status: FROZEN SEAM, implementation in flight (worker-13).** Additive sibling of the
+existing `GET /share/imports/{importId}` status route; the status body
+(`ShareImportResponse`) is unchanged. Records the contract so the mobile share client
+(worker-04/worker-01) can adopt it without waiting for the merge.
+
+| Aspect | Contract |
+|---|---|
+| Method/path | `GET /share/imports/{importId}/preview` |
+| Success | `200` + `ShareImportPreviewResponse{importId, previewUrl, previewExpiresAt, sourceTitle?, sourceSiteName?}` |
+| `previewUrl` | Short-lived **signed read capability** for the resolved import object (VAULT boundary, 5-minute TTL). Never the object key or a permanent URL; re-issue by calling the route again. |
+| Safe metadata | `sourceTitle`/`sourceSiteName` only — no source query string, object key, or media bytes (ADR-015). |
+| Ownership | foreign or unknown import → `404 IMPORT_NOT_FOUND` (indistinguishable from missing) |
+| State | not `READY` / no resolved object → `409 IMPORT_STATE_CONFLICT` |
+| No capability | media seam cannot mint a signed read → `503 DEPENDENCY_UNAVAILABLE` (never a fabricated preview) |
+
+The route is additive: a client that ignores it keeps the current status-only behavior.
