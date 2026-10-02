@@ -1,11 +1,10 @@
 package com.aifashionvault.platform.inferhub;
 
 import java.io.ByteArrayInputStream;
-import java.util.LinkedHashMap;
-import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
 
+import com.aifashionvault.generation.vton.GenerationStatus;
 import com.aifashionvault.generation.vton.GenerationSubmission;
 import com.aifashionvault.generation.vton.InputTransferMethod;
 import com.aifashionvault.generation.vton.PrivacyTransferPolicy;
@@ -23,28 +22,34 @@ import com.aifashionvault.generation.vton.UnsupportedProviderCapabilityException
 import com.aifashionvault.generation.vton.ValidatingVtonProvider;
 import com.aifashionvault.generation.vton.VtonProductAsset;
 import com.aifashionvault.generation.vton.VtonRequest;
+import com.aifashionvault.platform.objectstore.GenerationMediaStore;
 import com.aifashionvault.platform.objectstore.ObjectMetadata;
 import com.aifashionvault.platform.objectstore.ObjectRef;
 import com.aifashionvault.platform.objectstore.ObjectStore;
 import com.aifashionvault.platform.objectstore.ObjectStoreExceptions;
+import com.aifashionvault.shared.StorageDomain;
+import com.aifashionvault.shared.StorageKey;
 
 public final class InferHubVtonProvider extends ValidatingVtonProvider {
-    // ponytail: bounded in-memory output cache is the sync-provider state seam; move to a
-    // durable store if generations must survive a backend restart between submit and fetch.
-    private static final int MAX_CACHED_OUTPUTS = 8;
+    /**
+     * Durable handoff prefix for synchronous provider outputs. The decoded image is written
+     * into the private TEMP boundary before the submission is accepted, so a worker restart
+     * or eviction between submit and openOutput cannot lose an already-paid result.
+     */
+    private static final String OUTPUT_KEY_PREFIX = "temp/inferhub-outputs/";
 
     private final InferHubMapper mapper;
     private final InferHubClient client;
     private final ObjectStore objectStore;
+    private final GenerationMediaStore mediaStore;
     private final PrivacyTransferPolicy privacyPolicy;
-    private final Map<String, String> outputs = new LinkedHashMap<>(16, 0.75f, false) {
-        @Override
-        protected boolean removeEldestEntry(Map.Entry<String, String> eldest) {
-            return size() > MAX_CACHED_OUTPUTS;
-        }
-    };
 
-    public InferHubVtonProvider(InferHubMapper mapper, InferHubClient client, ObjectStore objectStore) {
+    public InferHubVtonProvider(
+        InferHubMapper mapper,
+        InferHubClient client,
+        ObjectStore objectStore,
+        GenerationMediaStore mediaStore
+    ) {
         if (mapper == null) {
             throw new IllegalArgumentException("mapper is required");
         }
@@ -54,9 +59,13 @@ public final class InferHubVtonProvider extends ValidatingVtonProvider {
         if (objectStore == null) {
             throw new IllegalArgumentException("object store is required");
         }
+        if (mediaStore == null) {
+            throw new IllegalArgumentException("generation media store is required");
+        }
         this.mapper = mapper;
         this.client = client;
         this.objectStore = objectStore;
+        this.mediaStore = mediaStore;
         this.privacyPolicy = mapper.privacyPolicy();
     }
 
@@ -72,8 +81,8 @@ public final class InferHubVtonProvider extends ValidatingVtonProvider {
 
     /**
      * InferHub is synchronous: this call performs the whole generation (~170s) and the
-     * accepted submission carries a synthetic job id whose image is held in memory for
-     * the subsequent getStatus/openOutput handoff.
+     * accepted submission carries a synthetic job id whose decoded image is written into the
+     * private TEMP boundary for the subsequent getStatus/openOutput handoff.
      */
     @Override
     protected GenerationSubmission submitValid(VtonRequest request, SubmissionKey submissionKey) {
@@ -94,8 +103,9 @@ public final class InferHubVtonProvider extends ValidatingVtonProvider {
             product.category(),
             request.instructions())));
         if (run.submission() instanceof GenerationSubmission.Accepted accepted) {
-            synchronized (outputs) {
-                outputs.put(mapper.outputRefValue(accepted.providerJobId()), run.dataUri());
+            ProviderFailure persistFailure = persistOutput(accepted.providerJobId(), run.dataUri());
+            if (persistFailure != null) {
+                return new GenerationSubmission.Rejected(persistFailure);
             }
         }
         return run.submission();
@@ -106,11 +116,18 @@ public final class InferHubVtonProvider extends ValidatingVtonProvider {
         if (providerJobId == null) {
             throw new IllegalArgumentException("provider job id is required");
         }
-        boolean cached;
-        synchronized (outputs) {
-            cached = outputs.containsKey(mapper.outputRefValue(providerJobId));
+        try {
+            objectStore.head(outputObject(mapper.outputRefValue(providerJobId)));
+            return mapper.mapStatus(providerJobId, true);
+        } catch (ObjectStoreExceptions.StagedObjectMissingException ex) {
+            return mapper.mapStatus(providerJobId, false);
+        } catch (ObjectStoreExceptions.ObjectStoreUnavailableException ex) {
+            // A store outage is not evidence the paid output is gone: report it as retryable
+            // rather than the terminal OUTPUT_MISSING a genuine miss produces.
+            return new StatusQueryResult.Observed(new GenerationStatus.Failed(
+                InferHubMapper.failure(ProviderFailureCategory.TEMPORARY_UNAVAILABLE, true, "STORE_UNAVAILABLE"),
+                Optional.empty()));
         }
-        return mapper.mapStatus(providerJobId, cached);
     }
 
     @Override
@@ -118,21 +135,76 @@ public final class InferHubVtonProvider extends ValidatingVtonProvider {
         if (outputRef == null) {
             throw new IllegalArgumentException("provider output reference is required");
         }
-        String ref = mapper.outputRefValue(outputRef);
-        String dataUri;
-        synchronized (outputs) {
-            dataUri = outputs.get(ref);
-        }
-        if (dataUri == null) {
+        ObjectRef object = outputObject(mapper.outputRefValue(outputRef));
+        ObjectMetadata metadata;
+        try {
+            metadata = objectStore.head(object);
+        } catch (ObjectStoreExceptions.StagedObjectMissingException ex) {
             throw new InferHubProviderException(InferHubMapper.failure(
                 ProviderFailureCategory.PROTOCOL_VIOLATION, false, "OUTPUT_MISSING"));
+        } catch (ObjectStoreExceptions.ObjectStoreUnavailableException ex) {
+            throw new InferHubProviderException(InferHubMapper.failure(
+                ProviderFailureCategory.TEMPORARY_UNAVAILABLE, true, "STORE_UNAVAILABLE"));
         }
-        InferHubMapper.DecodedImage image = mapper.decodeDataUri(dataUri);
+        String mediaType = mapper.normalizeImageMediaType(metadata.contentType());
+        if (mediaType == null) {
+            throw new InferHubProviderException(InferHubMapper.failure(
+                ProviderFailureCategory.PROTOCOL_VIOLATION, false, "OUTPUT_NOT_IMAGE"));
+        }
+        byte[] bytes;
+        try {
+            bytes = objectStore.readBounded(object, metadata.version(), intBound(InferHubMapper.MAX_OUTPUT_BYTES));
+        } catch (ObjectStoreExceptions.StagedObjectMissingException ex) {
+            throw new InferHubProviderException(InferHubMapper.failure(
+                ProviderFailureCategory.PROTOCOL_VIOLATION, false, "OUTPUT_MISSING"));
+        } catch (ObjectStoreExceptions.ObjectStoreUnavailableException ex) {
+            throw new InferHubProviderException(InferHubMapper.failure(
+                ProviderFailureCategory.TEMPORARY_UNAVAILABLE, true, "STORE_UNAVAILABLE"));
+        }
+        if (bytes.length < 1 || bytes.length > InferHubMapper.MAX_OUTPUT_BYTES) {
+            throw new InferHubProviderException(InferHubMapper.failure(
+                ProviderFailureCategory.PROTOCOL_VIOLATION, false, "OUTPUT_MALFORMED"));
+        }
         return ProviderMediaSource.of(
-            new ByteArrayInputStream(image.bytes()),
-            OptionalLong.of(image.bytes().length),
+            new ByteArrayInputStream(bytes),
+            OptionalLong.of(bytes.length),
             InferHubMapper.MAX_OUTPUT_BYTES,
-            image.mediaType());
+            mediaType);
+    }
+
+    /**
+     * Writes the synchronous result into the private TEMP boundary before the submission is
+     * accepted. A store failure is classified and returned so the caller rejects honestly
+     * instead of handing back an output reference that no restart could resolve.
+     */
+    private ProviderFailure persistOutput(ProviderJobId providerJobId, String dataUri) {
+        InferHubMapper.DecodedImage image;
+        try {
+            image = mapper.decodeDataUri(dataUri);
+        } catch (InferHubProviderException ex) {
+            return ex.failure();
+        }
+        try {
+            mediaStore.putBounded(
+                outputKey(mapper.outputRefValue(providerJobId)),
+                new ByteArrayInputStream(image.bytes()),
+                InferHubMapper.MAX_OUTPUT_BYTES,
+                image.mediaType());
+            return null;
+        } catch (ObjectStoreExceptions.StagedObjectMissingException | ObjectStoreExceptions.ObjectStoreUnavailableException ex) {
+            // Either store fault means the paid output is not durably persisted yet: reject
+            // retryably rather than accept a reference no restart could resolve.
+            return InferHubMapper.failure(
+                ProviderFailureCategory.TEMPORARY_UNAVAILABLE, true, "STORE_UNAVAILABLE");
+        }
+    }
+
+    private static ObjectRef outputObject(String outputRefValue) {
+        return new ObjectRef(StorageDomain.TEMP, outputKey(outputRefValue).value());
+    }
+
+    private static StorageKey outputKey(String outputRefValue) {
+        return new StorageKey(OUTPUT_KEY_PREFIX + outputRefValue);
     }
 
     @Override

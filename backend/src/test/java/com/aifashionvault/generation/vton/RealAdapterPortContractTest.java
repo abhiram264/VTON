@@ -1,10 +1,13 @@
 package com.aifashionvault.generation.vton;
 
+import java.io.InputStream;
 import java.lang.reflect.Method;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.UUID;
@@ -24,6 +27,7 @@ import com.aifashionvault.platform.inferhub.InferHubMapper;
 import com.aifashionvault.platform.inferhub.InferHubVtonProvider;
 import com.aifashionvault.platform.objectstore.ClaimCommand;
 import com.aifashionvault.platform.objectstore.ClaimResult;
+import com.aifashionvault.platform.objectstore.GenerationMediaStore;
 import com.aifashionvault.platform.objectstore.MediaDeclaration;
 import com.aifashionvault.platform.objectstore.ObjectMetadata;
 import com.aifashionvault.platform.objectstore.ObjectRef;
@@ -91,7 +95,7 @@ class RealAdapterPortContractTest {
         MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
         FakeStore store = new FakeStore();
         InferHubVtonProvider provider =
-            new InferHubVtonProvider(new InferHubMapper(), new InferHubClient(builder.build()), store);
+            new InferHubVtonProvider(new InferHubMapper(), new InferHubClient(builder.build()), store, store);
         return new Harness("inferhub", server, store, provider);
     }
 
@@ -212,7 +216,7 @@ class RealAdapterPortContractTest {
      * Scripts the WHOLE wire exchange before the first call, because MockRestServiceServer
      * refuses to add expectations once a request has been made. FASHN re-fetches the status
      * document inside openOutput, so it needs two status responses; InferHub is synchronous
-     * and serves its output from the adapter's own cache with no second call.
+     * and serves its output from the durable TEMP handoff with no second call.
      */
     private static GenerationSubmission.Accepted submittedWithOutputScripted(Harness harness) {
         if (harness.name().equals("fashn")) {
@@ -284,19 +288,51 @@ class RealAdapterPortContractTest {
         return name.startsWith("software.amazon.") || name.startsWith("com.amazonaws.");
     }
 
-    /** Minimal store: enough for the input-transfer path, no cloud client anywhere. */
-    private static final class FakeStore implements ObjectStore {
+    /** Minimal store: enough for the input-transfer and durable-output paths, no cloud client. */
+    private static final class FakeStore implements ObjectStore, GenerationMediaStore {
         private final List<ObjectRef> heads = new ArrayList<>();
+        private final Map<String, byte[]> written = new HashMap<>();
+
+        @Override
+        public void putBounded(StorageKey dest, InputStream source, long maxBytes, String mediaType) {
+            try {
+                written.put(dest.value(), source.readAllBytes());
+            } catch (java.io.IOException ex) {
+                throw new IllegalStateException(ex);
+            }
+        }
+
+        @Override
+        public ClaimResult claim(com.aifashionvault.platform.objectstore.GenerationClaimCommand command) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public void preflightProductInput(com.aifashionvault.platform.objectstore.ProductInputClaimCommand command) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public ClaimResult claimProductInput(com.aifashionvault.platform.objectstore.ProductInputClaimCommand command) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public void releaseProductInput(com.aifashionvault.platform.objectstore.ProductInputClaimCommand command) {
+            throw new UnsupportedOperationException();
+        }
 
         @Override
         public ObjectMetadata head(ObjectRef object) {
             heads.add(object);
-            return new ObjectMetadata(PNG.length, "image/png", "v1");
+            byte[] stored = written.get(object.objectKey());
+            return new ObjectMetadata(stored == null ? PNG.length : stored.length, "image/png", "v1");
         }
 
         @Override
         public byte[] readBounded(ObjectRef object, String expectedVersion, int maxBytes) {
-            return PNG;
+            byte[] stored = written.get(object.objectKey());
+            return stored == null ? PNG : stored;
         }
 
         @Override
