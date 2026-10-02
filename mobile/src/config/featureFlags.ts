@@ -7,11 +7,27 @@ export type FeatureFlagName =
   | 'SHARE_IMPORT_IOS'
   | 'NEW_QUALITY_GATE';
 
-export const DEFAULT_FEATURE_FLAGS: Record<FeatureFlagName, boolean> = {
+// Capabilities whose backing paths are not release-ready (guide C22 item 4).
+// They default off, and a flag payload — including an offline or cached one —
+// may not turn them on: the backend capability is authoritative (item 5), so
+// the client fails closed until a supported path exists.
+export const UNSUPPORTED_CAPABILITIES: Readonly<
+  Record<FeatureFlagName, boolean>
+> = {
   MULTI_ITEM: true,
   NATURAL_LANGUAGE_STUDIO: true,
-  TRYON_MAX: true,
+  TRYON_MAX: false,
   HD_GENERATION: true,
+  SHARE_IMPORT_ANDROID: false,
+  SHARE_IMPORT_IOS: false,
+  NEW_QUALITY_GATE: false,
+};
+
+export const DEFAULT_FEATURE_FLAGS: Record<FeatureFlagName, boolean> = {
+  MULTI_ITEM: false,
+  NATURAL_LANGUAGE_STUDIO: false,
+  TRYON_MAX: true,
+  HD_GENERATION: false,
   SHARE_IMPORT_ANDROID: true,
   SHARE_IMPORT_IOS: true,
   NEW_QUALITY_GATE: false,
@@ -29,6 +45,9 @@ function isFeatureFlagName(name: string): name is FeatureFlagName {
 }
 
 export function isFeatureEnabled(name: FeatureFlagName): boolean {
+  if (UNSUPPORTED_CAPABILITIES[name]) {
+    return false;
+  }
   return activeFeatureFlags[name] ?? DEFAULT_FEATURE_FLAGS[name];
 }
 
