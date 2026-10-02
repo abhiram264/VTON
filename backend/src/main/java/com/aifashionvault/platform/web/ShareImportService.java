@@ -1,6 +1,7 @@
 package com.aifashionvault.platform.web;
 
 import java.net.URI;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -17,6 +18,7 @@ import com.aifashionvault.importer.ShareImportKind;
 import com.aifashionvault.importer.ShareImportState;
 import com.aifashionvault.importer.SourceReference;
 import com.aifashionvault.importer.SourceUrls;
+import com.aifashionvault.normalization.ProductCategory;
 import com.aifashionvault.platform.importer.ImporterRetryableException;
 import com.aifashionvault.platform.objectstore.ObjectStoreExceptions;
 import com.aifashionvault.shared.ShareImportId;
@@ -162,12 +164,54 @@ public final class ShareImportService {
 	 * carries the import's own source reference, so provenance survives
 	 * confirmation; a repeated confirmation returns the same saved item.
 	 */
-	public VaultItemResponse confirm(UserId owner, String importId) {
+	public VaultItemResponse confirm(UserId owner, String importId, ConfirmShareImportRequest request) {
 		ShareImportId id = parseImportId(importId);
-		return store.confirm(owner, id)
+		Confirmation corrections = parseConfirmation(request);
+		return store.confirm(owner, id, corrections.name(), corrections.category(), corrections.collectionId())
 			.map(item -> new VaultItemResponse(item.itemId().toString(), item.sourceReferenceId().toString(),
-				null, null, null, null, null, null, null, item.createdAt()))
+				item.name(), null, category(item.category()), null, null, null, null, item.createdAt()))
 			.orElseThrow(ShareImportProblem::notFound);
+	}
+
+	/**
+	 * Parses the optional owner corrections of a confirmation request. A blank
+	 * name, an unknown category or a malformed collection id is a malformed
+	 * request (400) rather than a silent no-op.
+	 */
+	private static Confirmation parseConfirmation(ConfirmShareImportRequest request) {
+		if (request == null) {
+			return new Confirmation(null, null, null);
+		}
+		String name = request.name() == null ? null : request.name().strip();
+		if (name != null && (name.isEmpty() || name.codePointCount(0, name.length()) > 200)) {
+			throw ShareImportProblem.invalid();
+		}
+		String category = null;
+		if (request.category() != null) {
+			try {
+				category = ProductCategory.valueOf(request.category().strip().toUpperCase(Locale.ROOT)).name();
+			}
+			catch (IllegalArgumentException ex) {
+				throw ShareImportProblem.invalid();
+			}
+		}
+		UUID collectionId = null;
+		if (request.collectionId() != null) {
+			try {
+				collectionId = UUID.fromString(request.collectionId().strip());
+			}
+			catch (IllegalArgumentException ex) {
+				throw ShareImportProblem.invalid();
+			}
+		}
+		return new Confirmation(name, category, collectionId);
+	}
+
+	private static ProductCategory category(String stored) {
+		return stored == null ? null : ProductCategory.valueOf(stored);
+	}
+
+	private record Confirmation(String name, String category, UUID collectionId) {
 	}
 
 
