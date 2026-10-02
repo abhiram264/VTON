@@ -193,6 +193,12 @@ public class StudioController {
 	 * Runs the planner's calls through the allowlisted agent and answers with the
 	 * authoritative draft. A refused or partial execution reports the failure and
 	 * returns the draft as it actually stands, never a fabricated success.
+	 *
+	 * <p>The refusal message is derived from the draft itself: if the execution
+	 * failed after the draft had already moved, saying "nothing was changed" would
+	 * be a lie. The planner currently plans at most one mutation, so this should
+	 * never trigger — it is here so the honesty of the message does not depend on
+	 * that invariant holding forever.</p>
 	 */
 	private StudioNaturalLanguageResponse applied(
 		UserId owner,
@@ -206,8 +212,12 @@ public class StudioController {
 			String problem = failure.problem() == null
 				? AgentProblemCode.MALFORMED_CALL.name()
 				: failure.problem().name();
-			return StudioNaturalLanguageResponse.refused(response(after), problem, MESSAGE_BY_PROBLEM.getOrDefault(
-				problem, "That command could not be applied. The draft is unchanged."));
+			boolean changed = !after.updatedAt().equals(before.updatedAt());
+			String message = changed
+				? "Part of that command was applied before it failed. Review the draft."
+				: MESSAGE_BY_PROBLEM.getOrDefault(
+					problem, "That command could not be applied. The draft is unchanged.");
+			return StudioNaturalLanguageResponse.refused(response(after), problem, message);
 		}
 		return StudioNaturalLanguageResponse.applied(response(after));
 	}
