@@ -35,6 +35,22 @@ jest.mock('../src/screens/ShareImportScreen', () => {
   };
 });
 
+// Probe: records the lookId the navigator hands to the Look surface, so the
+// test can prove the id SURVIVES sign-in rather than being resolved (or lost)
+// while the user is still signed out. Mounting is the observable: while the
+// gate is closed the probe is never rendered, so no Look request can be made.
+const receivedLookIds: string[] = [];
+jest.mock('../src/screens/LookScreen', () => {
+  const { Text } = require('react-native');
+  return {
+    __esModule: true,
+    default: ({ lookId }: { lookId: string }) => {
+      receivedLookIds.push(lookId);
+      return <Text>LOOK_PROBE</Text>;
+    },
+  };
+});
+
 // Every test in this file mounts the real navigator and awaits rendered
 // queries. The default 5s per-test timeout was measured tripping on a loaded
 // box (concurrent Maven + jest) while the work itself is milliseconds, which
@@ -125,6 +141,34 @@ test('a share pushed while unavailable reaches the Share Import screen with the 
   // The unavailable pass-through must not strand the payload behind a null.
   expect(receivedPayloads).toEqual([payload]);
   utils.unmount();
+});
+
+test('a Look deep link pushed while signed-out is not resolved and survives to sign-in', async () => {
+  receivedLookIds.length = 0;
+  const utils = await render(<Harness session={{ status: 'signed-out' }} />);
+  expect(screen.getByRole('header', { name: 'Sign In' })).toBeTruthy();
+
+  const lookId = '55555555-5555-5555-5555-555555555555';
+  // AppShell queues by-name pushes until the ref is ready; mirror that drain.
+  await act(async () => {
+    for (let i = 0; i < 100 && !navigationRef.isReady(); i += 1) {
+      await Promise.resolve();
+    }
+    navigationRef.dispatch(StackActions.push('Look', { lookId }));
+  });
+  expect(navigationRef.getState()?.routes.map(r => r.name)).toContain('Look');
+  // The gate is closed: sign-in is shown and the Look surface was never
+  // mounted, so nothing about the link could have been fetched or disclosed.
+  expect(screen.getByRole('header', { name: 'Sign In' })).toBeTruthy();
+  expect(receivedLookIds).toHaveLength(0);
+  expect(screen.queryByText('LOOK_PROBE')).toBeNull();
+
+  // Signing in happens in place: the pushed route is still on the stack and
+  // resolves the SAME lookId, now that the session exists.
+  await act(async () => {
+    await utils.rerender(<Harness session={{ status: 'signed-in', uid: 'u1', getIdToken: async () => 't' }} />);
+  });
+  expect(receivedLookIds).toEqual([lookId]);
 });
 
 test('a share pushed while signed-out is not consumed and survives to sign-in', async () => {
