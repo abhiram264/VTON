@@ -185,6 +185,8 @@ describe('U3: Generation wire contract and Vault fallback', () => {
           createdAt: '2026-09-05T00:00:00Z',
           image: { url: 'https://img.test/1', expiresAt: '2026-09-05T01:00:00Z' },
         }),
+        list: jest.fn().mockResolvedValue([]),
+        cancel: jest.fn(),
       };
 
       const mockUpload = jest.fn().mockResolvedValue('up-1');
