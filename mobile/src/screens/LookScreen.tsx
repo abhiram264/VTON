@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { looksApi, type LookDetail } from '../features/looks/looksApi';
 import { createLookExporter, type LookExportAction, type LookExportOutcome } from '../features/export/lookExport';
+import { vaultApi } from '../features/vault/vaultApi';
 
 const SLOT_LABELS: Record<string, string> = {
   HEAD: 'Head',
@@ -35,6 +36,13 @@ const EXPORT_OUTCOME_TEXT: Record<LookExportOutcome['status'], string> = {
   DISCLOSURE_REQUIRED: 'Confirm that the copy leaves the app before exporting.',
 };
 
+// Provenance names are fetched separately from the Look itself, so "we have
+// not asked yet", "the answer is in", and "we could not ask" stay distinct.
+type VaultNames =
+  | { status: 'loading' }
+  | { status: 'ready'; names: ReadonlyMap<string, string> }
+  | { status: 'unavailable' };
+
 // The read capability is minted on demand and short-lived; it is never
 // persisted as identity. Provenance (source garments, provider, outcome) comes
 // from the same owner-scoped GET /looks/{id} that mints it.
@@ -56,6 +64,12 @@ export default function LookScreen({
   const [pendingExport, setPendingExport] = useState<LookExportAction | null>(null);
   const [exportNotice, setExportNotice] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
+  // The Look's frozen provenance carries ids only, and a raw id is not a
+  // garment a person can recognise. Names come from the owner-scoped Vault
+  // list. Three distinct facts are kept apart: still asking, answered (an id
+  // absent from the answer was deleted or unshared), and could-not-ask — the
+  // last must never be shown as "the garment is gone".
+  const [vaultNames, setVaultNames] = useState<VaultNames>({ status: 'loading' });
 
   // One exporter per mount: the native bridge is resolved once, and the sweep
   // below runs against the same instance the buttons use.
@@ -75,14 +89,27 @@ export default function LookScreen({
     setDeleted(false);
     setPendingExport(null);
     setExportNotice(null);
+    setVaultNames({ status: 'loading' });
     setLoading(true);
     let cancelled = false;
     (async () => {
       try {
         const resource = await looksApi.get(lookId);
-        if (!cancelled) {
-          setLook(resource);
-          setLoading(false);
+        if (cancelled) return;
+        setLook(resource);
+        setLoading(false);
+        if (resource.items.length === 0) {
+          setVaultNames({ status: 'ready', names: new Map() });
+          return;
+        }
+        try {
+          const owned = await vaultApi.list();
+          if (cancelled) return;
+          setVaultNames({ status: 'ready', names: new Map(owned.map(item => [item.id, item.name])) });
+        } catch {
+          // The look is still readable; only the garment names are missing, so
+          // the list says so instead of claiming the garments are gone.
+          if (!cancelled) setVaultNames({ status: 'unavailable' });
         }
       } catch {
         if (!cancelled) {
@@ -205,7 +232,13 @@ export default function LookScreen({
           ) : (
             visibleLook.items.map(item => (
               <Text key={`${item.slot}:${item.vaultItemId}`} style={styles.body}>
-                {SLOT_LABELS[item.slot] ?? item.slot} — {item.vaultItemId}
+                {SLOT_LABELS[item.slot] ?? item.slot} —{' '}
+                {vaultNames.status === 'loading'
+                  ? 'checking your Vault…'
+                  : vaultNames.status === 'unavailable'
+                    ? 'name unavailable right now'
+                    : vaultNames.names.get(item.vaultItemId) ??
+                      'no longer in your Vault — use Modify to build a new look without it'}
               </Text>
             ))
           )}

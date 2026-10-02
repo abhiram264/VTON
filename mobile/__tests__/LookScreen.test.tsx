@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import LookScreen from '../src/screens/LookScreen';
 import { looksApi, type LookDetail } from '../src/features/looks/looksApi';
 import { createLookExporter } from '../src/features/export/lookExport';
+import { vaultApi } from '../src/features/vault/vaultApi';
 
 jest.mock('../src/features/looks/looksApi', () => ({
   looksApi: {
@@ -18,6 +19,11 @@ jest.mock('../src/features/export/lookExport', () => ({
   createLookExporter: jest.fn(),
 }));
 
+jest.mock('../src/features/vault/vaultApi', () => ({
+  vaultApi: { list: jest.fn(), get: jest.fn(), update: jest.fn(), remove: jest.fn(), image: jest.fn() },
+}));
+
+const vaultList = jest.mocked(vaultApi.list);
 const exportLook = jest.fn();
 const cleanupExpiredStaging = jest.fn();
 jest.mocked(createLookExporter).mockReturnValue({ exportLook, cleanupExpiredStaging });
@@ -52,6 +58,7 @@ describe('LookScreen', () => {
     jest.clearAllMocks();
     exportLook.mockResolvedValue({ status: 'SHARED' });
     cleanupExpiredStaging.mockResolvedValue(undefined);
+    vaultList.mockResolvedValue([]);
   });
 
   test('a saved look renders the stored look it resolved, not a placeholder', async () => {
@@ -70,16 +77,50 @@ describe('LookScreen', () => {
 
   test('provenance names the exact source garments, the outcome and the timestamp', async () => {
     get.mockResolvedValue({ ...STORED_LOOK });
+    vaultList.mockResolvedValue([
+      { id: SHIRT_ID, category: 'TOPS', name: 'Linen shirt' },
+      { id: TROUSER_ID, category: 'BOTTOMS', name: 'Grey trousers' },
+    ]);
 
     await render(<LookScreen lookId={LOOK_ID} />);
     await screen.findByRole('image');
 
-    // Both garments that produced the render are named, with their slot.
-    expect(screen.getByText(new RegExp(`Top — ${SHIRT_ID}`))).toBeTruthy();
-    expect(screen.getByText(new RegExp(`Bottom — ${TROUSER_ID}`))).toBeTruthy();
+    // Both garments that produced the render are named, with their slot, and
+    // the raw vault id is never shown.
+    expect(await screen.findByText('Top — Linen shirt')).toBeTruthy();
+    expect(screen.getByText('Bottom — Grey trousers')).toBeTruthy();
+    expect(screen.queryByText(new RegExp(SHIRT_ID))).toBeNull();
     expect(screen.getByText(new RegExp(`Created ${CREATED_AT}`))).toBeTruthy();
     expect(screen.getByText(/Quality check passed/)).toBeTruthy();
     expect(screen.getByText(/Generated with fashn/)).toBeTruthy();
+  });
+
+  test('a source garment that is gone is named as unavailable, not as a blank or a raw id', async () => {
+    get.mockResolvedValue({ ...STORED_LOOK });
+    // The Vault no longer holds the shirt: only the trousers resolve.
+    vaultList.mockResolvedValue([{ id: TROUSER_ID, category: 'BOTTOMS', name: 'Grey trousers' }]);
+
+    await render(<LookScreen lookId={LOOK_ID} />);
+    await screen.findByRole('image');
+
+    expect(
+      await screen.findByText(
+        'Top — no longer in your Vault — use Modify to build a new look without it',
+      ),
+    ).toBeTruthy();
+    expect(screen.getByText('Bottom — Grey trousers')).toBeTruthy();
+    expect(screen.queryByText(new RegExp(SHIRT_ID))).toBeNull();
+  });
+
+  test('a Vault lookup that fails says so instead of claiming the garment is gone', async () => {
+    get.mockResolvedValue({ ...STORED_LOOK });
+    vaultList.mockRejectedValue(new Error('HTTP_503'));
+
+    await render(<LookScreen lookId={LOOK_ID} />);
+    await screen.findByRole('image');
+
+    expect(await screen.findByText('Top — name unavailable right now')).toBeTruthy();
+    expect(screen.queryByText(/no longer in your Vault/)).toBeNull();
   });
 
   test('an unresolvable look id shows an honest error, not a blank screen', async () => {
