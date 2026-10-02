@@ -42,6 +42,8 @@ import com.aifashionvault.generation.RenderPlan;
 import com.aifashionvault.generation.RetryPolicySnapshot;
 import com.aifashionvault.look.JdbcLookStore;
 import com.aifashionvault.look.Look;
+import com.aifashionvault.platform.environment.VaultEnvironmentProperties;
+import com.aifashionvault.platform.fashn.FashnConfig;
 import com.aifashionvault.platform.objectstore.ObjectRef;
 import com.aifashionvault.platform.objectstore.ObjectStore;
 import com.aifashionvault.platform.objectstore.ObjectStoreExceptions;
@@ -68,6 +70,8 @@ public class LooksController {
 	private final GenerationStore generations;
 	private final Clock clock;
 	private final AppIntegrityBoundary integrity;
+	private final GenerationApiProperties properties;
+	private final boolean providerAvailable;
 
 	public LooksController(
 		ObjectProvider<JdbcLookStore> lookStores,
@@ -75,7 +79,23 @@ public class LooksController {
 		ObjectProvider<GenerationStore> generationStores,
 		ObjectProvider<Clock> clocks
 	) {
-		this(lookStores, objectStores, generationStores, clocks, null, new GenerationApiProperties());
+		this(lookStores, objectStores, generationStores, clocks, null, new GenerationApiProperties(), true);
+	}
+
+	/**
+	 * Unit-test seam: provider availability is assumed present. The Spring
+	 * constructor below derives it from the environment, so production never
+	 * relies on this default.
+	 */
+	LooksController(
+		ObjectProvider<JdbcLookStore> lookStores,
+		ObjectProvider<ObjectStore> objectStores,
+		ObjectProvider<GenerationStore> generationStores,
+		ObjectProvider<Clock> clocks,
+		AppIntegrityVerifier verifier,
+		GenerationApiProperties properties
+	) {
+		this(lookStores, objectStores, generationStores, clocks, verifier, properties, true);
 	}
 
 	@Autowired
@@ -85,19 +105,35 @@ public class LooksController {
 		ObjectProvider<GenerationStore> generationStores,
 		ObjectProvider<Clock> clocks,
 		AppIntegrityVerifier verifier,
-		GenerationApiProperties properties
+		GenerationApiProperties properties,
+		VaultEnvironmentProperties vaultProperties
+	) {
+		this(lookStores, objectStores, generationStores, clocks, verifier, properties,
+			FashnConfig.anyProviderConfigured(vaultProperties));
+	}
+
+	LooksController(
+		ObjectProvider<JdbcLookStore> lookStores,
+		ObjectProvider<ObjectStore> objectStores,
+		ObjectProvider<GenerationStore> generationStores,
+		ObjectProvider<Clock> clocks,
+		AppIntegrityVerifier verifier,
+		GenerationApiProperties properties,
+		boolean providerAvailable
 	) {
 		this.looks = first(lookStores);
 		this.objects = first(objectStores);
 		this.generations = first(generationStores);
 		Clock configured = first(clocks);
 		this.clock = configured == null ? Clock.systemUTC() : configured;
+		this.properties = properties == null ? new GenerationApiProperties() : properties;
+		this.providerAvailable = providerAvailable;
 		// Regeneration enqueues the same provider-cost generation job as POST /generations,
 		// so it carries the same attestation gate under the same generation flag. The
 		// boundary is a no-op while the flag is false and fail-closed once it is true; see
 		// AppIntegrityBoundary for the NOT-YET-ENFORCING status of that flag today.
 		this.integrity = new AppIntegrityBoundary(verifier == null ? evidence -> null : verifier,
-			properties.isAttestationRequired());
+			this.properties.isAttestationRequired());
 	}
 
 	@GetMapping
@@ -126,6 +162,17 @@ public class LooksController {
 		// validation or generation job creation, matching POST /generations exactly.
 		this.integrity.verify(httpRequest, AppIntegrityOperation.GENERATION_CREATION);
 		String key = validKey(idempotencyKey);
+		// Same global admission policy as POST /generations (GenerationCreationService):
+		// a paused server, or a deployment with no configured image provider, must not
+		// admit a regenerate job either. Checked before the look lookup and before any
+		// job creation, so the verdict never depends on which look was named and no
+		// provider-cost job is ever enqueued while the policy blocks admission.
+		if (properties.isAdmissionPaused()) {
+			throw new AdmissionRejected(HttpStatus.SERVICE_UNAVAILABLE, GenerationCreationService.ADMISSION_PAUSED);
+		}
+		if (!providerAvailable) {
+			throw new AdmissionRejected(HttpStatus.SERVICE_UNAVAILABLE, GenerationCreationService.GENERATION_PROVIDER_UNAVAILABLE);
+		}
 		Look look = owned(ownerId, id);
 		GenerationStore generationStore = generationStore();
 		GenerationJob source = generationStore.findJobForUser(look.generationJobId(), ownerId)
@@ -217,7 +264,7 @@ public class LooksController {
 
 	@ExceptionHandler(AdmissionRejected.class)
 	ResponseEntity<GenerationProblemResponse> admissionRejected(AdmissionRejected ex) {
-		return problem(HttpStatus.TOO_MANY_REQUESTS, ex.reason);
+		return problem(ex.status(), ex.reason());
 	}
 
 	private Look owned(UserId ownerId, String id) {
@@ -332,8 +379,25 @@ public class LooksController {
 	private static final class NotRegeneratable extends RuntimeException {}
 	private static final class MissingKey extends RuntimeException {}
 	private static final class KeyConflict extends RuntimeException {}
-	private static final class AdmissionRejected extends RuntimeException {
+	static final class AdmissionRejected extends RuntimeException {
+		private final HttpStatus status;
 		private final String reason;
-		private AdmissionRejected(String reason) { this.reason = reason; }
+
+		AdmissionRejected(String reason) {
+			this(HttpStatus.TOO_MANY_REQUESTS, reason);
+		}
+
+		AdmissionRejected(HttpStatus status, String reason) {
+			this.status = status;
+			this.reason = reason;
+		}
+
+		HttpStatus status() {
+			return status;
+		}
+
+		String reason() {
+			return reason;
+		}
 	}
 }
