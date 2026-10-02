@@ -56,6 +56,14 @@ public class SharesController {
 		return service().get(userId, importId);
 	}
 
+	@GetMapping("/{importId}/preview")
+	public ShareImportPreviewResponse preview(
+		@AuthenticationPrincipal UserId userId,
+		@PathVariable String importId
+	) {
+		return service().preview(userId, importId);
+	}
+
 	@PutMapping("/{importId}/image")
 	public ResponseEntity<ShareImportResponse> attach(
 		@AuthenticationPrincipal UserId userId,
