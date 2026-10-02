@@ -66,7 +66,7 @@ function MainTabs() {
         {props => <VaultTabScreen {...props} />}
       </Tabs.Screen>
       <Tabs.Screen name="StudioTab" options={{ tabBarLabel: 'STUDIO' }}>
-        {({ navigation, route }: TabProps<'StudioTab'>) => <StudioScreen {...route.params} onAddFromVault={studioSessionId => navigation.navigate('VaultTab', { mode: 'SELECT_FOR_STUDIO', studioSessionId })} onAvatar={() => navigation.navigate('MyModel')} onGenerate={() => navigation.navigate('Generate')} onProfile={() => navigation.navigate('ProfileSettings')} />}
+        {({ navigation, route }: TabProps<'StudioTab'>) => <StudioScreen {...route.params} onAddFromVault={studioSessionId => navigation.navigate('VaultTab', { mode: 'SELECT_FOR_STUDIO', studioSessionId })} onAvatar={() => navigation.navigate('MyModel')} onOpenLook={lookId => navigation.navigate('Look', { lookId })} onProfile={() => navigation.navigate('ProfileSettings')} />}
       </Tabs.Screen>
       <Tabs.Screen name="LooksTab" options={{ tabBarLabel: 'LOOKS' }}>
         {({ navigation }: TabProps<'LooksTab'>) => <LooksScreen onModify={sourceLookId => navigation.navigate('StudioTab', { sourceLookId })} onOpenLook={lookId => navigation.navigate('Look', { lookId })} onProfile={() => navigation.navigate('ProfileSettings')} />}
