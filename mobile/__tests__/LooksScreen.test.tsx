@@ -5,6 +5,7 @@ import { looksApi } from '../src/features/looks/looksApi';
 import type { GenerationResource, LookResource } from '../src/features/generation/types';
 import { generationApi } from '../src/features/generation/generationApi';
 import { Share } from 'react-native';
+import { ApiProblemError } from '../src/features/my-model/http';
 jest.mock('../src/features/looks/looksApi', () => ({
   looksApi: { list: jest.fn(), regenerate: jest.fn(), get: jest.fn(), remove: jest.fn() },
 }));
@@ -296,3 +297,26 @@ test('a poll that never settles is bounded, releases the busy lock, and shows an
 // production default end-to-end; the bound's own invariant is pinned separately
 // in boundedGenerationPoll.test.tsx.
 }, 60_000);
+
+// C23: an ended session is not a transient list failure and must not be
+// described with generic navigation advice.
+test('an expired session is reported as a session problem, not as a load blip', async () => {
+  jest.mocked(looksApi.list).mockRejectedValue(new ApiProblemError('UNAUTHORIZED'));
+
+  await renderLooksScreen();
+
+  expect(
+    await screen.findByText('Your session has expired. Sign in again to see your Looks.'),
+  ).toBeTruthy();
+  expect(screen.queryByText('Could not load Looks. You can keep using navigation.')).toBeNull();
+});
+
+test('a transient list failure keeps the existing navigation advice', async () => {
+  jest.mocked(looksApi.list).mockRejectedValue(new Error('Network request failed'));
+
+  await renderLooksScreen();
+
+  expect(
+    await screen.findByText('Could not load Looks. You can keep using navigation.'),
+  ).toBeTruthy();
+});
