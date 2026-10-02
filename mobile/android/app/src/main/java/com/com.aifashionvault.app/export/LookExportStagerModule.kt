@@ -139,11 +139,17 @@ class LookExportStagerModule(private val reactContext: ReactApplicationContext) 
       promise.reject(ExportStagerOutcome.ERROR_NO_ACTIVITY, "No foreground activity")
       return
     }
+    // The staged BYTES are the source of truth for the MIME type: a caller hint (the JS side
+    // currently always passes 'image/jpeg') must not mislabel a PNG to the receiving app.
+    // Sniffing always succeeds for a staged file because staging already validated the format.
+    val sniffed = ExportStaging.sniffMediaType(file)
     val resolvedMime =
-        if (ExportStagerOutcome.isImageMediaType(mimeType)) {
+        if (sniffed != ExportStaging.DEFAULT_MEDIA_TYPE) {
+          sniffed
+        } else if (ExportStagerOutcome.isImageMediaType(mimeType)) {
           ExportStagerOutcome.normalizeMediaType(mimeType!!)
         } else {
-          ExportStaging.sniffMediaType(file)
+          sniffed
         }
     val contentUri =
         try {
@@ -200,7 +206,8 @@ class LookExportStagerModule(private val reactContext: ReactApplicationContext) 
         }
     val values =
         ContentValues().apply {
-          put(MediaStore.Images.Media.DISPLAY_NAME, DISPLAY_NAME)
+          // The gallery entry must not claim a JPEG extension for PNG bytes.
+          put(MediaStore.Images.Media.DISPLAY_NAME, displayNameFor(mimeType))
           put(MediaStore.Images.Media.MIME_TYPE, mimeType)
           if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             // IS_PENDING keeps a half-written image out of the gallery until the copy lands.
@@ -269,6 +276,14 @@ class LookExportStagerModule(private val reactContext: ReactApplicationContext) 
   private fun resultMap(action: String): WritableNativeMap =
       WritableNativeMap().apply { putString("action", action) }
 
+  /** Keeps the gallery filename's extension honest about the bytes it names. */
+  private fun displayNameFor(mimeType: String): String =
+      when (mimeType) {
+        "image/png" -> "look.png"
+        "image/webp-static", "image/webp" -> "look.webp"
+        else -> "look.jpg"
+      }
+
   override fun invalidate() {
     // A pending download must not outlive the bridge; reject rather than leak the promise.
     pendingPromise?.reject(ExportStagerOutcome.ERROR_DOWNLOAD_FAILED, "Export was released")
@@ -284,6 +299,5 @@ class LookExportStagerModule(private val reactContext: ReactApplicationContext) 
 
     private const val CONNECT_TIMEOUT_MS = 10_000
     private const val READ_TIMEOUT_MS = 30_000
-    private const val DISPLAY_NAME = "look.jpg"
   }
 }
