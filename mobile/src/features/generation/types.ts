@@ -48,6 +48,15 @@ export type GenerationApi = {
   ): Promise<GenerationResource>;
   get(id: string): Promise<GenerationResource>;
   getLook(id: string): Promise<LookResource>;
+  /**
+   * Owner-scoped recovery surface: the caller's recent generations, newest
+   * first. This is the durable source of truth for in-flight/recent state, so
+   * a process restart can rebuild it without relying on a process-local
+   * variable that died with the process.
+   */
+  list(): Promise<GenerationResource[]>;
+  /** Requests cancellation. The response reports the state the server reached. */
+  cancel(id: string): Promise<GenerationResource>;
 };
 
 // Null return means the user cancelled the picker. Injectable so flows are

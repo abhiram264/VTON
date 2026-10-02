@@ -45,22 +45,55 @@ const CONFIG_KEYS = {
   appId: 'EXPO_PUBLIC_FIREBASE_APP_ID',
 } as const;
 
-// The Expo public env seam as a checked object, mirroring the apiConfig.ts
-// `globalThis as {...}` convention. process.env wins; globalThis is the
-// fallback for runtimes that do not populate it.
-const firebaseGlobals = () =>
-  globalThis as {
-    EXPO_PUBLIC_FIREBASE_API_KEY?: string;
-    EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN?: string;
-    EXPO_PUBLIC_FIREBASE_PROJECT_ID?: string;
-    EXPO_PUBLIC_FIREBASE_APP_ID?: string;
-  };
+type FirebaseEnvKey =
+  | 'EXPO_PUBLIC_FIREBASE_API_KEY'
+  | 'EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN'
+  | 'EXPO_PUBLIC_FIREBASE_PROJECT_ID'
+  | 'EXPO_PUBLIC_FIREBASE_APP_ID';
 
-function readEnv(
-  key: keyof ReturnType<typeof firebaseGlobals>,
-): string {
-  const globals = firebaseGlobals();
-  return (process.env[key] ?? globals[key] ?? '').trim();
+/**
+ * React Native defines `__DEV__` on the global object: true under Metro dev
+ * and Jest, false in release bundles. Read through globalThis so this module
+ * does not depend on an ambient TypeScript global.
+ */
+export function isReleaseBuild(): boolean {
+  return (globalThis as {__DEV__?: boolean}).__DEV__ === false;
+}
+
+// Static member reads only. The Babel inliner (mobile/babel.config.js)
+// substitutes `process.env.EXPO_PUBLIC_*` member accesses with string literals
+// at bundle time; a computed read like `process.env[key]` survives the
+// transform untouched and leaves a release bundle with no Firebase config.
+function readEnv(key: FirebaseEnvKey): string {
+  // EXPO_PUBLIC_* globals are populated by the bundler at runtime; they are
+  // not part of the TypeScript lib, hence the named cast.
+  const globals = globalThis as Partial<Record<FirebaseEnvKey, string>>;
+  switch (key) {
+    case 'EXPO_PUBLIC_FIREBASE_API_KEY':
+      return (
+        process.env.EXPO_PUBLIC_FIREBASE_API_KEY ??
+        globals.EXPO_PUBLIC_FIREBASE_API_KEY ??
+        ''
+      ).trim();
+    case 'EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN':
+      return (
+        process.env.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN ??
+        globals.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN ??
+        ''
+      ).trim();
+    case 'EXPO_PUBLIC_FIREBASE_PROJECT_ID':
+      return (
+        process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID ??
+        globals.EXPO_PUBLIC_FIREBASE_PROJECT_ID ??
+        ''
+      ).trim();
+    case 'EXPO_PUBLIC_FIREBASE_APP_ID':
+      return (
+        process.env.EXPO_PUBLIC_FIREBASE_APP_ID ??
+        globals.EXPO_PUBLIC_FIREBASE_APP_ID ??
+        ''
+      ).trim();
+  }
 }
 
 const UNAVAILABLE: AuthSurface = {
@@ -111,8 +144,10 @@ export type AuthSession =
   | { status: 'signed-in'; uid: string; getIdToken: () => Promise<string> };
 
 /**
- * Idempotent for a given resolved config, and total: a bad or absent config
- * yields the unavailable surface instead of throwing, so the app always boots.
+ * Idempotent for a given resolved config, and total in development: a bad or
+ * absent config yields the unavailable surface instead of throwing, so the app
+ * always boots. In a release build an absent or placeholder config fails
+ * closed by throwing — a shipped app must never run with template values.
  * The app is looked up by name before initialization so a changed config
  * reuses the existing instance instead of throwing "already exists".
  */
@@ -122,10 +157,18 @@ export function initializeFirebase(
   const key = [config.apiKey, config.authDomain, config.projectId, config.appId]
     .map(value => (value ?? '').trim())
     .join('|');
+  const configured = isFirebaseConfigured(config);
+  // Checked before the cache so a cached unavailable surface from a
+  // development call cannot mask the release failure.
+  if (!configured && isReleaseBuild()) {
+    throw new Error(
+      'Firebase is not configured for a release build: set EXPO_PUBLIC_FIREBASE_*',
+    );
+  }
   if (surface !== null && surfaceKey === key) {
     return surface;
   }
-  if (!isFirebaseConfigured(config)) {
+  if (!configured) {
     surface = UNAVAILABLE;
     surfaceKey = key;
     return surface;

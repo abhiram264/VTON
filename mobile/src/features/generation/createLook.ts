@@ -90,7 +90,7 @@ function isCreateOutcomeUnknown(error: unknown): boolean {
 }
 
 async function resolveGeneration(
-  api: GenerationApi,
+  api: Pick<GenerationApi, 'get' | 'getLook'>,
   generationId: string,
   onUpdate?: (generation: GenerationResource) => void,
   delay?: (ms: number) => Promise<void>,
@@ -121,7 +121,10 @@ async function resolveGeneration(
 export async function createLook(input: {
   picker: ProductPicker;
   upload: ProductUploader;
-  api: GenerationApi;
+  // The create/poll flow only needs these three: recovery (list) and
+  // cancellation are separate lifecycle operations, so a caller does not have
+  // to implement them to run a generation.
+  api: Pick<GenerationApi, 'create' | 'get' | 'getLook'>;
   onUpdate?: (generation: GenerationResource) => void;
   delay?: (ms: number) => Promise<void>;
   hint?: { current: boolean };
