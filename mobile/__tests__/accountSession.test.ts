@@ -34,28 +34,43 @@ const UNAVAILABLE: AuthSurface = {
 describe('account session isolation (C03 signout / expired session)', () => {
   beforeEach(() => {
     // A previous account's state, as it would look right before sign-out.
+    // The overrides are the OPPOSITE of each flag's declared default, so the
+    // test can first prove the override took effect and then prove clearing
+    // restores the default. Overriding a flag to its own default value would
+    // make both halves vacuous.
     setActiveGeneration('generation-from-first-account');
-    applyFeatureFlagPayload({ MULTI_ITEM: false, NEW_QUALITY_GATE: true });
+    applyFeatureFlagPayload({
+      TRYON_MAX: !DEFAULT_FEATURE_FLAGS.TRYON_MAX,
+      NEW_QUALITY_GATE: !DEFAULT_FEATURE_FLAGS.NEW_QUALITY_GATE,
+    });
   });
 
   test('clearAccountBoundState drops the active generation and restores flag defaults', () => {
     expect(getActiveGeneration()).toBe('generation-from-first-account');
-    expect(isFeatureEnabled('MULTI_ITEM')).toBe(false);
+    // Only flags outside UNSUPPORTED_CAPABILITIES are read: isFeatureEnabled
+    // returns false for a gated capability regardless of the override map, so
+    // asserting on one of those could never fail and would prove nothing.
+    expect(isFeatureEnabled('TRYON_MAX')).toBe(
+      !DEFAULT_FEATURE_FLAGS.TRYON_MAX,
+    );
+    expect(isFeatureEnabled('NEW_QUALITY_GATE')).toBe(
+      !DEFAULT_FEATURE_FLAGS.NEW_QUALITY_GATE,
+    );
 
     clearAccountBoundState();
 
     expect(getActiveGeneration()).toBeNull();
-    // "Restores the declared defaults" is the actual contract. Pinning the
-    // literals here would re-break every time a default legitimately changes
-    // (C22 flipped MULTI_ITEM off), so the expectation is derived from the
-    // declaration instead of restated. TRYON_MAX and SHARE_IMPORT_ANDROID are
-    // read because neither is gated by UNSUPPORTED_CAPABILITIES, so
-    // isFeatureEnabled reports the flag's own value for them.
+    // "Restores the declared defaults" is the actual contract. The
+    // expectation is derived from the declaration rather than restated as a
+    // literal, so a future default change (as C22 made to MULTI_ITEM) cannot
+    // invalidate this test.
     expect(isFeatureEnabled('TRYON_MAX')).toBe(DEFAULT_FEATURE_FLAGS.TRYON_MAX);
     expect(isFeatureEnabled('SHARE_IMPORT_ANDROID')).toBe(
       DEFAULT_FEATURE_FLAGS.SHARE_IMPORT_ANDROID,
     );
-    expect(isFeatureEnabled('NEW_QUALITY_GATE')).toBe(false);
+    expect(isFeatureEnabled('NEW_QUALITY_GATE')).toBe(
+      DEFAULT_FEATURE_FLAGS.NEW_QUALITY_GATE,
+    );
   });
 
   test('signOutAccount on an unavailable surface reports unavailable and touches nothing', async () => {

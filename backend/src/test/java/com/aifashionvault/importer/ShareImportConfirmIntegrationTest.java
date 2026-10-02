@@ -19,6 +19,8 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 
+import com.aifashionvault.normalization.ProductCategory;
+import com.aifashionvault.platform.web.ConfirmShareImportRequest;
 import com.aifashionvault.platform.web.ShareImportMediaAccess;
 import com.aifashionvault.platform.web.ShareImportService;
 import com.aifashionvault.shared.ShareImportId;
@@ -74,7 +76,7 @@ class ShareImportConfirmIntegrationTest {
 
 	@BeforeEach
 	void clearTables() {
-		jdbc.update("TRUNCATE TABLE share_import, source_reference, vault_item, users CASCADE");
+		jdbc.update("TRUNCATE TABLE share_import, source_reference, vault_item, collection_item, collection, users CASCADE");
 		insertUser(OWNER);
 		insertUser(STRANGER);
 	}
@@ -83,7 +85,7 @@ class ShareImportConfirmIntegrationTest {
 	void confirmedImportBecomesAnOwnedVaultItem() {
 		ShareImportId importId = readyUrlImport(OWNER);
 
-		var confirmed = service.confirm(OWNER, importId.value().toString());
+		var confirmed = service.confirm(OWNER, importId.value().toString(), null);
 
 		assertThat(confirmed.id()).isNotBlank();
 		assertThat(confirmed.sourceReferenceId()).isEqualTo(importId.value().toString());
@@ -102,7 +104,7 @@ class ShareImportConfirmIntegrationTest {
 	void anotherOwnerIsRefusedAndNothingIsSavedForThem() {
 		ShareImportId importId = readyUrlImport(OWNER);
 
-		assertThatThrownBy(() -> service.confirm(STRANGER, importId.value().toString()))
+		assertThatThrownBy(() -> service.confirm(STRANGER, importId.value().toString(), null))
 			.isInstanceOf(com.aifashionvault.platform.web.ShareImportProblem.class);
 		// The stranger learned nothing and saved nothing; the owner can still
 		// confirm their own import afterwards.
@@ -110,18 +112,78 @@ class ShareImportConfirmIntegrationTest {
 			Integer.class, STRANGER.value())).isZero();
 		assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM vault_item WHERE user_id = ?",
 			Integer.class, OWNER.value())).isZero();
-		assertThat(service.confirm(OWNER, importId.value().toString()).id()).isNotBlank();
+		assertThat(service.confirm(OWNER, importId.value().toString(), null).id()).isNotBlank();
 	}
 
 	@Test
 	void repeatConfirmationReturnsTheSameSavedItem() {
 		ShareImportId importId = readyUrlImport(OWNER);
 
-		String first = service.confirm(OWNER, importId.value().toString()).id();
-		String again = service.confirm(OWNER, importId.value().toString()).id();
+		String first = service.confirm(OWNER, importId.value().toString(), null).id();
+		String again = service.confirm(OWNER, importId.value().toString(), null).id();
 
 		assertThat(again).isEqualTo(first);
 		assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM vault_item", Integer.class)).isEqualTo(1);
+	}
+
+	@Test
+	void confirmationSavesCorrectedMetadataAndCollectionMembership() {
+		ShareImportId importId = readyUrlImport(OWNER);
+		UUID collectionId = insertCollection(OWNER, "Summer");
+
+		var confirmed = service.confirm(OWNER, importId.value().toString(),
+			new ConfirmShareImportRequest("  Corrected Shirt  ", "top", collectionId.toString()));
+
+		UUID itemId = UUID.fromString(confirmed.id());
+		assertThat(confirmed.name()).isEqualTo("Corrected Shirt");
+		assertThat(confirmed.category()).isEqualTo(ProductCategory.TOP);
+		assertThat(jdbc.queryForObject("SELECT name FROM vault_item WHERE id = ?", String.class, itemId))
+			.isEqualTo("Corrected Shirt");
+		assertThat(jdbc.queryForObject("SELECT category FROM vault_item WHERE id = ?", String.class, itemId))
+			.isEqualTo("TOP");
+		assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM collection_item WHERE vault_item_id = ?",
+			Integer.class, itemId)).isEqualTo(1);
+		assertThat(jdbc.queryForObject("SELECT collection_id FROM collection_item WHERE vault_item_id = ?",
+			UUID.class, itemId)).isEqualTo(collectionId);
+	}
+
+	@Test
+	void repeatConfirmationWithCorrectionsStaysIdempotent() {
+		ShareImportId importId = readyUrlImport(OWNER);
+		UUID collectionId = insertCollection(OWNER, "Summer");
+		ConfirmShareImportRequest request =
+			new ConfirmShareImportRequest("Shirt", "TOP", collectionId.toString());
+
+		String first = service.confirm(OWNER, importId.value().toString(), request).id();
+		String again = service.confirm(OWNER, importId.value().toString(), request).id();
+
+		assertThat(again).isEqualTo(first);
+		assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM vault_item", Integer.class)).isEqualTo(1);
+		assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM collection_item", Integer.class)).isEqualTo(1);
+	}
+
+	@Test
+	void unownedCollectionIsRefusedAndNothingIsSaved() {
+		ShareImportId importId = readyUrlImport(OWNER);
+		UUID strangerCollection = insertCollection(STRANGER, "Stranger");
+
+		assertThatThrownBy(() -> service.confirm(OWNER, importId.value().toString(),
+			new ConfirmShareImportRequest(null, null, strangerCollection.toString())))
+			.isInstanceOf(com.aifashionvault.platform.web.ShareImportProblem.class);
+		assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM vault_item", Integer.class)).isZero();
+		assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM collection_item", Integer.class)).isZero();
+		// The owner can still confirm the same import afterwards, without the foreign collection.
+		assertThat(service.confirm(OWNER, importId.value().toString(), null).id()).isNotBlank();
+	}
+
+	@Test
+	void unknownCategoryIsAMalformedRequest() {
+		ShareImportId importId = readyUrlImport(OWNER);
+
+		assertThatThrownBy(() -> service.confirm(OWNER, importId.value().toString(),
+			new ConfirmShareImportRequest(null, "NOT_A_CATEGORY", null)))
+			.isInstanceOf(com.aifashionvault.platform.web.ShareImportProblem.class);
+		assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM vault_item", Integer.class)).isZero();
 	}
 
 	@Test
@@ -135,7 +197,7 @@ class ShareImportConfirmIntegrationTest {
 		jdbc.update("UPDATE share_import SET terminal_reason_code = 'URL_RESOLUTION_FAILED' WHERE id = ?",
 			importId.value());
 
-		assertThatThrownBy(() -> service.confirm(OWNER, importId.value().toString()))
+		assertThatThrownBy(() -> service.confirm(OWNER, importId.value().toString(), null))
 			.isInstanceOf(com.aifashionvault.platform.web.ShareImportProblem.class);
 		assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM vault_item", Integer.class)).isZero();
 	}
@@ -156,6 +218,13 @@ class ShareImportConfirmIntegrationTest {
 	private static void insertUser(UserId user) {
 		jdbc.update("INSERT INTO users (id, created_at, updated_at, deleted_at) VALUES (?, ?, ?, NULL)",
 			user.value(), java.sql.Timestamp.from(NOW), java.sql.Timestamp.from(NOW));
+	}
+
+	private static UUID insertCollection(UserId owner, String name) {
+		UUID id = UUID.randomUUID();
+		jdbc.update("INSERT INTO collection (id, user_id, name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+			id, owner.value(), name, java.sql.Timestamp.from(NOW), java.sql.Timestamp.from(NOW));
+		return id;
 	}
 
 	/** Media seam is never touched by confirmation: the object already exists. */
