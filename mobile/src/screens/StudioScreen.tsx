@@ -52,6 +52,7 @@ export default function StudioScreen({ studioSessionId, sourceLookId, selectedVa
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
   const [phase, setPhase] = useState<CoarseGenerationPhase | null>(null);
   const [unresolved, setUnresolved] = useState<{ vaultItemId: string; reason: string }[]>([]);
+  const [candidates, setCandidates] = useState<{ vaultItemId: string; label: string; slot: StudioSlot | null }[]>([]);
   const commandLock = useRef(false);
   const imageRetried = useRef<Set<string>>(new Set());
   // Held in a ref so the load/selection effects depend on the route params, not
@@ -272,12 +273,25 @@ export default function StudioScreen({ studioSessionId, sourceLookId, selectedVa
     commandLock.current = true;
     setBusy(true);
     setNotice(null);
+    setCandidates([]);
     try {
-      const state = await studioApi.command(sessionId, text);
+      const result = await studioApi.command(sessionId, text);
       if (commandRequest.current !== request) return;
-      if (state.sessionId !== sessionId) throw new Error('Studio session mismatch');
-      setStudioState(state);
-      setCommand(current => current === submittedCommand ? '' : current);
+      if (result.state.sessionId !== sessionId) throw new Error('Studio session mismatch');
+      // Only APPLIED means the draft actually changed. CONFIRM_REQUIRED,
+      // EXPLAINED and REFUSED all leave it exactly as it was, so the typed
+      // command is kept and the server's own words are shown.
+      if (result.outcome === 'APPLIED') {
+        setStudioState(result.state);
+        setCommand(current => current === submittedCommand ? '' : current);
+      } else if (result.outcome === 'CONFIRM_REQUIRED') {
+        setCandidates(result.candidates);
+        setNotice(result.message ?? 'That command is ambiguous. Pick the garment you meant.');
+      } else {
+        setNotice(result.message ?? (result.outcome === 'REFUSED'
+          ? 'That command was not applied.'
+          : 'That command made no change.'));
+      }
     } catch {
       if (commandRequest.current === request) setNotice('Could not apply command. Use manual controls below.');
     } finally {
@@ -285,6 +299,34 @@ export default function StudioScreen({ studioSessionId, sourceLookId, selectedVa
         commandLock.current = false;
         if (mounted.current) setBusy(false);
       }
+    }
+  }
+
+  // Confirming an ambiguous command re-sends the STRUCTURED owned command (the
+  // same manual-control route), with the planner's own slot and the draft's
+  // current token, so a concurrent manual edit still wins with a conflict
+  // instead of being overwritten. The candidate's label is display-only.
+  async function confirmCandidate(candidate: { vaultItemId: string; label: string; slot: StudioSlot | null }) {
+    if (!activeSession || busy) return;
+    const sessionId = activeSession.sessionId;
+    setBusy(true);
+    setNotice(null);
+    try {
+      const state = await studioApi.addItem(
+        sessionId,
+        candidate.vaultItemId,
+        candidate.slot ?? itemInfo[candidate.vaultItemId]?.slot ?? 'ACCESSORY',
+        activeSession.updatedAt,
+      );
+      if (!mounted.current) return;
+      if (state.sessionId !== sessionId) throw new Error('Studio session mismatch');
+      setStudioState(state);
+      setCandidates([]);
+      setCommand('');
+    } catch {
+      if (mounted.current) setNotice('Could not add that garment. Pick it from your Vault instead.');
+    } finally {
+      if (mounted.current) setBusy(false);
     }
   }
 
@@ -369,6 +411,14 @@ export default function StudioScreen({ studioSessionId, sourceLookId, selectedVa
         <>
           <TextInput accessibilityLabel="Natural-language command" accessibilityState={{ disabled: !activeSession || busy }} editable={Boolean(activeSession) && !busy} multiline onChangeText={setCommand} placeholder="Describe an outfit change" style={styles.input} value={command} />
           <Action label="Apply command" onPress={applyCommand} disabled={!activeSession || command.trim().length === 0 || busy} />
+          {candidates.length > 0 ? (
+            <View testID="studio-candidates" style={styles.slotItems}>
+              <Text style={styles.slotLabel}>Which garment did you mean?</Text>
+              {candidates.map(candidate => (
+                <Action key={candidate.vaultItemId} label={candidate.label} onPress={() => confirmCandidate(candidate)} disabled={busy} />
+              ))}
+            </View>
+          ) : null}
         </>
       ) : null}
       {notice ? <Text accessibilityLiveRegion="polite" testID="studio-notice">{notice}</Text> : null}
