@@ -70,8 +70,16 @@ public final class StudioCommandPlanner {
         }
     }
 
-    /** More than one owned item matched; the user must choose explicitly. */
-    public record NeedsSelection(String prompt, List<SelectionCandidate> candidates) implements Plan {
+    /**
+     * More than one owned item matched; the user must choose explicitly.
+     *
+     * <p>{@code slot} is the target slot already resolved from the command (for
+     * {@code add}/{@code replace}), so a caller does not have to re-derive it from the
+     * garment's category. It is {@code null} when the command carries no slot of its own
+     * (a bare lookup) or the item is not in the draft.
+     */
+    public record NeedsSelection(String prompt, List<SelectionCandidate> candidates, StudioSlot slot)
+            implements Plan {
         public NeedsSelection {
             prompt = Objects.requireNonNull(prompt);
             candidates = List.copyOf(candidates);
@@ -184,7 +192,7 @@ public final class StudioCommandPlanner {
         if (slot == null) {
             return refused(AgentProblemCode.MALFORMED_CALL, "Unknown slot \"" + split.tail() + "\".");
         }
-        ItemPick pick = resolveItem(actor, session, split.head());
+        ItemPick pick = resolveItem(actor, session, split.head(), slot);
         if (pick.problem() != null) {
             return pick.problem();
         }
@@ -229,7 +237,7 @@ public final class StudioCommandPlanner {
                     AgentProblemCode.MALFORMED_CALL,
                     "The " + slot.name() + " slot holds one item; drop \"at <position>\".");
         }
-        ItemPick pick = resolveItem(actor, session, descriptor);
+        ItemPick pick = resolveItem(actor, session, descriptor, slot);
         if (pick.problem() != null) {
             return pick.problem();
         }
@@ -261,7 +269,7 @@ public final class StudioCommandPlanner {
             }
             return new Resolved(List.of(call("removeItem", Map.of("slot", slot.name()))));
         }
-        ItemPick pick = resolveItem(actor, session, rest);
+        ItemPick pick = resolveItem(actor, session, rest, null);
         if (pick.problem() != null) {
             return pick.problem();
         }
@@ -344,7 +352,7 @@ public final class StudioCommandPlanner {
         return value instanceof StudioStateValue state ? state : null;
     }
 
-    private ItemPick resolveItem(UserId actor, StudioSessionId session, String rawDescriptor) {
+    private ItemPick resolveItem(UserId actor, StudioSessionId session, String rawDescriptor, StudioSlot targetSlot) {
         String descriptor = normalizeDescriptor(rawDescriptor);
         if (descriptor.isEmpty()) {
             return new ItemPick(null, refused(AgentProblemCode.MALFORMED_CALL, "Name the item, for example \"my blue shirt\"."));
@@ -371,7 +379,8 @@ public final class StudioCommandPlanner {
                 null,
                 new NeedsSelection(
                         "Several items match \"" + descriptor + "\". Send the item id to use.",
-                        candidates.stream().map(StudioCommandPlanner::candidate).toList()));
+                        candidates.stream().map(StudioCommandPlanner::candidate).toList(),
+                        targetSlot));
     }
 
     private static SelectionCandidate candidate(VaultItemSummary summary) {
