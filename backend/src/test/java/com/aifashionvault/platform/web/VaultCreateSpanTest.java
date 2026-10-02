@@ -279,7 +279,7 @@ class VaultCreateSpanTest {
 
 	private static VaultItem item(String name) {
 		return new VaultItem(new VaultItemId(UUID.nameUUIDFromBytes("item".getBytes())), USER,
-			new StorageKey("users/x/vault/y.jpg"), null, name, "Acme", ProductCategory.TOP, null, null, null,
+			new StorageKey("users/x/vault/y.jpg"), null, null, name, "Acme", ProductCategory.TOP, null, null, null,
 			null, java.time.Instant.EPOCH);
 	}
 

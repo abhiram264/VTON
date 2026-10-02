@@ -36,12 +36,43 @@ public final class ShareImportService {
 	private final JdbcShareImportStore store;
 	private final ShareImportMediaAccess media;
 	private final ShareImportResolverChain chains;
+	private final com.aifashionvault.analytics.ProductMetrics productMetrics;
 
 	public ShareImportService(JdbcShareImportStore store, ShareImportMediaAccess media,
 			ShareImportResolverChain chains) {
+		this(store, media, chains, null);
+	}
+
+	/**
+	 * C22: import lifecycle analytics is an ADDITIVE, optional dependency. The
+	 * existing constructor delegates with {@code null}, so every current caller is
+	 * unchanged and a deployment without the bean records no import events.
+	 */
+	public ShareImportService(JdbcShareImportStore store, ShareImportMediaAccess media,
+			ShareImportResolverChain chains, com.aifashionvault.analytics.ProductMetrics productMetrics) {
 		this.store = store;
 		this.media = media;
 		this.chains = chains;
+		this.productMetrics = productMetrics;
+	}
+
+	/**
+	 * Records one import lifecycle event. The payload carries only the coarse
+	 * {@link com.aifashionvault.analytics.ProductMetricContext} fields — never the
+	 * source URL, image bytes, prompts or capabilities (ADR-015). Best-effort:
+	 * analytics must never affect an import.
+	 */
+	private void recordImport(com.aifashionvault.analytics.AnalyticsEventName eventName) {
+		if (productMetrics == null || eventName == null) {
+			return;
+		}
+		try {
+			productMetrics.record(eventName, new com.aifashionvault.analytics.ProductMetricContext(
+				java.time.Instant.now(), eventName.wireName(), "SHARE", null, null, null, null, null, null));
+		}
+		catch (RuntimeException ignored) {
+			// Observability is deliberately off the product critical path.
+		}
 	}
 
 	public record CreateOutcome(ShareImportResponse body, int status) {
@@ -189,7 +220,7 @@ public final class ShareImportService {
 		ShareImportId id = parseImportId(importId);
 		Confirmation corrections = parseConfirmation(request);
 		return store.confirm(owner, id, corrections.name(), corrections.category(), corrections.collectionId())
-			.map(item -> new VaultItemResponse(item.itemId().toString(), item.sourceReferenceId().toString(),
+			.map(item -> new VaultItemResponse(item.itemId().toString(), item.sourceReferenceId().toString(), null,
 				item.name(), null, category(item.category()), null, null, null, null, item.createdAt()))
 			.orElseThrow(ShareImportProblem::notFound);
 	}
@@ -264,6 +295,10 @@ public final class ShareImportService {
 
 	private CreateOutcome runAttempt(ShareImport attempt, UploadId uploadId, boolean newlyCreated) {
 		int ok = newlyCreated ? 201 : 200;
+		if (newlyCreated) {
+			// Import started: only a genuinely new import counts as a started attempt.
+			recordImport(com.aifashionvault.analytics.AnalyticsEventName.SHARE_RECEIVED);
+		}
 		ResolutionResult result = resolve(attempt, uploadId);
 		if (result.status() == ResolutionStatus.UNSUPPORTED) {
 			store.publish(attempt.id(), attempt.attemptToken(), invalidSource());
@@ -309,11 +344,21 @@ public final class ShareImportService {
 		ImportResolver resolver = chains.chain(attempt.userId(), attempt.id(), attempt.attemptToken().toString());
 		SourceReference source = new SourceReference(attempt.sourceUrl(), uploadId);
 		try {
-			return resolver.resolve(source);
+			ResolutionResult resolved = resolver.resolve(source);
+			// One outcome event per resolution attempt, whichever path (fresh or
+			// recovery) reached it: UNSUPPORTED is a request-validation verdict, so
+			// it is neither a successful nor a failed resolution.
+			if (resolved.status() != ResolutionStatus.UNSUPPORTED) {
+				recordImport(resolved.status() == ResolutionStatus.RESOLVED
+					? com.aifashionvault.analytics.AnalyticsEventName.SHARE_RESOLVED
+					: com.aifashionvault.analytics.AnalyticsEventName.SHARE_RESOLUTION_FAILED);
+			}
+			return resolved;
 		}
 		catch (ImporterRetryableException ex) {
 			store.publish(attempt.id(), attempt.attemptToken(),
 				new ResolutionResult(ResolutionStatus.RETRYABLE_FAILURE, null, null, null, null, ex.reason()));
+			recordImport(com.aifashionvault.analytics.AnalyticsEventName.SHARE_RESOLUTION_FAILED);
 			throw problemFor(ex.reason());
 		}
 	}

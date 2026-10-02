@@ -39,7 +39,7 @@ public class VaultController {
 	private static String text(ObjectNode n,String k){JsonNode v=n.get(k);if(v==null||v.isNull())return null;if(!v.isString())throw VaultService.problem(ProblemCode.VAULT_INVALID_REQUEST);return v.stringValue();}
 	private static String text(String v){if(v==null)return null;String s=v.strip();if(s.isEmpty())throw VaultService.problem(ProblemCode.VAULT_INVALID_REQUEST);return s;}
 	private VaultService service(){try{VaultService service=services.getIfAvailable();if(service!=null)return service;}catch(NoUniqueBeanDefinitionException ignored){}throw VaultService.problem(ProblemCode.VAULT_MEDIA_UNAVAILABLE);}
-	private static VaultItemResponse response(VaultItem v){return new VaultItemResponse(v.id().value().toString(),v.sourceReferenceId()==null?null:v.sourceReferenceId().value().toString(),v.name(),v.brand(),v.category(),v.subcategory(),v.color(),v.pattern(),v.attributes(),v.createdAt());}
+	private static VaultItemResponse response(VaultItem v){return new VaultItemResponse(v.id().value().toString(),v.sourceReferenceId()==null?null:v.sourceReferenceId().value().toString(),v.sourceUrl(),v.name(),v.brand(),v.category(),v.subcategory(),v.color(),v.pattern(),v.attributes(),v.createdAt());}
 	private static HttpStatus status(ProblemCode code){return switch(code){case VAULT_ITEM_NOT_FOUND,VAULT_SOURCE_NOT_FOUND->HttpStatus.NOT_FOUND;case VAULT_ITEM_IN_USE->HttpStatus.CONFLICT;case VAULT_MEDIA_UNAVAILABLE->HttpStatus.SERVICE_UNAVAILABLE;default->HttpStatus.BAD_REQUEST;};}
 	record Problem(String code){}
 }

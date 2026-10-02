@@ -176,6 +176,20 @@ public class LooksController {
 		return capability(owned(ownerId, id));
 	}
 
+	/**
+	 * C22 "Look exported" lifecycle event, as an owner-approved ack (2026-10-03). A C16
+	 * export is user-directed and entirely local — the backend never sees the share — so
+	 * the client acknowledges it here once the export has succeeded. Owner-scoped: a
+	 * foreign or unknown id is 404 and records nothing. Fire-and-forget: the ack never
+	 * affects the export, and the recorded context is the coarse non-identifying shape.
+	 */
+	@PostMapping("/{id}/export-ack")
+	@ResponseStatus(HttpStatus.NO_CONTENT)
+	public void exportAck(@AuthenticationPrincipal UserId ownerId, @PathVariable String id) {
+		owned(ownerId, id);
+		recordLookExported();
+	}
+
 	@PostMapping("/{id}/regenerate")
 	public ResponseEntity<GenerationResponse> regenerate(
 		@AuthenticationPrincipal UserId ownerId,
@@ -392,18 +406,33 @@ public class LooksController {
 	}
 
 	/**
-	 * C22 "Look reopened" lifecycle event, best-effort: a deployment without the metrics
-	 * bean records nothing, and a metrics failure must never fail a read. The context is the
-	 * coarse, non-identifying shape {@link com.aifashionvault.analytics.ProductMetricContext}
-	 * defines — no image bytes, prompts, tokens or signed URLs.
+	 * C22 Look lifecycle events, best-effort: a deployment without the metrics bean
+	 * records nothing, and a metrics failure must never fail a read or an ack. The
+	 * context is the coarse, non-identifying shape
+	 * {@link com.aifashionvault.analytics.ProductMetricContext} defines — no image
+	 * bytes, prompts, tokens or signed URLs.
 	 */
 	private void recordLookViewed() {
+		recordLookLifecycle(com.aifashionvault.analytics.AnalyticsEventName.LOOK_VIEWED);
+	}
+
+	/**
+	 * C22 "Look exported": recorded from the owner-approved export ack. {@code LOOK_SHARED}
+	 * is the existing look-lifecycle event for a Look leaving the vault; the public
+	 * share-link route it was originally named for is deliberately unused (C16), so this
+	 * user-directed export ack is its real emitter.
+	 */
+	private void recordLookExported() {
+		recordLookLifecycle(com.aifashionvault.analytics.AnalyticsEventName.LOOK_SHARED);
+	}
+
+	private void recordLookLifecycle(com.aifashionvault.analytics.AnalyticsEventName event) {
 		if (productMetrics == null) {
 			return;
 		}
 		try {
 			productMetrics.record(
-				com.aifashionvault.analytics.AnalyticsEventName.LOOK_VIEWED,
+				event,
 				new com.aifashionvault.analytics.ProductMetricContext(
 					clock.instant(), null, null, null, null, null, null, null, null));
 		}
