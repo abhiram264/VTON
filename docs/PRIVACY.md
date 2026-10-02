@@ -54,43 +54,58 @@ remains the backlog; PR-17 owns the deletion rework.
 
 ## Pending — not implemented
 
-- **F16: the mounted deletion path is not the durable workflow, and is now
-  purge-first.** `user/JdbcIdentityProvisioning.beginDeletion`
-  (`user/JdbcIdentityProvisioning.java:95-119`) loads the user (`:102`), returns
-  unchanged if already deleted (`:106-108`), then runs every registered
-  `AccountMediaPurge.purgeForUser` (`:110-112`) **before** issuing
-  `UPDATE users SET deleted_at` (`:113-117`). The purge list is stored, not discarded:
-  the field is declared at `:35`, assigned at `:64`, resolved from the injected
-  `ObjectProvider` by `orderedPurges` (`:189-194`), and supplied in production by
+- **F16: the mounted deletion path is not the durable workflow, but it is now
+  BARRIER-FIRST.** `user/JdbcIdentityProvisioning.beginDeletion`
+  loads the user, returns unchanged if already deleted, then **commits
+  `UPDATE users SET deleted_at ... WHERE id = ? AND deleted_at IS NULL` in its own
+  transaction BEFORE running any registered `AccountMediaPurge.purgeForUser`.**
+  The ordering is deliberate and is the C17 requirement: everything that gates new
+  work reads the account's `deleted_at`, so the barrier must be durable before any
+  irreversible cleanup, or a purge failure could leave media destroyed while the
+  account still looks active. The conditional `deleted_at IS NULL` makes concurrent
+  deleters converge on one winner, and a loser purges nothing. The purge list is
+  stored, not discarded: it is resolved from the injected `ObjectProvider` by
+  `orderedPurges`, and supplied in production by
   `IdentityProvisioningFactoryBean.getObject`
-  (`user/IdentityProvisioningConfiguration.java:37-42`), which registers three purges —
-  `avatar/AvatarConfiguration.java:54-62`,
-  `importer/ImporterConfiguration.java:30-33` and
-  `platform/generation/GenerationProcessorConfiguration.java:307-317`. Purge-first means
-  a failing purge leaves the account **undeleted** for retry: the exception escapes
-  `beginDeletion` before the `UPDATE`, and
-  `AccountDeletionOrchestratorTest.beginDeletionWithThrowingPurgeLeavesDeletedAtNull`
-  (`src/test/java/com/aifashionvault/platform/AccountDeletionOrchestratorTest.java:92-106`)
-  asserts exactly that — the purge propagates and `deleted_at` stays null. The ordering
-  itself is asserted by `beginDeletionPurgesMediaBeforeMarkingDeleted` (`:75-89`) and
-  `factoryBeanBeginDeletionInvokesRegisteredPurgeBeforeDeletedAt` (`:140-158`), each of which
-  observes `deleted_at` still null at the moment the purge runs; those tests now match the
-  production behaviour rather than contradicting it. Deletion completeness is **still not**
-  established: a purge that returns normally is trusted, and a crash between the purge loop
-  and the `UPDATE` leaves media erased but the account not marked deleted. PR-17 owns the
-  rest of the rework.
+  (`user/IdentityProvisioningConfiguration.java`), which registers three purges —
+  `avatar/AvatarConfiguration.java`,
+  `importer/ImporterConfiguration.java` and
+  `platform/generation/GenerationProcessorConfiguration.java`.
+  Consequences, stated honestly:
+  (a) a failing purge **propagates** (the caller can retry cleanup) while the account
+  stays deleted — `AccountDeletionOrchestratorTest.beginDeletionWithThrowingPurgeKeepsTheBarrierSet`
+  and `IdentityProvisioningTest.beginDeletionBarrierSurvivesMediaPurgeFailure` assert
+  exactly that; the earlier documented behaviour ("a failing purge leaves the account
+  undeleted") was the superseded pre-barrier design and no longer holds;
+  (b) the ordering is asserted from inside the purge callback by
+  `AccountDeletionOrchestratorTest.beginDeletionCommitsTheBarrierBeforePurgingMedia`
+  and `factoryBeanBeginDeletionCommitsTheBarrierBeforePurging`, which observe
+  `deleted_at` ALREADY set at the moment the purge runs;
+  (c) **open question for the owner, not a verified claim:** because `beginDeletion`
+  returns early for an already-deleted user, a purge that failed is not re-run by a
+  later `beginDeletion` call. Whether cleanup retries come from the V021 workflow
+  store or are missing entirely is not established here.
+  Deletion completeness is **still not** established: a purge that returns normally is
+  trusted, and a crash after the barrier leaves the account deleted with media not yet
+  erased.
 - **Export is not mounted.** `PrivacyService.exportUserData`
   (`DefaultPrivacyService.java:48-63`) is unreachable in production; there is no
   production `PrivacyResourcePort` and no export endpoint. No user can obtain an export.
-- **Consent is schema-only.** `V010__create_consents.sql:1-8` defines `consent`
-  (`id`, `user_id`, `purpose`, `version`, `granted_at`, `revoked_at`), and
-  `privacy/Consent.java:6` models it, but **no code writes or reads the table** — the
-  only `consent` references in main source are the migration and the record. The
-  captured value is enforced nowhere. Consent must still be captured and enforced
-  before processing; that requirement stands. Whether such a row would be deleted
-  on account closure is a product-owner decision rather than an implementation
-  gap: rows are retained, and the reasoning is under "Consent record retention"
-  below.
+- **Consent is now stored, read and enforced** (this replaces an earlier
+  "schema-only" note that the merged C06 work superseded).
+  `V010__create_consents.sql` defines `consent`
+  (`id`, `user_id`, `purpose`, `version`, `granted_at`, `revoked_at`);
+  `privacy/ConsentService` + `privacy/JdbcConsentStore` now write, read and withdraw
+  rows over that table through a closed `ConsentPurpose` vocabulary
+  (`body_image_processing`, `third_party_ai_transfer`), `platform/web/ConsentsController`
+  exposes it owner-scoped over HTTP (`GET /consents`, `POST|DELETE /consents/{purpose}`),
+  and the provider-transfer boundary consults it before any media lookup
+  (`platform/generation/AuthorizedGenerationMediaResolver` + `ConsentGate`, refusal
+  mapped to the `CONSENT_REQUIRED` terminal reason). Withdrawal therefore prevents new
+  processing rather than being recorded and ignored. Whether such a row would be
+  deleted on account closure is still a product-owner decision rather than an
+  implementation gap: rows are retained, and the reasoning is under
+  "Consent record retention" below.
 - Deletion completeness is therefore **not** established today: nothing in this tree
   proves complete erasure.
 - **Per-object delete suppression now applies only to the temp-retention sweep.** The
