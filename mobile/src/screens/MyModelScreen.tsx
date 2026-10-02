@@ -40,6 +40,22 @@ const NO_PHOTO_NOTICE =
 const STALE_REVISION_CODE = 'AVATAR_STALE_REVISION';
 const MAX_REFRESH_DELAY_MS = 2_147_483_647;
 
+// C23: a revoked/expired session and a transient failure are different facts
+// and get different words. "Retry" cannot fix an ended session, so offering it
+// would be a dead control; a network blip is exactly what Retry is for.
+type LoadFailure = 'unauthorized' | 'retryable';
+
+const LOAD_FAILURE_TEXT: Record<LoadFailure, string> = {
+  unauthorized: 'Your session has expired. Sign in again to see My Model.',
+  retryable: 'Could not load My Model.',
+};
+
+function classifyLoadFailure(error: unknown): LoadFailure {
+  return error instanceof ApiProblemError && error.code === 'UNAUTHORIZED'
+    ? 'unauthorized'
+    : 'retryable';
+}
+
 // Plain-language names for the two purposes the server enumerates. These are
 // the user-facing surface of C06: the purpose literals themselves are wire
 // values and are never shown.
@@ -64,7 +80,13 @@ type ConsentLoad =
   | { status: 'ready'; snapshot: ConsentSnapshot }
   | { status: 'unavailable' };
 
-type LoadState = 'loading' | 'ready' | 'failed';
+// `failed` carries WHY it failed, because the two causes need different words
+// and different controls: a retryable failure offers Retry, an ended session
+// cannot be fixed by retrying.
+type LoadState =
+  | 'loading'
+  | 'ready'
+  | { failed: LoadFailure };
 
 export default function MyModelScreen({
   onCreateLook,
@@ -164,10 +186,11 @@ export default function MyModelScreen({
           setRefreshNeeded(false);
           setLoadState('ready');
         }
-      } catch {
+      } catch (error) {
         if (!cancelled) {
-          setLoadState('failed');
-          setNotice('My Model is unavailable because it could not be loaded.');
+          const failure = classifyLoadFailure(error);
+          setLoadState({ failed: failure });
+          setNotice(LOAD_FAILURE_TEXT[failure]);
         }
       }
     })();
@@ -210,9 +233,13 @@ export default function MyModelScreen({
             setLoadState('ready');
           }
         })
-        .catch(() => {
+        .catch(error => {
           if (!cancelled) {
-            setLoadState('failed');
+            // This is a refresh of a model the user already had, so a retry is
+            // the right control even when the cause is an ended session: the
+            // notice names the specific situation, and the screen keeps the
+            // last known preview rather than blanking it.
+            setLoadState({ failed: classifyLoadFailure(error) });
             setRefreshNeeded(true);
             setNotice('My Model preview expired and could not be refreshed.');
           }
@@ -246,8 +273,8 @@ export default function MyModelScreen({
           ? 'My Model changed elsewhere. Review it and try again.'
           : emptyNotice,
       );
-    } catch {
-      setLoadState('failed');
+    } catch (error) {
+      setLoadState({ failed: classifyLoadFailure(error) });
       setRefreshNeeded(true);
       setNotice('My Model changed elsewhere. Refresh before trying again.');
     }
@@ -415,6 +442,8 @@ export default function MyModelScreen({
   }
 
   const ready = avatar !== null;
+  const isLoadFailure = typeof loadState === 'object';
+  const failedKind = isLoadFailure ? loadState.failed : null;
   const canAct = !busy && !pickerBusy && loadState !== 'loading';
   const previewDimensions = {
     aspectRatio:
@@ -514,20 +543,25 @@ export default function MyModelScreen({
       </View>
       {loadState === 'loading' && !ready ? (
         <Text accessibilityLiveRegion="polite">Loading My Model…</Text>
-      ) : loadState === 'failed' && !ready ? (
+      ) : isLoadFailure && !ready ? (
         <View style={styles.stack}>
           <Text accessibilityLiveRegion="polite" style={styles.notice}>
             {notice}
           </Text>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityState={{ disabled: !canAct }}
-            disabled={!canAct}
-            onPress={retryLoad}
-            style={[styles.button, styles.primary]}
-          >
-            <Text style={styles.primaryLabel}>Retry My Model</Text>
-          </Pressable>
+          {/* C23: Retry only exists where retrying can work. An ended session
+              is not fixed by a retry, so the control is absent and the notice
+              tells the user what actually has to happen. */}
+          {failedKind === 'retryable' ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityState={{ disabled: !canAct }}
+              disabled={!canAct}
+              onPress={retryLoad}
+              style={[styles.button, styles.primary]}
+            >
+              <Text style={styles.primaryLabel}>Retry My Model</Text>
+            </Pressable>
+          ) : null}
         </View>
       ) : ready ? (
         <View style={styles.stack}>
@@ -565,7 +599,8 @@ export default function MyModelScreen({
               {notice}
             </Text>
           ) : null}
-          {imageFailed || refreshNeeded || loadState === 'failed' ? (
+          {(imageFailed || refreshNeeded || isLoadFailure) &&
+          failedKind !== 'unauthorized' ? (
             <Pressable
               accessibilityRole="button"
               accessibilityState={{ disabled: !canAct }}

@@ -618,4 +618,52 @@ describe('MyModelScreen', () => {
       screen.getByRole('button', { name: 'Grant Body-image processing' }),
     ).toBeTruthy();
   });
+
+  // C23: an ended session and a transient failure are different facts.
+  test('an expired session is told apart from a transient load failure, and offers no futile retry', async () => {
+    fetchMock.mockImplementation((input, init) => {
+      const url = requestUrl(input);
+      const method = (init?.method ?? 'GET').toUpperCase();
+      if (url.endsWith('/consents') && method === 'GET') {
+        return jsonResponse(200, consentSnapshot(false));
+      }
+      if (url.endsWith('/avatars') && method === 'GET') {
+        return jsonResponse(401, { code: 'UNAUTHORIZED' });
+      }
+      throw new Error(`unexpected fetch ${method} ${url}`);
+    });
+
+    await render(<MyModelScreen />);
+
+    expect(
+      await screen.findByText(
+        'Your session has expired. Sign in again to see My Model.',
+      ),
+    ).toBeTruthy();
+    // Retry cannot fix an ended session, so the control must not be offered.
+    expect(screen.queryByRole('button', { name: 'Retry My Model' })).toBeNull();
+    // The empty-state guidance must not be shown as if there were no model.
+    expect(screen.queryByText(/clear, well-lit, full-body photo/i)).toBeNull();
+  });
+
+  test('a transient load failure keeps the retry control', async () => {
+    fetchMock.mockImplementation((input, init) => {
+      const url = requestUrl(input);
+      const method = (init?.method ?? 'GET').toUpperCase();
+      if (url.endsWith('/consents') && method === 'GET') {
+        return jsonResponse(200, consentSnapshot(false));
+      }
+      if (url.endsWith('/avatars') && method === 'GET') {
+        return jsonResponse(503, { code: 'AVATAR_UNAVAILABLE' });
+      }
+      throw new Error(`unexpected fetch ${method} ${url}`);
+    });
+
+    await render(<MyModelScreen />);
+
+    expect(await screen.findByText('Could not load My Model.')).toBeTruthy();
+    expect(
+      screen.getByRole('button', { name: 'Retry My Model' }),
+    ).toBeTruthy();
+  });
 });
