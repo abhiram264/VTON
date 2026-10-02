@@ -25,23 +25,6 @@ const SLOTS: readonly { label: string; slot: StudioSlot }[] = [
   { label: 'Footwear', slot: 'FEET' },
 ];
 
-// The Vault item display capability (thumbnails/full images) belongs to the
-// Vault surface. Read it defensively: when the item carries a display URL the
-// slot renders the garment image, otherwise it renders the garment name. A raw
-// UUID is never rendered either way.
-function garmentImageUrl(item: unknown): string | null {
-  if (item === null || typeof item !== 'object') return null;
-  const row = item as Record<string, unknown>;
-  const direct = row.displayUrl ?? row.imageUrl ?? row.thumbnailUrl;
-  if (typeof direct === 'string' && direct.trim() !== '') return direct;
-  const image = row.image;
-  if (image !== null && typeof image === 'object') {
-    const url = (image as Record<string, unknown>).url;
-    if (typeof url === 'string' && url.trim() !== '') return url;
-  }
-  return null;
-}
-
 const PHASE_LABELS: Record<CoarseGenerationPhase, string> = {
   QUEUED: 'Queued',
   PREPARING: 'Preparing',
@@ -65,6 +48,7 @@ export default function StudioScreen({ studioSessionId, sourceLookId, selectedVa
   const [phase, setPhase] = useState<CoarseGenerationPhase | null>(null);
   const [unresolved, setUnresolved] = useState<{ vaultItemId: string; reason: string }[]>([]);
   const commandLock = useRef(false);
+  const imageRetried = useRef<Set<string>>(new Set());
   const commandRequest = useRef(0);
   const operationRef = useRef(0);
   const mounted = useRef(true);
@@ -78,6 +62,9 @@ export default function StudioScreen({ studioSessionId, sourceLookId, selectedVa
 
   const activeSession = sessionStatus === 'ready' ? studioState : null;
   const activeSessionId = activeSession?.sessionId ?? '';
+  // The draft's item set as a stable primitive so the Vault/garment-image effect
+  // re-runs when items change but not on every render.
+  const itemsKey = activeSession ? activeSession.itemIds.join(',') : '';
   // The three outfit slots are always rendered so the screen shows its real
   // surface even before a draft loads; their controls are disabled until the
   // owned draft is ready. A missing session must not erase the UI.
@@ -136,17 +123,25 @@ export default function StudioScreen({ studioSessionId, sourceLookId, selectedVa
     }
     let current = true;
     setItemsLoaded(false);
+    imageRetried.current.clear();
+    const draftItemIds = activeSession?.itemIds ?? [];
     vaultApi.list().then(items => {
       if (!current) return;
-      setItemInfo(Object.fromEntries(items.map(item => [item.id, { name: item.name, slot: slotForCategory(item.category), imageUrl: garmentImageUrl(item) }])));
+      setItemInfo(Object.fromEntries(items.map(item => [item.id, { name: item.name, slot: slotForCategory(item.category), imageUrl: null }])));
       setItemsLoaded(true);
+      // Garment images are owner-authorized signed capabilities served per item
+      // (GET /vault/items/{id}/image), not list fields. Fetch them for the items
+      // in this draft only; an item without a capability renders by name.
+      for (const itemId of draftItemIds) {
+        void loadItemImage(itemId);
+      }
     }).catch(() => {
       if (!current) return;
       setItemInfo({});
       setItemsLoaded(true);
     });
     return () => { current = false; };
-  }, [activeSessionId]);
+  }, [activeSessionId, itemsKey]);
 
   useEffect(() => {
     const avatarProfileId = studioState?.avatarProfileId;
@@ -191,6 +186,34 @@ export default function StudioScreen({ studioSessionId, sourceLookId, selectedVa
     });
     return () => { current = false; };
   }, [selectedVaultItemId, activeSession, itemInfo, itemsLoaded]);
+
+  async function loadItemImage(itemId: string) {
+    try {
+      const image = await vaultApi.image(itemId);
+      if (!mounted.current) return;
+      setItemInfo(previous => {
+        const existing = previous[itemId];
+        return existing ? { ...previous, [itemId]: { ...existing, imageUrl: image.url } } : previous;
+      });
+    } catch {
+      // Keep the name-only row; the item is still usable in the outfit.
+    }
+  }
+
+  // A signed read capability expires. Refresh it once; if the refresh also
+  // fails, drop the capability so the row renders the garment name instead of a
+  // permanently broken preview.
+  async function handleImageError(itemId: string) {
+    if (imageRetried.current.has(itemId)) {
+      setItemInfo(previous => {
+        const existing = previous[itemId];
+        return existing ? { ...previous, [itemId]: { ...existing, imageUrl: null } } : previous;
+      });
+      return;
+    }
+    imageRetried.current.add(itemId);
+    await loadItemImage(itemId);
+  }
 
   async function removeItem(itemId: string) {
     if (!activeSession || busy) return;
@@ -299,7 +322,7 @@ export default function StudioScreen({ studioSessionId, sourceLookId, selectedVa
           <View style={styles.slotItems}>
             {row.itemIds.length === 0 ? <Text>Empty</Text> : row.itemIds.map(itemId => (
               <View key={itemId} style={styles.itemRow}>
-                {itemInfo[itemId]?.imageUrl ? <Image accessibilityLabel={itemInfo[itemId]?.name ?? 'Garment'} source={{ uri: itemInfo[itemId].imageUrl as string }} style={styles.itemImage} testID={`item-image-${itemId}`} /> : null}
+                {itemInfo[itemId]?.imageUrl ? <Image accessibilityLabel={itemInfo[itemId]?.name ?? 'Garment'} onError={() => void handleImageError(itemId)} source={{ uri: itemInfo[itemId].imageUrl as string }} style={styles.itemImage} testID={`item-image-${itemId}`} /> : null}
                 <Text testID={`item-${itemId}`}>{itemInfo[itemId]?.name ?? 'Vault garment'}</Text>
                 <Action label={`Remove ${itemInfo[itemId]?.name ?? 'garment'}`} onPress={() => removeItem(itemId)} disabled={busy} />
               </View>

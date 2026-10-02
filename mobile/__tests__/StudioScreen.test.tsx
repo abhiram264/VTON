@@ -20,7 +20,7 @@ jest.mock('../src/features/studio/studioApi', () => ({
     generate: jest.fn(),
   },
 }));
-jest.mock('../src/features/vault/vaultApi', () => ({ vaultApi: { list: jest.fn() } }));
+jest.mock('../src/features/vault/vaultApi', () => ({ vaultApi: { list: jest.fn(), image: jest.fn() } }));
 jest.mock('../src/features/my-model/avatarApi', () => ({ avatarApi: { list: jest.fn() } }));
 jest.mock('../src/features/generation/generationApi', () => ({
   generationApi: { get: jest.fn() },
@@ -41,6 +41,7 @@ const acceptedGeneration: GenerationResource = {
 beforeEach(() => {
   jest.clearAllMocks();
   jest.mocked(vaultApi.list).mockResolvedValue([]);
+  jest.mocked(vaultApi.image).mockImplementation(async (itemId: string) => ({ url: `https://cdn/${itemId}.jpg`, expiresAt: '2026-10-03T00:05:00Z' }));
   jest.mocked(avatarApi.list).mockResolvedValue([]);
 });
 
@@ -52,9 +53,9 @@ test('renders the owned outfit as garment names and images, never raw item ids',
     itemIds: ['item-top', 'item-bottom', 'item-footwear'],
   });
   jest.mocked(vaultApi.list).mockResolvedValue([
-    { id: 'item-top', category: 'TOP', name: 'Silk top', displayUrl: 'https://cdn/top.jpg' },
-    { id: 'item-bottom', category: 'BOTTOM', name: 'Trousers', displayUrl: 'https://cdn/bottom.jpg' },
-    { id: 'item-footwear', category: 'FOOTWEAR', name: 'Sneakers', displayUrl: 'https://cdn/shoes.jpg' },
+    { id: 'item-top', category: 'TOP', name: 'Silk top' },
+    { id: 'item-bottom', category: 'BOTTOM', name: 'Trousers' },
+    { id: 'item-footwear', category: 'FOOTWEAR', name: 'Sneakers' },
   ] as never);
   jest.mocked(avatarApi.list).mockResolvedValue([
     { id: 'avatar-1', displayUrl: 'https://cdn/avatar.jpg' },
@@ -75,6 +76,7 @@ test('renders the owned outfit as garment names and images, never raw item ids',
   expect(within(screen.getByTestId('slot-FEET')).getByTestId('item-item-footwear')).toHaveTextContent('Sneakers');
   expect(within(screen.getByTestId('slot-UPPER_BODY')).queryByTestId('item-item-bottom')).toBeNull();
   expect(screen.getByTestId('item-image-item-top')).toBeTruthy();
+  expect(vaultApi.image).toHaveBeenCalledWith('item-top');
   expect(screen.getByTestId('studio-avatar')).toBeTruthy();
   // The internal item identifier must never reach the rendered surface.
   expect(screen.queryByText('item-top')).toBeNull();
@@ -208,6 +210,30 @@ test('a source Look that cannot be loaded reports it without falling back to an 
   expect(studioApi.activeDraft).not.toHaveBeenCalled();
   expect(studioApi.create).not.toHaveBeenCalled();
   expect(screen.queryByTestId('studio-summary')).toBeNull();
+});
+
+test('an expired garment preview refreshes once, then falls back to the name', async () => {
+  jest.mocked(studioApi.get).mockResolvedValue({ sessionId: 'session-1', updatedAt: '2026-10-03T00:00:00Z', itemIds: ['item-top'] });
+  jest.mocked(vaultApi.list).mockResolvedValue([{ id: 'item-top', category: 'TOP', name: 'Silk top' }] as never);
+  jest.mocked(vaultApi.image)
+    .mockResolvedValueOnce({ url: 'https://cdn/stale.jpg', expiresAt: '2026-10-03T00:05:00Z' })
+    .mockResolvedValueOnce({ url: 'https://cdn/fresh.jpg', expiresAt: '2026-10-03T00:10:00Z' })
+    .mockRejectedValueOnce(new Error('expired'));
+
+  await render(
+    <StudioScreen studioSessionId="session-1" onAddFromVault={noop} onAvatar={noop} onOpenLook={noop} onProfile={noop} />,
+  );
+
+  await waitFor(() => expect(screen.getByTestId('item-image-item-top')).toBeTruthy());
+  fireEvent(screen.getByTestId('item-image-item-top'), 'error');
+  await waitFor(() => expect(vaultApi.image).toHaveBeenCalledTimes(2));
+
+  // A second failure drops the capability instead of leaving a broken preview,
+  // and the garment is still named and removable in its slot.
+  fireEvent(screen.getByTestId('item-image-item-top'), 'error');
+  await waitFor(() => expect(screen.queryByTestId('item-image-item-top')).toBeNull());
+  expect(within(screen.getByTestId('slot-UPPER_BODY')).getByTestId('item-item-top')).toHaveTextContent('Silk top');
+  expect(screen.getByRole('button', { name: 'Remove Silk top' })).toBeTruthy();
 });
 
 test('Generate freezes the owned session item order and opens the completed Look', async () => {
