@@ -190,6 +190,77 @@ class GenerationSequentialStepCompositionTest {
 	private static final String PRODUCT2_KEY = "users/11111111-1111-1111-1111-111111111111/vault/"
 		+ "33333333-3333-3333-3333-333333333334.jpg";
 
+	private static final VaultItemId PRODUCT3_ID = new VaultItemId(
+		UUID.fromString("33333333-3333-3333-3333-333333333335"));
+	private static final String PRODUCT3_KEY = "users/11111111-1111-1111-1111-111111111111/vault/"
+		+ "33333333-3333-3333-3333-333333333335.jpg";
+
+	/**
+	 * Three-step top + bottom + footwear plan: the combined outfit the product
+	 * actually promises, one garment per step in submitted order.
+	 */
+	private static RenderPlan threeItemPlan() {
+		return new RenderPlan(
+			1,
+			List.of(
+				step(UUID.fromString("77777777-7777-7777-7777-777777777781"),
+					UUID.fromString("88888888-8888-8888-8888-888888888881"), 1, PRODUCT_ID, "TOP"),
+				step(UUID.fromString("77777777-7777-7777-7777-777777777782"),
+					UUID.fromString("88888888-8888-8888-8888-888888888882"), 2, PRODUCT2_ID, "BOTTOM"),
+				step(UUID.fromString("77777777-7777-7777-7777-777777777783"),
+					UUID.fromString("88888888-8888-8888-8888-888888888883"), 3, PRODUCT3_ID, "FOOTWEAR")));
+	}
+
+	private static RenderStep step(UUID stepId, UUID itemId, int index, VaultItemId vaultItemId, String category) {
+		return new RenderStep(
+			stepId,
+			index,
+			null,
+			List.of(new RenderStep.Item(itemId, 1, vaultItemId, category, null)));
+	}
+
+	private static GenerationJob threeProductJob(RenderPlan plan) {
+		return new GenerationJob(
+			JOB_ID,
+			USER_ID,
+			null,
+			GenerationJob.QUEUED,
+			"try-on",
+			null,
+			NOW,
+			null,
+			AVATAR_IMAGE_ID,
+			List.of(PRODUCT_ID, PRODUCT2_ID, PRODUCT3_ID),
+			null,
+			null,
+			null,
+			null,
+			0,
+			NOW,
+			null,
+			1,
+			plan.steps().size(),
+			plan.version(),
+			NOW.plus(GenerationJob.ORCHESTRATION_DEADLINE),
+			null,
+			RetryPolicySnapshot.forStepCount(plan.steps().size()));
+	}
+
+	private static ResolvedMedia threeProductMedia() {
+		return new ResolvedMedia(
+			new PrivateMediaRef(new StorageKey(AVATAR_KEY), OptionalLong.of(3)),
+			List.of(
+				new VtonProductAsset(
+					new PrivateMediaRef(new StorageKey(PRODUCT_KEY), OptionalLong.of(3)),
+					new ItemCategory("TOP")),
+				new VtonProductAsset(
+					new PrivateMediaRef(new StorageKey(PRODUCT2_KEY), OptionalLong.of(3)),
+					new ItemCategory("BOTTOM")),
+				new VtonProductAsset(
+					new PrivateMediaRef(new StorageKey(PRODUCT3_KEY), OptionalLong.of(3)),
+					new ItemCategory("FOOTWEAR"))));
+	}
+
 	/**
 	 * Two-step plan where each step plans exactly one of the job's two vault
 	 * items, proving per-step item scoping rather than plan shape alone.
@@ -308,6 +379,53 @@ class GenerationSequentialStepCompositionTest {
 		assertThat(look.renderPlan()).contains(plan.steps().get(0).id().toString());
 		assertThat(look.renderPlan()).contains(plan.steps().get(1).id().toString());
 		assertThat(look.renderPlan()).contains("\"version\":1");
+	}
+
+	/**
+	 * C12 acceptance: "final provenance lists all three source garments". The
+	 * combined top + bottom + footwear outfit is three steps, and the Look's
+	 * provenance must name every garment it was rendered from — not just the
+	 * step identities — so a Look can always be traced back to its inputs.
+	 */
+	@Test
+	void finalLookProvenanceListsAllThreeSourceGarments() {
+		RenderPlan plan = threeItemPlan();
+		generationStore.renderPlan(JOB_ID, plan);
+		generationStore.insertJob(threeProductJob(plan));
+		when(resolver.resolve(any())).thenReturn(threeProductMedia());
+
+		processor.process(lease);
+		processor.process(new GenerationWorkLease(JOB_ID.value(), "step-2"));
+		processor.process(new GenerationWorkLease(JOB_ID.value(), "step-3"));
+
+		assertThat(lookStore.inserted()).hasSize(1);
+		Look look = lookStore.inserted().getFirst();
+		String provenance = look.renderPlan();
+
+		// All three garments, each in its own step, in submitted order.
+		assertThat(provenance)
+			.contains(PRODUCT_ID.value().toString())
+			.contains(PRODUCT2_ID.value().toString())
+			.contains(PRODUCT3_ID.value().toString());
+		assertThat(plan.steps()).hasSize(3);
+		assertThat(provenance)
+			.contains(plan.steps().get(0).id().toString())
+			.contains(plan.steps().get(1).id().toString())
+			.contains(plan.steps().get(2).id().toString());
+		// The category of each garment survives too, so provenance is readable
+		// without resolving the Vault item again.
+		assertThat(provenance).contains("TOP").contains("BOTTOM").contains("FOOTWEAR");
+		// And provenance is the real plan, never the requested mode string.
+		assertThat(provenance).isNotEqualTo("try-on");
+
+		// The three steps each submitted exactly one garment, in order.
+		assertThat(provider.submittedRequests()).hasSize(3);
+		assertThat(provider.submittedRequests().get(0).productAssets().getFirst().media().storageKey().value())
+			.isEqualTo(PRODUCT_KEY);
+		assertThat(provider.submittedRequests().get(1).productAssets().getFirst().media().storageKey().value())
+			.isEqualTo(PRODUCT2_KEY);
+		assertThat(provider.submittedRequests().get(2).productAssets().getFirst().media().storageKey().value())
+			.isEqualTo(PRODUCT3_KEY);
 	}
 
 
