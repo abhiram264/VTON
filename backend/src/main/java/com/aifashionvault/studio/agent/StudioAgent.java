@@ -64,7 +64,14 @@ public final class StudioAgent {
     private static UUID uuid(Map<String,Object> m,String k) { String x=text(m,k,36); try{return UUID.fromString(x);}catch(IllegalArgumentException e){throw new IllegalArgumentException();} }
     private static StudioSlot slot(Map<String,Object> m) { String x=text(m,"slot",20); try{return StudioSlot.valueOf(x);}catch(IllegalArgumentException e){throw new IllegalArgumentException();} }
     private static int requiredPosition(Map<String,Object> m) { if(!m.containsKey("position")) return 0; return parsePosition(m.get("position")); }
-    private static Integer optionalPosition(Map<String,Object> m) { StudioSlot slot = slot(m); if(!m.containsKey("position")) { if(slot.allowsMultiple()) throw new IllegalArgumentException(); return null; } if(!slot.allowsMultiple()) throw new IllegalArgumentException(); return parsePosition(m.get("position")); }
+    /**
+     * Position is optional for removeItem: absent means "remove the item in that
+     * slot", and for a multi-occupant slot it means "clear the slot" — the same
+     * semantics the tool adapter implements. A position is only meaningful for a
+     * slot that holds several items, so supplying one for a single-occupant slot
+     * is still malformed.
+     */
+    private static Integer optionalPosition(Map<String,Object> m) { StudioSlot slot = slot(m); if(!m.containsKey("position")) return null; if(!slot.allowsMultiple()) throw new IllegalArgumentException(); return parsePosition(m.get("position")); }
     private static int parsePosition(Object v) { if(!(v instanceof Number n) || n.longValue()<0 || n.longValue()!=n.doubleValue() || n.longValue()>Integer.MAX_VALUE) throw new IllegalArgumentException(); return n.intValue(); }
     private static void exact(Map<String,Object> m) { if(!m.isEmpty()) throw new IllegalArgumentException(); }
 }

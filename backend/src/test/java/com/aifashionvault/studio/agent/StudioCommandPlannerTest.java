@@ -219,16 +219,75 @@ class StudioCommandPlannerTest {
   }
 
   @Test
-  void clearRemovesMultiOccupantPositionsInDescendingOrder() {
+  void noPlanEverEmitsMoreThanOneMutatingCall() {
+    // The NL route reports a failed execution as "nothing was changed", which is
+    // only true if a plan cannot apply partially. A slot-only removal now clears a
+    // multi-occupant slot in ONE call, so every plan is either a single read or a
+    // single mutation — never a sequence that can stop half-applied.
+    VaultItemSummary shirt = summary("Blue Shirt");
+    VaultItemId draftId = new VaultItemId(UUID.randomUUID());
+
+    tools.matches = List.of(shirt);
+    List<String> commands = List.of(
+        "find blue shirt",
+        "add my blue shirt to the top",
+        "replace the top with my blue shirt",
+        "remove my blue shirt",
+        "explain conflict");
+
+    for (String command : commands) {
+      givenDraft(
+          draftItem(draftId, StudioSlot.JEWELLERY, 0),
+          draftItem(new VaultItemId(UUID.randomUUID()), StudioSlot.JEWELLERY, 1));
+      tools.matches = List.of(shirt);
+      StudioCommandPlanner.Plan plan = planner.plan(actor, session, command);
+      if (plan instanceof StudioCommandPlanner.Resolved resolved) {
+        long mutating = resolved.calls().stream()
+            .filter(call -> !call.tool().equals("searchVault") && !call.tool().equals("getStudioState"))
+            .count();
+        assertThat(mutating).as("mutating calls for %s", command).isLessThanOrEqualTo(1);
+      }
+    }
+
+    // And the multi-occupant clear specifically is exactly one call.
+    givenDraft(
+        draftItem(new VaultItemId(UUID.randomUUID()), StudioSlot.JEWELLERY, 0),
+        draftItem(new VaultItemId(UUID.randomUUID()), StudioSlot.JEWELLERY, 1));
+    assertThat(resolved(planner.plan(actor, session, "clear jewellery"))).hasSize(1);
+  }
+
+  @Test
+  void aSlotOnlyRemovalIsAcceptedForAMultiOccupantSlotAndClearsIt() {
+    // Contract the planner now relies on: removeItem with no position means
+    // "clear the slot", matching the tool adapter's own semantics.
+    VaultItemId item = new VaultItemId(UUID.randomUUID());
+    givenDraft(draftItem(item, StudioSlot.JEWELLERY, 0), draftItem(item, StudioSlot.JEWELLERY, 1));
+
+    List<StudioAgent.RawToolCall> calls = resolved(planner.plan(actor, session, "clear jewellery"));
+    StudioAgent.AgentExecution execution = agent.execute(actor, session, calls);
+
+    assertThat(execution.completed()).isTrue();
+    assertThat(execution.results().get(0).problem()).isNull();
+    assertThat(tools.lastRemovalSlot).isEqualTo(StudioSlot.JEWELLERY);
+    assertThat(tools.lastRemovalPosition).isNull();
+  }
+
+  @Test
+  void clearEmitsOneSlotOnlyRemovalForASingleOccupantSlot() {
     givenDraft(
         draftItem(new VaultItemId(UUID.randomUUID()), StudioSlot.JEWELLERY, 0),
         draftItem(new VaultItemId(UUID.randomUUID()), StudioSlot.JEWELLERY, 1));
 
     List<StudioAgent.RawToolCall> calls = resolved(planner.plan(actor, session, "clear jewellery"));
 
-    assertThat(calls).hasSize(2);
-    assertThat(calls.get(0).arguments()).containsEntry("position", 1);
-    assertThat(calls.get(1).arguments()).containsEntry("position", 0);
+    // ONE call, not one per position: a single call cannot partially apply, so a
+    // mid-sequence store failure can never delete some garments and then claim
+    // nothing changed.
+    assertThat(calls).hasSize(1);
+    assertThat(calls.get(0).tool()).isEqualTo("removeItem");
+    assertThat(calls.get(0).arguments())
+        .containsEntry("slot", StudioSlot.JEWELLERY.name())
+        .doesNotContainKey("position");
   }
 
   @Test
@@ -319,6 +378,8 @@ class StudioCommandPlannerTest {
     StudioStateValue state = new StudioStateValue(null, null, List.of());
     String lastQuery;
     String lastCategory;
+    StudioSlot lastRemovalSlot;
+    Integer lastRemovalPosition;
     RuntimeException stateFailure;
 
     public ToolValue searchVault(UserId a, StudioSessionId s, String query, String category) {
@@ -347,6 +408,8 @@ class StudioCommandPlannerTest {
     public ToolValue removeItem(UserId a, StudioSessionId s, StudioSlot slot, Integer p) {
       invocations.add("removeItem");
       mutations.add("removeItem");
+      lastRemovalSlot = slot;
+      lastRemovalPosition = p;
       return new StudioStateValue(s, null, List.of());
     }
 

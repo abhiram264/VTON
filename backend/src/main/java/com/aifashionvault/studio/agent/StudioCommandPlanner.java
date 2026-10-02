@@ -1,7 +1,5 @@
 package com.aifashionvault.studio.agent;
 
-import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -303,18 +301,11 @@ public final class StudioCommandPlanner {
         if (occupied.isEmpty()) {
             return new Explanation("The " + slot.name() + " slot is already empty.");
         }
-        List<StudioAgent.RawToolCall> calls = new ArrayList<>();
-        if (slot.allowsMultiple()) {
-            // Descending positions: removing a low position first would shift
-            // the positions the later calls still refer to.
-            occupied.stream()
-                    .sorted(Comparator.comparingInt(StudioItemValue::position).reversed())
-                    .forEach(item -> calls.add(call(
-                            "removeItem", Map.of("slot", slot.name(), "position", item.position()))));
-        } else {
-            calls.add(call("removeItem", Map.of("slot", slot.name())));
-        }
-        return new Resolved(calls);
+        // ONE call, never one per position: a slot-only removeItem means "clear the
+        // slot" for a multi-occupant slot, so a single call cannot partially apply.
+        // Emitting one removal per position would let a mid-sequence store failure
+        // delete some garments and still report that nothing changed.
+        return new Resolved(List.of(call("removeItem", Map.of("slot", slot.name()))));
     }
 
     private Plan planExplain(UserId actor, StudioSessionId session) {
