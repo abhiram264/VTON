@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  FileProvider roots for the PhotoPicker camera hand-off. The camera app is granted a
+  write URI for a single reserved file under the app cache staging directory
+  (PhotoPickerStaging), so no shared/external storage path is ever exposed.
+-->
+<paths>
+    <cache-path name="photo-picker" path="photo-picker/" />
+</paths>
