@@ -139,6 +139,40 @@ class LooksHttpContractTest {
 	}
 
 	@Test
+	void deletingALookKeepsTheVaultGarmentsItWasMadeFrom() throws Exception {
+		Owner owner = owner();
+		UUID lookId = insertLook(owner);
+		// A reusable garment the Look was rendered from: the whole point of a
+		// Vault is that deleting a render never destroys the clothing.
+		UUID garmentId = UUID.randomUUID();
+		jdbc.update("INSERT INTO vault_item (id, user_id, storage_key, name, created_at) VALUES (?, ?, ?, ?, ?)",
+			garmentId, owner.userId().value(), "users/" + owner.userId().value() + "/vault/shirt.jpg", "Linen shirt",
+			Timestamp.from(NOW));
+		jdbc.update("INSERT INTO look_item (look_id, vault_item_id, slot) VALUES (?, ?, 'UPPER_BODY')",
+			lookId, garmentId);
+
+		mockMvc.perform(delete("/looks/" + lookId).header(HttpHeaders.AUTHORIZATION, bearer(owner.token())))
+			.andExpect(status().isNoContent());
+
+		// The garment row survives with its original values: a Look delete is a
+		// delete of the RENDER, not of the clothing it used. A "clean up
+		// everything associated with the look" cascade would fail here.
+		Map<String, Object> garment = jdbc.queryForMap(
+			"SELECT storage_key, name FROM vault_item WHERE id = ?", garmentId);
+		assertThat(garment.get("name")).isEqualTo("Linen shirt");
+		assertThat(garment.get("storage_key"))
+			.isEqualTo("users/" + owner.userId().value() + "/vault/shirt.jpg");
+
+		// ...and it is still usable through the owner's mounted Vault route.
+		mockMvc.perform(get("/vault/items/" + garmentId).header(HttpHeaders.AUTHORIZATION, bearer(owner.token())))
+			.andExpect(status().isOk())
+			.andExpect(content().string(org.hamcrest.Matchers.containsString("Linen shirt")));
+
+		// Only the render object left the object store.
+		assertThat(objects.deleted).isEqualTo(new ObjectRef(StorageDomain.LOOK, storageKey(owner, lookId)));
+	}
+
+	@Test
 	void missingForeignAndMalformedIdentifiersAreOpaqueForDetailDeleteShareAndRegenerate() throws Exception {
 		Owner owner = owner();
 		UUID owned = insertLook(owner);

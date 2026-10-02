@@ -85,11 +85,10 @@ describe('mobile feature flags', () => {
   });
 
   describe('unsupported capabilities fail closed (C22)', () => {
-    const unsupported: FeatureFlagName[] = [
-      'MULTI_ITEM',
-      'NATURAL_LANGUAGE_STUDIO',
-      'HD_GENERATION',
-    ];
+    // NATURAL_LANGUAGE_STUDIO is excluded: C21 mounted a backing path, so the
+    // backend (not the client hard-block) is the authority for it. It still
+    // defaults OFF, but a fetch may enable it.
+    const unsupported: FeatureFlagName[] = ['MULTI_ITEM', 'HD_GENERATION'];
 
     test('default off in code', () => {
       for (const name of unsupported) {
@@ -97,11 +96,12 @@ describe('mobile feature flags', () => {
         expect(isFeatureEnabled(name)).toBe(false);
       }
       expect(UNSUPPORTED_CAPABILITIES.MULTI_ITEM).toBe(true);
-      expect(UNSUPPORTED_CAPABILITIES.NATURAL_LANGUAGE_STUDIO).toBe(true);
       expect(UNSUPPORTED_CAPABILITIES.HD_GENERATION).toBe(true);
       expect(UNSUPPORTED_CAPABILITIES.TRYON_MAX).toBe(false);
       expect(UNSUPPORTED_CAPABILITIES.SHARE_IMPORT_ANDROID).toBe(false);
       expect(UNSUPPORTED_CAPABILITIES.SHARE_IMPORT_IOS).toBe(false);
+      // NL is server-authoritative now; it is not a client hard-block.
+      expect(UNSUPPORTED_CAPABILITIES.NATURAL_LANGUAGE_STUDIO).toBe(false);
     });
 
     test('a flag payload cannot enable them (offline or remote)', () => {
@@ -138,8 +138,17 @@ describe('mobile feature flags', () => {
       }
     });
 
+    test('a capability with a mounted backing path (NL) defers to the backend', () => {
+      // C21 mounted the NL route; the client must not permanently veto it. A
+      // fetched flag can enable it, and the server refuses the capability when
+      // its own flag is off, so the backend stays authoritative.
+      applyFeatureFlagPayload({ flags: { NATURAL_LANGUAGE_STUDIO: true } });
+      expect(isFeatureEnabled('NATURAL_LANGUAGE_STUDIO')).toBe(true);
+      expect(isFeatureEnabled('MULTI_ITEM')).toBe(false);
+    });
+
     test('a remote or offline flag fetch cannot enable them', async () => {
-      const fetchMock = jest.fn().mockResolvedValueOnce({
+      const fetchResponse = jest.fn().mockResolvedValueOnce({
         ok: true,
         status: 200,
         headers: { get: () => 'application/json' },
@@ -154,7 +163,7 @@ describe('mobile feature flags', () => {
           }),
       });
       const originalFetch = globalThis.fetch;
-      globalThis.fetch = fetchMock as unknown as typeof fetch;
+      globalThis.fetch = fetchResponse as unknown as typeof fetch;
       try {
         await refreshFeatureFlags({
           baseUrl: 'https://api.aifashionvault.com',
