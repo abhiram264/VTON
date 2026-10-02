@@ -186,9 +186,16 @@ export function createLookExporter(overrides: Partial<LookExportDeps> = {}) {
     outcome: LookExportOutcome,
   ): LookExportOutcome {
     if (outcome.status === 'SHARED' || outcome.status === 'SAVED') {
-      void deps.acknowledgeExport(request.lookId).catch(() => {
-        // Best-effort telemetry; never surfaces to the user.
-      });
+      try {
+        void deps.acknowledgeExport(request.lookId).catch(() => {
+          // Best-effort telemetry; never surfaces to the user.
+        });
+      } catch {
+        // The ack seam can also fail SYNCHRONOUSLY (a client that throws before
+        // returning a promise, or a non-promise return). This runs inside the
+        // export's own try/catch, so an unguarded throw here would misreport a
+        // successful export as SHARE_FAILED/SAVE_FAILED.
+      }
     }
     return outcome;
   }

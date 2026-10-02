@@ -430,4 +430,20 @@ describe('look export acknowledgement (C22)', () => {
     expect(outcome).toEqual({status: 'SHARED'});
     expect(ack).toHaveBeenCalledWith('look-9');
   });
+
+  test('an acknowledgement that throws synchronously still reports the export as successful', async () => {
+    const {stager} = makeStager();
+    const ack = jest.fn(() => {
+      throw new Error('ack client threw before returning a promise');
+    });
+    const exporter = exporterWith(stager, {acknowledgeExport: ack as never});
+
+    const outcome = await exporter.exportLook(
+      {lookId: 'look-10', imageUrl: SIGNED_URL, disclosureAcknowledged: true},
+      'save',
+    );
+
+    // The save already happened; a broken ack must not claim it failed.
+    expect(outcome).toEqual({status: 'SAVED'});
+  });
 });
