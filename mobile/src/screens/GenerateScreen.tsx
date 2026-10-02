@@ -3,7 +3,11 @@ import { AppState, Pressable, StyleSheet, Text, View } from 'react-native';
 import { choosePhoto } from '../features/my-model/photoSource';
 import { createLook, isNetworkError } from '../features/generation/createLook';
 import type { CreateLookOutcome } from '../features/generation/createLook';
-import { generationApi, pollGeneration } from '../features/generation/generationApi';
+import {
+  createAppStateForegroundMonitor,
+  generationApi,
+  pollGeneration,
+} from '../features/generation/generationApi';
 import {
   CANCELLED_BY_USER,
   recoverActiveGeneration,
@@ -35,6 +39,10 @@ import { vaultApi } from '../features/vault/vaultApi';
 import { saveToVaultFallback } from '../features/vault/vaultFallback';
 import type { ShareImportResolver } from '../features/share/importTypes';
 import type { SharePayload } from '../features/share/types';
+
+// One AppState-backed monitor for the whole app: polling parks while the app
+// is backgrounded and resumes on the next foreground transition.
+const foregroundMonitor = createAppStateForegroundMonitor();
 
 const PHASE_LABELS: Record<CoarseGenerationPhase, string> = {
   QUEUED: 'Queued',
@@ -128,6 +136,7 @@ export default function GenerateScreen({
             setPhase(generation.phase);
           }
         },
+        foreground: foregroundMonitor,
       });
     } catch {
       return null;
@@ -317,6 +326,7 @@ export default function GenerateScreen({
           api,
           photo: retryPhoto,
           signal: controller.signal,
+          foreground: foregroundMonitor,
           onUpdate: generation => {
             if (isCurrent()) {
               setPhase(generation.phase);
