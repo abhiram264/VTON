@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
-import { collectionApi, type CollectionSummary } from '../features/vault/collectionApi';
+import {
+  collectionsApi,
+  type Collection,
+} from '../features/collections/collectionsApi';
+import CollectionsPicker from '../features/collections/CollectionsPicker';
 import {
   vaultApi,
   type VaultItemImage,
@@ -29,8 +33,9 @@ type Props = { onProfile: () => void; onSelect?: (itemId: string) => void; selec
 export default function VaultScreen({ onProfile, onSelect, selectionUnavailable = false }: Props) {
   const [filter, setFilter] = useState<VaultFilter>('ALL');
   const [items, setItems] = useState<VaultItemSummary[]>([]);
-  const [collections, setCollections] = useState<CollectionSummary[]>([]);
+  const [collections, setCollections] = useState<Collection[]>([]);
   const [collectionId, setCollectionId] = useState<string | null>(null);
+  const [collectionMode, setCollectionMode] = useState<'browse' | 'manage'>('browse');
   const [status, setStatus] = useState<'loading' | 'ready' | 'failed'>('loading');
   const [attempt, setAttempt] = useState(0);
   const [collectionVersion, setCollectionVersion] = useState(0);
@@ -45,7 +50,7 @@ export default function VaultScreen({ onProfile, onSelect, selectionUnavailable 
     setStatus('loading');
     if (option.value === 'COLLECTIONS') {
       const requestedCollectionId = collectionIdRef.current;
-      void collectionApi.list().then(value => {
+      void collectionsApi.list().then(value => {
         if (!active) return;
         setCollections(value);
         if (requestedCollectionId && !value.some(entry => entry.id === requestedCollectionId)) {
@@ -75,11 +80,21 @@ export default function VaultScreen({ onProfile, onSelect, selectionUnavailable 
     return () => { active = false; };
   }, [attempt, option.category, option.value]);
 
+  // Collections belong to the user, not to a device: any success (a create, a
+  // rename, a delete, or a membership change) must not leave a stale list on
+  // screen, so it bumps collectionVersion, which both list effects depend on.
+  const onCollectionsChanged = () => {
+    setAttempt(value => value + 1);
+    setCollectionVersion(value => value + 1);
+  };
+
   useEffect(() => {
     if (option.value !== 'COLLECTIONS' || !collectionId || !selectedCollection) return;
     let active = true;
     setStatus('loading');
-    const memberIds = new Set(selectedCollection.vaultItemIds);
+    const memberIds = new Set(
+      selectedCollection.items.map(item => item.vaultItemId),
+    );
     void vaultApi.list().then(value => {
       if (active) {
         setItems(value.filter(item => memberIds.has(item.id)));
@@ -101,7 +116,7 @@ export default function VaultScreen({ onProfile, onSelect, selectionUnavailable 
     return <ItemDetail
       itemId={detailId}
       onBack={() => setDetailId(null)}
-      onChanged={() => setAttempt(value => value + 1)}
+      onChanged={onCollectionsChanged}
       onRemoved={() => { setDetailId(null); setAttempt(value => value + 1); }}
     />;
   }
@@ -117,7 +132,9 @@ export default function VaultScreen({ onProfile, onSelect, selectionUnavailable 
     {status === 'loading' ? <Text accessibilityLiveRegion="polite">Loading Vault items…</Text> : null}
     {status === 'failed' ? <><Text accessibilityLiveRegion="polite">Could not load Vault items.</Text><Action label="Retry Vault" onPress={() => setAttempt(value => value + 1)} /></> : null}
     {status === 'ready' && option.value === 'COLLECTIONS' && !collectionId && collections.length === 0 ? <Text accessibilityLiveRegion="polite">No collections yet.</Text> : null}
-    {status === 'ready' && option.value === 'COLLECTIONS' && !collectionId ? collections.map(collection => <Action key={collection.id} label={collection.name} onPress={() => { setCollectionId(collection.id); setItems([]); setStatus('loading'); }} />) : null}
+    {status === 'ready' && option.value === 'COLLECTIONS' && !collectionId && collections.length > 0 ? <Action label={collectionMode === 'manage' ? 'Done managing collections' : 'Manage collections'} onPress={() => setCollectionMode(mode => (mode === 'manage' ? 'browse' : 'manage'))} /> : null}
+    {status === 'ready' && option.value === 'COLLECTIONS' && !collectionId && collectionMode === 'manage' ? <CollectionsPicker vaultItemId={null} manageOnly onError={() => undefined} onChange={onCollectionsChanged} /> : null}
+    {status === 'ready' && option.value === 'COLLECTIONS' && !collectionId && collectionMode === 'browse' ? collections.map(collection => <Action key={collection.id} label={collection.name} onPress={() => { setCollectionId(collection.id); setItems([]); setStatus('loading'); }} />) : null}
     {status === 'ready' && (option.value !== 'COLLECTIONS' || collectionId) && items.length === 0 ? <Text accessibilityLiveRegion="polite">No Vault items in {selectedCollection?.name ?? option.label}.</Text> : null}
     {status === 'ready' ? items.map(item => <Action
       key={item.id}
@@ -229,6 +246,7 @@ function ItemDetail({ itemId, onBack, onChanged, onRemoved }: {
     {status === 'gone' ? <Text accessibilityLiveRegion="polite">This item is no longer available.</Text> : null}
     {status === 'failed' ? <><Text accessibilityLiveRegion="polite">Could not load this item.</Text><Action label="Retry item" onPress={load} /></> : null}
     {status === 'ready' && item ? <>
+      <CollectionsPicker vaultItemId={itemId} onError={() => undefined} onChange={onChanged} />
       {imageStatus === 'ready' && image ? <Text accessibilityLiveRegion="polite">Preview available until {image.expiresAt}.</Text> : null}
       {imageStatus === 'unavailable' ? <><Text accessibilityLiveRegion="polite">Preview temporarily unavailable.</Text><Action label="Retry preview" onPress={loadImage} /></> : null}
       {imageStatus === 'loading' ? <Text accessibilityLiveRegion="polite">Loading preview…</Text> : null}
