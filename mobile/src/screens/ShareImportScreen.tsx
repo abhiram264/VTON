@@ -5,8 +5,9 @@ import {
   choosePhoto,
   isCameraPermissionDenied,
 } from '../features/my-model/photoSource';
-import {createShareImportResolver} from '../features/share/importClient';
+import {createShareImportConfirmer, createShareImportResolver} from '../features/share/importClient';
 import type {
+  ShareImportConfirmer,
   ShareImportResolver,
   ShareImportResponse,
 } from '../features/share/importTypes';
@@ -27,6 +28,7 @@ import {
 export type ShareImportFlowState =
   | {view: 'RESOLVING'}
   | {view: 'READY'; importId: string}
+  | {view: 'SAVED'; itemId: string}
   | {view: 'NEEDS_IMAGE'; importId: string}
   | {view: 'FAILED_RETRYABLE'; reason?: 'DEPENDENCY_UNAVAILABLE' | 'RESOLUTION_TIMEOUT'; importId?: string}
   | {view: 'FAILED_TERMINAL'; message?: string}
@@ -64,6 +66,7 @@ function toErrorFlowState(error: unknown): ShareImportFlowState {
 type Props = {
   payload: SharePayload;
   resolver?: ShareImportResolver;
+  confirmer?: ShareImportConfirmer;
   picker?: () => Promise<LocalPhoto | null>;
   api?: ShareImportApiConfig;
 };
@@ -113,6 +116,7 @@ function sameSharePayload(left: SharePayload, right: SharePayload): boolean {
 export default function ShareImportScreen({
   payload,
   resolver,
+  confirmer,
   picker = choosePhoto,
   api = apiConfig,
 }: Props) {
@@ -144,6 +148,11 @@ export default function ShareImportScreen({
     };
   }
   const activeResolver = resolverRef.current.resolve;
+
+  // The confirmer is stateless (server-side identity is derived from owner +
+  // import), so it needs no per-mount ref: the injected test seam or a fresh
+  // client over the same API config is equivalent on every render.
+  const activeConfirmer = confirmer ?? createShareImportConfirmer(api);
 
   // The client resolver owns staged-image release discipline (exactly once
   // after verified upload completion, or once on cancel before it). The
@@ -194,7 +203,7 @@ export default function ShareImportScreen({
     // key stays stable for the lifetime of the route (spec D-lifecycle).
   }, [payload, activeResolver]);
 
-  const retry = useCallback(async (expectedImportId?: string) => {
+  const retry = useCallback(async () => {
     if (busyRef.current) {
       return;
     }
@@ -212,25 +221,7 @@ export default function ShareImportScreen({
         controller.signal,
       );
       if (!controller.signal.aborted && operation === operationRef.current) {
-        // Confirm replays the same stable idempotency key, so a READY answer
-        // must come back bound to the importId the user actually confirmed.
-        // A different id is a state conflict, not a confirmed item.
-        const rebound =
-          expectedImportId !== undefined &&
-          next.view === 'READY' &&
-          next.importId !== expectedImportId;
-        setState(
-          rebound
-            ? {view: 'FAILED_TERMINAL', message: terminalMessage('IMPORT_STATE_CONFLICT')}
-            : next,
-        );
-        if (
-          expectedImportId !== undefined &&
-          !rebound &&
-          next.view === 'READY'
-        ) {
-          setNotice('Item is ready. Saving it to your Vault is not available yet.')
-        }
+        setState(next);
       }
     } catch (error) {
       if (!controller.signal.aborted && operation === operationRef.current) {
@@ -243,6 +234,47 @@ export default function ShareImportScreen({
       }
     }
   }, [activeResolver]);
+
+  // Persist the resolved import. Only the confirm response may present the
+  // saved state; a failed confirm never claims the item was kept.
+  const confirmItem = useCallback(
+    async (importId: string) => {
+      if (busyRef.current) {
+        return;
+      }
+      const operation = ++operationRef.current;
+      busyRef.current = true;
+      setBusy(true);
+      setNotice(null);
+      const controller = new AbortController();
+      abortRef.current = controller;
+      try {
+        const item = await activeConfirmer(importId, controller.signal);
+        if (!controller.signal.aborted && operation === operationRef.current) {
+          setState({view: 'SAVED', itemId: item.id});
+        }
+      } catch (error) {
+        if (controller.signal.aborted || operation !== operationRef.current) {
+          return;
+        }
+        const next = toErrorFlowState(error);
+        if (next.view === 'FAILED_TERMINAL') {
+          setState(next);
+        } else {
+          // Transient failure: the import is still resolvable, so keep the
+          // READY affordance instead of restarting resolution.
+          setState({view: 'READY', importId});
+          setNotice('Could not save this item to your Vault. Try again.');
+        }
+      } finally {
+        if (!controller.signal.aborted && operation === operationRef.current) {
+          busyRef.current = false;
+          setBusy(false);
+        }
+      }
+    },
+    [activeConfirmer],
+  );
 
   const recover = useCallback(
     async (_source: 'CHOOSE_SCREENSHOT' | 'UPLOAD_IMAGE') => {
@@ -340,7 +372,7 @@ export default function ShareImportScreen({
           <View accessible accessibilityLiveRegion="polite">
             <Text accessibilityRole="header" style={styles.title}>Shared item ready</Text>
             <Text style={styles.body}>
-              Check this item again, or wait for Vault saving to become available.
+              Save this item to your Vault to keep it.
             </Text>
           </View>
           <View style={styles.actions}>
@@ -348,13 +380,21 @@ export default function ShareImportScreen({
               accessibilityRole="button"
               accessibilityState={{disabled: busy, busy}}
               disabled={busy}
-              onPress={() => retry(state.importId)}
+              onPress={() => confirmItem(state.importId)}
               style={[styles.button, styles.primary, busy && styles.disabled]}
             >
-              <Text style={styles.primaryLabel}>Confirm Item</Text>
+              <Text style={styles.primaryLabel}>Save to Vault</Text>
             </Pressable>
           </View>
         </>
+      ) : null}
+      {state.view === 'SAVED' ? (
+        <View accessible accessibilityLiveRegion="polite">
+          <Text accessibilityRole="header" style={styles.title}>Saved to your Vault</Text>
+          <Text style={styles.body}>
+            This item is now in your Vault.
+          </Text>
+        </View>
       ) : null}
       {state.view === 'NEEDS_IMAGE' ? (
         <>
