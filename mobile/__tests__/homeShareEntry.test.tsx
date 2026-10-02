@@ -11,7 +11,10 @@ jest.mock('../src/features/my-model/photoSource', () => ({
 }));
 
 jest.mock('../src/features/vault/vaultApi', () => ({ vaultApi: { list: jest.fn().mockResolvedValue([]) } }));
-jest.mock('../src/features/collections/collectionsApi', () => ({ collectionsApi: { list: jest.fn().mockResolvedValue([]) } }));
+jest.mock('../src/features/collections/collectionsApi', () => ({
+  ...jest.requireActual('../src/features/collections/collectionsApi'),
+  collectionsApi: { list: jest.fn().mockResolvedValue([]) },
+}));
 jest.mock('../src/features/looks/looksApi', () => ({ looksApi: { list: jest.fn().mockResolvedValue([]) } }));
 
 // A screen swap alone would pass even if the payload were dropped, so pin the

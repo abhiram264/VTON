@@ -15,6 +15,8 @@ import type {
   ShareImportResponse,
 } from '../features/share/importTypes';
 import CollectionsPicker from '../features/collections/CollectionsPicker';
+import {createCollectionsApi} from '../features/collections/collectionsApi';
+import type {CollectionsApi} from '../features/collections/collectionsApi';
 import {apiConfig, type ShareImportApiConfig} from './share-import/apiConfig';
 import {attachRecoveryImage} from './share-import/recoveryClient';
 import type {SharePayload} from '../features/share/types';
@@ -171,7 +173,11 @@ export default function ShareImportScreen({
     api: ShareImportApiConfig;
     confirmer?: ShareImportConfirmer;
     previewLoader?: ShareImportPreviewLoader;
-    resolved: { confirmer: ShareImportConfirmer; previewLoader: ShareImportPreviewLoader };
+    resolved: {
+      confirmer: ShareImportConfirmer;
+      previewLoader: ShareImportPreviewLoader;
+      collections: CollectionsApi;
+    };
   } | null>(null);
   if (
     clientsRef.current === null ||
@@ -186,16 +192,24 @@ export default function ShareImportScreen({
       resolved: {
         confirmer: confirmer ?? createShareImportConfirmer(api),
         previewLoader: previewLoader ?? createShareImportPreviewLoader(api),
+        // The picker must read through the SAME config as the rest of this
+        // screen: its own module-level default would resolve a different API
+        // base URL and silently fail to load.
+        collections: createCollectionsApi(api),
       },
     };
   }
   const activeConfirmer = clientsRef.current.resolved.confirmer;
   const activePreviewLoader = clientsRef.current.resolved.previewLoader;
+  const activeCollectionsApi = clientsRef.current.resolved.collections;
   const [preview, setPreview] = useState<ShareImportPreview | null>(null);
   const [name, setName] = useState('');
   const [category, setCategory] = useState<string | null>(null);
-  const [selectedCollectionIds, setSelectedCollectionIds] = useState<string[]>(
-    [],
+  // The confirm contract accepts ONE collectionId, so this surface is
+  // single-select: the picker is told about the current choice and any new
+  // selection replaces it. Multi-select here would silently drop the extras.
+  const [selectedCollectionId, setSelectedCollectionId] = useState<string | null>(
+    null,
   );
   // The collections picker fetches on mount, so it is revealed on demand: a
   // READY screen that only needs "Save to Vault" issues no collection request.
@@ -303,9 +317,8 @@ export default function ShareImportScreen({
       if (category !== null) {
         corrections.category = category;
       }
-      const collectionId = selectedCollectionIds[0];
-      if (collectionId !== undefined) {
-        corrections.collectionId = collectionId;
+      if (selectedCollectionId !== null) {
+        corrections.collectionId = selectedCollectionId;
       }
       try {
         const item = await activeConfirmer(
@@ -336,7 +349,7 @@ export default function ShareImportScreen({
         }
       }
     },
-    [activeConfirmer, name, category, selectedCollectionIds],
+    [activeConfirmer, name, category, selectedCollectionId],
   );
 
   // Preview is presentation-only: the route may be absent (unmounted) or the
@@ -532,8 +545,11 @@ export default function ShareImportScreen({
           </Pressable>
           {showCollections ? (
             <CollectionsPicker
-              onChange={setSelectedCollectionIds}
-              selectedIds={selectedCollectionIds}
+              api={activeCollectionsApi}
+              onChange={ids => setSelectedCollectionId(ids[ids.length - 1] ?? null)}
+              selectedIds={
+                selectedCollectionId === null ? [] : [selectedCollectionId]
+              }
               vaultItemId={null}
             />
           ) : null}

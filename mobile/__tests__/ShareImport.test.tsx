@@ -636,6 +636,79 @@ describe('ShareImportScreen flow', () => {
     expect(confirm?.[1].body).toBeUndefined();
   });
 
+  test('choosing a collection sends exactly that one collectionId, and a second choice replaces it', async () => {
+    // The picker parses the real CollectionsController representation, so the
+    // fixture carries the fields the route actually returns.
+    const collections = [
+      {
+        id: 'col-1',
+        name: 'Work',
+        createdAt: '2026-09-01T00:00:00Z',
+        updatedAt: '2026-09-01T00:00:00Z',
+        items: [],
+      },
+      {
+        id: 'col-2',
+        name: 'Weekend',
+        createdAt: '2026-09-01T00:00:00Z',
+        updatedAt: '2026-09-01T00:00:00Z',
+        items: [],
+      },
+    ];
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = requestUrl(input);
+      if (url.endsWith('/share/imports')) {
+        return jsonResponse(201, ready());
+      }
+      if (url.endsWith(`/share/imports/${IMPORT_ID}/preview`)) {
+        return jsonResponse(200, preview());
+      }
+      if (url.endsWith('/collections')) {
+        return jsonResponse(200, collections);
+      }
+      if (url.endsWith(`/share/imports/${IMPORT_ID}/confirm`)) {
+        return jsonResponse(201, {
+          id: 'vault-item-1',
+          sourceReferenceId: 'source-ref-1',
+        });
+      }
+      return Promise.reject(new Error(`unexpected request: ${url}`));
+    });
+    const view = await render(
+      <ShareImportScreen payload={{ kind: 'url', url: SOURCE_URL }} api={api()} />,
+    );
+    expect(await view.findByText('Shared item ready')).toBeTruthy();
+
+    // The picker fetches on reveal, so an untouched screen issues no
+    // collections request at all.
+    expect(
+      fetchMock.mock.calls.filter(call => requestUrl(call[0]).endsWith('/collections')),
+    ).toHaveLength(0);
+
+    await act(async () => {
+      fireEvent.press(await view.findByText('Add to a collection'));
+    });
+    expect(await view.findByLabelText('Membership Work')).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.press(view.getByLabelText('Membership Work'));
+    });
+    await act(async () => {
+      fireEvent.press(view.getByLabelText('Membership Weekend'));
+    });
+
+    await act(async () => {
+      fireEvent.press(await view.findByText('Save to Vault'));
+    });
+
+    // The confirm contract takes one collectionId; the later choice wins
+    // instead of the first being silently kept or both being dropped.
+    const confirm = fetchMock.mock.calls.find(call =>
+      requestUrl(call[0]).endsWith(`/share/imports/${IMPORT_ID}/confirm`),
+    );
+    expect(JSON.parse(confirm?.[1].body)).toEqual({collectionId: 'col-2'});
+  });
+
   test('a transient confirm failure keeps READY and a retry converges on one saved item', async () => {
     const confirmed = {id: 'vault-item-1', sourceReferenceId: 'source-ref-1'};
     fetchMock
