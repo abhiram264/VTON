@@ -13,6 +13,7 @@ import {
   AVATAR_FAILURE_BODY,
 } from '../features/generation/failureContract';
 import { ApiProblemError } from '../features/my-model/http';
+import ConsentSection from '../features/my-model/ConsentSection';
 import { avatarApi } from '../features/my-model/avatarApi';
 import {
   choosePhoto,
@@ -506,6 +507,7 @@ export default function MyModelScreen({
           </View>
         </View>
       )}
+      <ConsentSection />
     </ScrollView>
   );
 }
