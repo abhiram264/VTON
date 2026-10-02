@@ -31,6 +31,7 @@ import com.aifashionvault.featureflag.FeatureFlagProperties;
 import com.aifashionvault.featureflag.FeatureFlagService;
 import com.aifashionvault.platform.security.ExternalTokenVerifier;
 import com.aifashionvault.platform.security.InProcessJwtFixture;
+import com.aifashionvault.shared.StudioSessionId;
 import com.aifashionvault.shared.UserId;
 
 import tools.jackson.databind.JsonNode;
@@ -247,6 +248,205 @@ class StudioNaturalLanguageCommandTest {
 		assertThat(explained.get("message").stringValue()).isNotBlank();
 		assertThat(explained.get("itemIds")).hasSize(1);
 		assertThat(countItems(sessionId)).isEqualTo(1);
+	}
+
+	@Test
+	void aNaturalLanguageMutationAdvancesTheOptimisticTokenSoAStaleCommandCannotWin() throws Exception {
+		// The store writes updated_at from the session it is given, so a mutation that
+		// passed its own unchanged timestamp back would leave the token frozen and a
+		// later stale command could silently win. This pins that the token moves and
+		// that the pre-mutation token is then refused.
+		String token = InProcessJwtFixture.bearerToken();
+		String sessionId = create(token);
+		insertVault(InProcessJwtFixture.subject(), "blue-shirt", "Blue Shirt");
+		UUID bottom = insertVault(InProcessJwtFixture.subject(), "grey-trouser", "Grey Trouser");
+
+		String before = JSON.readTree(mvc.perform(get("/studio/sessions/" + sessionId)
+				.header(HttpHeaders.AUTHORIZATION, bearer(token)))
+			.andExpect(status().isOk()).andReturn().getResponse().getContentAsString())
+			.get("updatedAt").stringValue();
+
+		// Move the injected clock so a token that merely echoed the old value would be
+		// distinguishable from one stamped fresh at mutation time.
+		NOW.set(NOW.get().plusSeconds(30));
+		JsonNode applied = nl(token, sessionId, "add my Blue Shirt to the top");
+		assertThat(applied.get("outcome").stringValue()).isEqualTo("APPLIED");
+		String after = applied.get("updatedAt").stringValue();
+		assertThat(after).isNotEqualTo(before);
+
+		// The pre-mutation token is stale: a manual command carrying it must 409 rather
+		// than overwrite the change the natural-language command just made.
+		mvc.perform(post("/studio/sessions/" + sessionId + "/commands")
+				.header(HttpHeaders.AUTHORIZATION, bearer(token))
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("{\"command\":\"addItem\",\"slot\":\"LOWER_BODY\",\"vaultItemId\":\"" + bottom
+					+ "\",\"expectedUpdatedAt\":\"" + before + "\"}"))
+			.andExpect(status().isConflict())
+			.andExpect(content().json("{\"code\":\"STUDIO_STALE_REVISION\"}"));
+		// The natural-language change survived.
+		assertThat(countItems(sessionId)).isEqualTo(1);
+	}
+
+	@Test
+	void aCommandThatPartiallyAppliedNeverClaimsNothingChanged() throws Exception {
+		// Defensive honesty boundary. The planner plans at most one mutation today, so
+		// this path should be unreachable — but the refusal message is derived from the
+		// draft, so if a future plan ever half-applies, the user is told the truth
+		// instead of "nothing was changed" over a draft that moved.
+		String token = InProcessJwtFixture.bearerToken();
+		String subject = InProcessJwtFixture.subject();
+		String sessionId = create(token);
+		UUID garment = insertVault(subject, "blue-shirt", "Blue Shirt");
+		UUID owner = jdbc.queryForObject("SELECT user_id FROM identity_mapping WHERE subject=?", UUID.class, subject);
+
+		org.springframework.jdbc.datasource.DriverManagerDataSource source =
+			new org.springframework.jdbc.datasource.DriverManagerDataSource(
+				POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
+		com.aifashionvault.studio.JdbcStudioStore store = new com.aifashionvault.studio.JdbcStudioStore(source);
+
+		// A tool port whose single mutation persists the change and then fails: the
+		// draft has moved, yet the execution reports itself incomplete.
+		com.aifashionvault.studio.agent.StudioAgentTools real =
+			new com.aifashionvault.platform.studio.StudioAgentToolAdapter(
+				store,
+				new com.aifashionvault.vault.JdbcVaultStore(source),
+				new com.aifashionvault.collection.JdbcCollectionStore(source),
+				Clock.systemUTC());
+		com.aifashionvault.studio.agent.StudioAgentTools halfApplying =
+			new HalfApplyingTools(real);
+
+		StudioController controller = new StudioController(
+			provider(store),
+			new org.springframework.beans.factory.support.DefaultListableBeanFactory()
+				.getBeanProvider(com.aifashionvault.platform.studio.StudioDraftCloner.class),
+			provider(halfApplying),
+			provider(new com.aifashionvault.studio.agent.StudioCommandPlanner(halfApplying)),
+			provider(alwaysEnabled()),
+			provider(Clock.fixed(NOW.get(), ZoneOffset.UTC)));
+
+		StudioController.StudioNaturalLanguageResponse response = controller.naturalLanguageCommand(
+			new UserId(owner), sessionId,
+			(tools.jackson.databind.node.ObjectNode) JSON.readTree("{\"text\":\"add my Blue Shirt to the top\"}"));
+
+		assertThat(response.outcome()).isEqualTo("REFUSED");
+		// The draft moved, so the message must not claim otherwise.
+		assertThat(response.message())
+			.isEqualTo("Part of that command was applied before it failed. Review the draft.");
+		assertThat(response.message()).doesNotContain("Nothing was changed");
+		assertThat(response.itemIds()).hasSize(1);
+		assertThat(countItems(sessionId)).isEqualTo(1);
+		// The injected garment really is the one that landed.
+		assertThat(jdbc.queryForObject(
+			"SELECT vault_item_id FROM studio_item WHERE studio_session_id=?",
+			UUID.class, UUID.fromString(sessionId))).isEqualTo(garment);
+	}
+
+	/** Delegates every tool to the real adapter, but persists then fails on addItem. */
+	private static final class HalfApplyingTools implements com.aifashionvault.studio.agent.StudioAgentTools {
+		private final com.aifashionvault.studio.agent.StudioAgentTools delegate;
+
+		HalfApplyingTools(com.aifashionvault.studio.agent.StudioAgentTools delegate) {
+			this.delegate = delegate;
+		}
+
+		@Override
+		public com.aifashionvault.studio.agent.ToolValue addItem(
+			UserId actorId, StudioSessionId session, com.aifashionvault.shared.VaultItemId vaultItemId,
+			com.aifashionvault.shared.StudioSlot slot, int position
+		) {
+			delegate.addItem(actorId, session, vaultItemId, slot, position);
+			throw new com.aifashionvault.studio.agent.StudioAgent.AgentApplicationException(
+				com.aifashionvault.studio.agent.AgentProblemCode.DEPENDENCY_UNAVAILABLE);
+		}
+
+		@Override
+		public com.aifashionvault.studio.agent.ToolValue searchVault(
+			UserId actorId, StudioSessionId session, String query, String category
+		) {
+			return delegate.searchVault(actorId, session, query, category);
+		}
+
+		@Override
+		public com.aifashionvault.studio.agent.ToolValue getVaultItem(
+			UserId actorId, StudioSessionId session, com.aifashionvault.shared.VaultItemId vaultItemId
+		) {
+			return delegate.getVaultItem(actorId, session, vaultItemId);
+		}
+
+		@Override
+		public com.aifashionvault.studio.agent.ToolValue listCollection(
+			UserId actorId, StudioSessionId session, com.aifashionvault.shared.CollectionId collectionId
+		) {
+			return delegate.listCollection(actorId, session, collectionId);
+		}
+
+		@Override
+		public com.aifashionvault.studio.agent.ToolValue removeItem(
+			UserId actorId, StudioSessionId session, com.aifashionvault.shared.StudioSlot slot, Integer position
+		) {
+			return delegate.removeItem(actorId, session, slot, position);
+		}
+
+		@Override
+		public com.aifashionvault.studio.agent.ToolValue replaceItem(
+			UserId actorId, StudioSessionId session, com.aifashionvault.shared.VaultItemId vaultItemId,
+			com.aifashionvault.shared.StudioSlot slot, Integer position
+		) {
+			return delegate.replaceItem(actorId, session, vaultItemId, slot, position);
+		}
+
+		@Override
+		public com.aifashionvault.studio.agent.ToolValue setAvatar(
+			UserId actorId, StudioSessionId session, com.aifashionvault.shared.AvatarProfileId avatarProfileId
+		) {
+			return delegate.setAvatar(actorId, session, avatarProfileId);
+		}
+
+		@Override
+		public com.aifashionvault.studio.agent.ToolValue getStudioState(UserId actorId, StudioSessionId session) {
+			return delegate.getStudioState(actorId, session);
+		}
+
+		@Override
+		public com.aifashionvault.studio.agent.ToolValue generateLook(
+			UserId actorId, StudioSessionId session, String idempotencyKey
+		) {
+			return delegate.generateLook(actorId, session, idempotencyKey);
+		}
+
+		@Override
+		public com.aifashionvault.studio.agent.ToolValue saveLook(
+			UserId actorId, StudioSessionId session, com.aifashionvault.shared.GenerationJobId generationJobId
+		) {
+			return delegate.saveLook(actorId, session, generationJobId);
+		}
+	}
+
+	private static com.aifashionvault.featureflag.FeatureFlags alwaysEnabled() {
+		com.aifashionvault.featureflag.FeatureFlagService flags =
+			new com.aifashionvault.featureflag.FeatureFlagService(new com.aifashionvault.featureflag.FeatureFlagProperties());
+		flags.override(com.aifashionvault.featureflag.FeatureFlagName.NATURAL_LANGUAGE_STUDIO, true);
+		return flags;
+	}
+
+	private static <T> org.springframework.beans.factory.ObjectProvider<T> provider(T value) {
+		return new org.springframework.beans.factory.ObjectProvider<>() {
+			@Override public T getObject() {
+				return value;
+			}
+
+			@Override public T getObject(Object... args) {
+				return value;
+			}
+
+			@Override public T getIfAvailable() {
+				return value;
+			}
+
+			@Override public T getIfUnique() {
+				return value;
+			}
+		};
 	}
 
 	private JsonNode nl(String token, String sessionId, String text) throws Exception {

@@ -1,5 +1,7 @@
 package com.aifashionvault.platform.studio;
 
+import java.time.Clock;
+import java.time.Instant;
 import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
@@ -55,11 +57,18 @@ public final class StudioAgentToolAdapter implements StudioAgentTools {
 	private final JdbcStudioStore studio;
 	private final JdbcVaultStore vault;
 	private final CollectionStore collections;
+	private final Clock clock;
 
-	public StudioAgentToolAdapter(JdbcStudioStore studio, JdbcVaultStore vault, CollectionStore collections) {
+	public StudioAgentToolAdapter(
+		JdbcStudioStore studio,
+		JdbcVaultStore vault,
+		CollectionStore collections,
+		Clock clock
+	) {
 		this.studio = studio;
 		this.vault = vault;
 		this.collections = collections;
+		this.clock = clock == null ? Clock.systemUTC() : clock;
 	}
 
 	@Override
@@ -181,8 +190,21 @@ public final class StudioAgentToolAdapter implements StudioAgentTools {
 			.orElseThrow(() -> notFound());
 	}
 
+	/**
+	 * Persists a mutation and advances the optimistic token.
+	 *
+	 * <p>The store writes {@code updated_at} from the session it is given, so passing
+	 * the draft's own (unchanged) timestamp back would leave the token frozen: a
+	 * later command carrying the old {@code expectedUpdatedAt} would then NOT be
+	 * recognised as stale and could silently win over this change. Stamping a fresh
+	 * instant and using the draft's previous value as the expected token is the same
+	 * discipline the manual command path follows.</p>
+	 */
 	private ToolValue persist(StudioSession next) {
-		JdbcStudioStore.SaveResult result = studio.save(next, next.updatedAt());
+		Instant expected = next.updatedAt();
+		StudioSession stamped = new StudioSession(
+			next.id(), next.userId(), next.avatarProfileId(), next.createdAt(), clock.instant(), next.items());
+		JdbcStudioStore.SaveResult result = studio.save(stamped, expected);
 		return switch (result.status()) {
 			case SAVED -> state(result.session());
 			case STALE -> throw new StudioAgent.AgentApplicationException(AgentProblemCode.STATE_CONFLICT);
