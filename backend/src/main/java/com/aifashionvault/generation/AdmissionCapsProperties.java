@@ -20,9 +20,12 @@ import org.springframework.validation.annotation.Validated;
  * the owner sets the real numbers in deployment configuration, which is what
  * makes them explicable rather than unexplained source constants.
  *
- * Bounds are validated both at bind time ({@code @Validated}/{@code @Min(1)},
- * so a bad deployment fails fast) and again by {@link AdmissionPolicy}'s own
- * compact constructor when {@link #toPolicy()} is called.
+ * Out-of-range values are refused twice: {@code @Min(1)} rejects them at bind
+ * time where a JSR-303 validator is present (the application supplies one
+ * through spring-boot-starter-validation), and {@link #toPolicy()} goes
+ * through {@link AdmissionPolicy}'s own compact constructor, so no
+ * out-of-range policy can ever reach the store even if the annotation is not
+ * processed.
  */
 @Validated
 @ConfigurationProperties(prefix = "vault.generation.admission")

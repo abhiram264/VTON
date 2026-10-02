@@ -3,6 +3,8 @@ package com.aifashionvault.generation;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.util.Map;
+
 import javax.sql.DataSource;
 
 import org.junit.jupiter.api.Test;
@@ -21,7 +23,13 @@ class AdmissionCapsPropertiesTest {
 
 	private final ApplicationContextRunner runner = new ApplicationContextRunner()
 		.withUserConfiguration(AdmissionCapsProperties.Registrar.class, GenerationConfiguration.class)
-		.withBean(DataSource.class, () -> UNCONNECTED);
+		.withBean(DataSource.class, () -> UNCONNECTED)
+		// Boot binds @Validated configuration properties against a JSR-303
+		// Validator bean; the application auto-configures one through
+		// spring-boot-starter-validation, so it is supplied here to exercise the
+		// same bind-time validation a real deployment gets.
+		.withBean(jakarta.validation.Validator.class,
+			() -> jakarta.validation.Validation.buildDefaultValidatorFactory().getValidator());
 
 	@Test
 	void unsetConfigurationReproducesTheShippedCaps() {
@@ -67,6 +75,32 @@ class AdmissionCapsPropertiesTest {
 				JdbcGenerationStore store = context.getBeanProvider(JdbcGenerationStore.class).getIfAvailable();
 				assertThat(store).isNotNull();
 				assertThat(store.admissionPolicy()).isEqualTo(AdmissionPolicy.DEFAULT);
+			});
+	}
+
+	@Test
+	void outOfRangeConfiguredValueCannotProduceAStore() {
+		runner.withPropertyValues("vault.generation.admission.max-products-per-job=0")
+			.run(context -> assertThatThrownBy(() -> context.getBean(JdbcGenerationStore.class))
+				.hasRootCauseInstanceOf(IllegalArgumentException.class));
+	}
+
+	@Test
+	void environmentVariableFormBindsTheSameCaps() {
+		// Relaxed binding of the documented environment form
+		// (VAULT_GENERATION_ADMISSION_*) is served by the system-environment
+		// property source, so an env-only deployment is exercised through one.
+		new ApplicationContextRunner()
+			.withUserConfiguration(AdmissionCapsProperties.Registrar.class, GenerationConfiguration.class)
+			.withBean(DataSource.class, () -> UNCONNECTED)
+			.withInitializer(context -> context.getEnvironment().getPropertySources().addFirst(
+				new org.springframework.core.env.SystemEnvironmentPropertySource(
+					"test-env", Map.of("VAULT_GENERATION_ADMISSION_MAX_ACTIVE_JOBS", "7"))))
+			.run(context -> {
+				assertThat(context).hasNotFailed();
+				JdbcGenerationStore store = context.getBeanProvider(JdbcGenerationStore.class).getIfAvailable();
+				assertThat(store).isNotNull();
+				assertThat(store.admissionPolicy().maxActiveJobs()).isEqualTo(7);
 			});
 	}
 
