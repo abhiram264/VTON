@@ -45,7 +45,11 @@ public class ConsentConfiguration {
 	FactoryBean<ConsentService> consentService(
 		ObjectProvider<ConsentStore> stores,
 		ObjectProvider<Clock> clocks,
-		@Value("${vault.privacy.consent-policy-version}") String policyVersion
+		// A default is supplied here as well as in application.yaml: the
+		// placeholder must resolve even for a context that loads neither the
+		// main nor the test application.yaml, and an unresolved placeholder
+		// takes down the whole context rather than just this bean.
+		@Value("${vault.privacy.consent-policy-version:2026-10-03}") String policyVersion
 	) {
 		return factory(ConsentService.class, () -> {
 			ConsentStore store = stores.getIfAvailable();
