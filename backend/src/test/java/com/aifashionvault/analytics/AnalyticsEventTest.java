@@ -14,13 +14,14 @@ import org.junit.jupiter.api.Test;
 class AnalyticsEventTest {
     @Test
     void vocabularyIsExact() {
-        assertThat(AnalyticsEventName.values()).hasSize(21);
+        assertThat(AnalyticsEventName.values()).hasSize(23);
         assertThat(java.util.Arrays.stream(AnalyticsEventName.values()).map(AnalyticsEventName::wireName))
                 .containsExactly("account_created", "avatar_creation_started", "avatar_created", "avatar_rejected",
                         "share_received", "share_resolved", "share_resolution_failed", "vault_item_created",
                         "vault_item_reused", "collection_created", "studio_started", "studio_item_added",
                         "studio_item_removed", "generation_requested", "generation_completed", "generation_failed",
-                        "generation_quality_rejected", "look_viewed", "look_saved", "look_shared", "source_link_opened");
+                        "generation_quality_rejected", "look_viewed", "look_saved", "look_shared", "source_link_opened",
+                        "deletion_requested", "deletion_completed");
     }
 
     @Test
