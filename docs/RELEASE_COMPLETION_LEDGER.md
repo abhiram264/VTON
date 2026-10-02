@@ -332,3 +332,82 @@ those assertions are retargeted at capabilities that remain unsupported
 `multiItemIsSupportedAndBackendControllableWhileDefaultingOff` test pins the new contract
 (supported, default OFF, enabled by override/binding). `FeatureFlagServiceTest`'s
 supported-vs-default-enabled coupling was decoupled for the same reason.
+
+## 13. C21 landing and corrections at integration `b85c9c0` (2026-10-03)
+
+**Appended by worker-22 (C21 author). §1–§12 above are preserved unchanged**; the two
+corrections below are stated here rather than edited into earlier sections, per the
+"preserve dated results" rule in the guide §2.
+
+### 13.1 C21 — constrained natural-language Studio — now MOUNTED
+
+The §4 row "C21 | UNMOUNTED" and the §11 line "C21 NL Studio (worker-14)" are both
+superseded. Merged at **`b85c9c0`**.
+
+| Piece | Where | Note |
+|---|---|---|
+| HTTP route | `platform/web/StudioController.java` — `POST /studio/sessions/{id}/natural-language-command` | Returns the session fields plus `outcome` (`APPLIED`/`CONFIRM_REQUIRED`/`EXPLAINED`/`REFUSED`), `message` (null on `APPLIED`), `candidates[]` (`{vaultItemId,label,slot}`) |
+| Tool port impl | `platform/studio/StudioAgentToolAdapter.java` (new) | Production `StudioAgentTools` over `JdbcVaultStore` + `CollectionStore` + `JdbcStudioStore` |
+| Planner | `studio/agent/StudioCommandPlanner.java` (worker-14, `143d12c`/`1a3f41d`) | Deterministic vocabulary; can only emit `StudioAgent`'s allowlist |
+| Capability gate | `StudioController` + `featureflag/FeatureFlagName.java` | `NATURAL_LANGUAGE_STUDIO` is supported-but-default-OFF; route answers 503 `STUDIO_NATURAL_LANGUAGE_DISABLED` when off |
+| Module seam | `studio/agent/package-info.java` `@NamedInterface("agent")`, `platform/package-info.java` `"studio :: agent"` | The port is implemented from the composition layer without `studio` depending on `vault`/`collection` |
+
+Acceptance clauses, each with an EXECUTED check (`StudioNaturalLanguageCommandTest`, 8
+cases, exit 0 at `b85c9c0` with the stale test class deleted first):
+
+- **untrusted text cannot call outside the allowlist** — unlisted text is `REFUSED` with
+  zero `studio_item` rows written.
+- **ambiguous mutation requires explicit confirmation** — an ambiguous add is
+  `CONFIRM_REQUIRED`, writes zero rows, lists the owned candidates; the explicit-id
+  follow-up then applies and writes exactly one.
+- **failure leaves the draft intact** — a slot conflict is `REFUSED` and the existing
+  item is still the only row; `explain` changes nothing.
+- **manual controls retained** — mutations go through the same `JdbcStudioStore.save`
+  optimistic token, so a stale NL command loses to a concurrent manual edit with 409.
+- **owner scope** — a foreign session is 404 `STUDIO_SESSION_NOT_FOUND` and writes
+  nothing. Mutation-checked: replacing the owner-scoped read with an owner-less fallback
+  makes that case error, so the guard is load-bearing.
+
+Deliberate non-scope, stated so it is not mistaken for an omission: `generateLook` and
+`saveLook` answer `DEPENDENCY_UNAVAILABLE` in the adapter, so free text can never reserve
+spend or publish a Look; those stay on `POST /generations/multi`, which owns the consent,
+quota, pause and provider checks. No NL analytics lifecycle event was added — C22's named
+event set (import / generation / Look / deletion) does not include it.
+
+### 13.2 Correction — C16 item 5 is no longer "owner decision, not code"
+
+§11's open item said no client-visible source URL existed. That is superseded:
+`VaultItemResponse.sourceUrl` (nullable, `source_reference.url`) landed at `91cbb6b`
+(worker-06) and the mobile mount reads it at `mobile/src/screens/VaultScreen.tsx` through
+`openSourceLink` (http/https-only, refusal reported). Recorded here because §11's text
+would otherwise still be read as the current state.
+
+### 13.3 Correction — C22 capability posture after the C12 and C21 rulings
+
+§12's closing paragraph lists `NATURAL_LANGUAGE_STUDIO` among capabilities that "remain
+unsupported". That was true when §12 was written and is no longer: C21 gave it a mounted
+backing path, so its `supported` bit is now `true` with the shipped default still `false`
+(the same shape §12 applied to `MULTI_ITEM`). The route enforces the flag independently
+(503 `STUDIO_NATURAL_LANGUAGE_DISABLED`), so the capability is reachable but not shipped
+on, and a client that ignores flags still cannot reach it. The remaining hard-unsupported
+capabilities are `HD_GENERATION` and `NEW_QUALITY_GATE`.
+
+`FeatureFlagServiceTest` now asserts both `MULTI_ITEM` and `NATURAL_LANGUAGE_STUDIO` as
+supported-but-default-OFF in one loop; `FeatureFlagCapabilityPostureTest` covers only the
+hard-unsupported posture. EXECUTED: `FeatureFlagServiceTest` 8/8,
+`FeatureFlagCapabilityPostureTest` 5/5, `FeatureFlagHttpContractTest` 5/5, exit 0.
+
+### 13.4 Independent verification of the C06 fail-closed finding (read-only)
+
+The operator's FAIL ("C06 consent enforcement fails open when `ConsentService` is absent")
+is CLOSED. Verified by reading source at this head and re-running the two owning suites:
+`GenerationProcessorConfiguration.privacyApprovedInputTransfer` now returns `null` when
+either the `ObjectStore` **or** the `ConsentService` is absent, and the worker factory
+null-checks it, so no `ConsentService` means no processor at all rather than an unchecked
+transfer. EXECUTED: `PrivacyApprovedInputTransferTest` 9/9 and
+`GenerationProcessorConfigurationTest` 4/4, exit 0. Attribution: the fix is worker-09's; I
+only re-ran the suites as a second pair of eyes.
+
+**Limit:** this is code-level proof. The end-to-end "withdrawn consent blocks a real
+provider transfer" cannot be exercised without the image-provider key, which this run
+forbids.
