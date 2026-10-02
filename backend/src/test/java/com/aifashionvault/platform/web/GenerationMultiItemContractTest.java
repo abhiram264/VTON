@@ -131,6 +131,44 @@ class GenerationMultiItemContractTest {
 	}
 
 	@Test
+	void multiCreateCommitsTheSameAbuseControlAdmissionAsTheManualPath() throws Exception {
+		Owner owner = seedOwner();
+		List<UUID> items = List.of(insertVaultItem(owner.userId(), "TOPS"), insertVaultItem(owner.userId(), "FEET"));
+
+		createMulti(owner, "admission-commit-key", items, "standard", null);
+
+		// Three bucket rows (user/device/ip) committed together is the rate limiter's
+		// observable footprint; the manual path leaves the same trace.
+		assertThat(jdbc.queryForObject(
+			"SELECT COUNT(*) FROM generation_admission_reservation WHERE committed_at IS NOT NULL",
+			Integer.class)).isEqualTo(3);
+		assertThat(jdbc.queryForObject(
+			"SELECT COUNT(*) FROM generation_admission_reservation WHERE released_at IS NOT NULL",
+			Integer.class)).isZero();
+	}
+
+	@Test
+	void multiCreateIsRateLimitedLikeTheManualPathAndReservesNothing() throws Exception {
+		Owner owner = seedOwner();
+		List<UUID> items = List.of(insertVaultItem(owner.userId(), "TOPS"), insertVaultItem(owner.userId(), "FEET"));
+		// Exhaust this user's daily admission bucket for today (UTC), the day the limiter uses.
+		jdbc.update("INSERT INTO generation_admission_counter (id, bucket_key, bucket_day, count) VALUES (?, ?, CURRENT_DATE, ?)",
+			UUID.randomUUID(), "user:" + owner.userId().value(), 100000L);
+
+		mockMvc.perform(post("/generations/multi").header(HttpHeaders.AUTHORIZATION, bearer(owner.token()))
+				.header("Idempotency-Key", "rate-limited-key").contentType(MediaType.APPLICATION_JSON)
+				.content(multiBody(null, items, "standard")))
+			.andExpect(status().isTooManyRequests())
+			.andExpect(content().string("{\"code\":\"USER_DAILY_LIMIT\"}"));
+
+		assertThat(count("generation_job")).isZero();
+		assertThat(count("generation_work_outbox")).isZero();
+		assertThat(jdbc.queryForObject(
+			"SELECT COUNT(*) FROM generation_admission_reservation WHERE committed_at IS NOT NULL",
+			Integer.class)).isZero();
+	}
+
+	@Test
 	void duplicateMultiCreateReplaysOneLogicalJob() throws Exception {
 		Owner owner = seedOwner();
 		List<UUID> items = List.of(insertVaultItem(owner.userId(), "TOPS"), insertVaultItem(owner.userId(), "FOOTWEAR"));
