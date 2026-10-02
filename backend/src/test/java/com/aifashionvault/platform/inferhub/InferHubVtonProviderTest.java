@@ -7,6 +7,7 @@ import java.io.OutputStream;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Base64;
 import java.util.HashMap;
 import java.util.List;
@@ -39,6 +40,7 @@ import com.aifashionvault.generation.vton.VtonProductAsset;
 import com.aifashionvault.generation.vton.VtonRequest;
 import com.aifashionvault.platform.objectstore.ClaimCommand;
 import com.aifashionvault.platform.objectstore.ClaimResult;
+import com.aifashionvault.platform.objectstore.GenerationMediaStore;
 import com.aifashionvault.platform.objectstore.MediaDeclaration;
 import com.aifashionvault.platform.objectstore.ObjectMetadata;
 import com.aifashionvault.platform.objectstore.ObjectRef;
@@ -58,8 +60,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * End-to-end unit pass over the InferHub provider with the HTTP seam stubbed:
  * submit serializes the multimodal request, the synchronous response is decoded,
- * the output is cached for getStatus/openOutput, and provider errors surface as
- * classified failures. No network, no key material.
+ * the output is persisted to the private TEMP boundary for getStatus/openOutput,
+ * and provider errors surface as classified failures. No network, no key material.
  */
 class InferHubVtonProviderTest {
 
@@ -77,13 +79,43 @@ class InferHubVtonProviderTest {
     private static final ItemCategory CLOTHING = new ItemCategory("clothing");
 
     /** Minimal ObjectStore: an in-memory map backing head/readBounded; rest forbidden. */
-    private static final class LocalStore implements ObjectStore {
+    private static final class LocalStore implements ObjectStore, GenerationMediaStore {
         private final Map<String, byte[]> objects = new HashMap<>();
         private final Map<String, String> contentTypes = new HashMap<>();
 
         void put(String key, byte[] bytes, String contentType) {
             objects.put(key, bytes);
             contentTypes.put(key, contentType);
+        }
+
+        @Override
+        public void putBounded(StorageKey dest, InputStream source, long maxBytes, String mediaType) {
+            try {
+                objects.put(dest.value(), source.readAllBytes());
+                contentTypes.put(dest.value(), mediaType);
+            } catch (IOException ex) {
+                throw new IllegalStateException(ex);
+            }
+        }
+
+        @Override
+        public ClaimResult claim(com.aifashionvault.platform.objectstore.GenerationClaimCommand command) {
+            throw new AssertionError("claim must not be called");
+        }
+
+        @Override
+        public void preflightProductInput(com.aifashionvault.platform.objectstore.ProductInputClaimCommand command) {
+            throw new AssertionError("preflightProductInput must not be called");
+        }
+
+        @Override
+        public ClaimResult claimProductInput(com.aifashionvault.platform.objectstore.ProductInputClaimCommand command) {
+            throw new AssertionError("claimProductInput must not be called");
+        }
+
+        @Override
+        public void releaseProductInput(com.aifashionvault.platform.objectstore.ProductInputClaimCommand command) {
+            throw new AssertionError("releaseProductInput must not be called");
         }
 
         @Override
@@ -180,18 +212,31 @@ class InferHubVtonProviderTest {
     }
 
     private static Harness harness(int status, String responseJson) {
+        LocalStore store = new LocalStore();
+        store.put(AVATAR_KEY, PNG, "image/png");
+        store.put(GARMENT_KEY, PNG, "image/png");
         StubFactory factory = new StubFactory(
             new MockClientHttpResponse(responseJson.getBytes(StandardCharsets.UTF_8), status));
+        return new Harness(provider(store, factory), factory, store);
+    }
+
+    /**
+     * A fresh provider instance over a shared durable store. The HTTP stub response body is
+     * single-read, so every submission needs its own factory; the store is deliberately shared
+     * to model the durability the handoff must provide across provider instances.
+     */
+    private static InferHubVtonProvider providerOver(LocalStore store, int status, String responseJson) {
+        return provider(store, new StubFactory(
+            new MockClientHttpResponse(responseJson.getBytes(StandardCharsets.UTF_8), status)));
+    }
+
+    private static InferHubVtonProvider provider(LocalStore store, StubFactory factory) {
         RestClient restClient = RestClient.builder()
             .baseUrl("https://api.inferhub.test")
             .requestFactory(factory)
             .build();
-        LocalStore store = new LocalStore();
-        store.put(AVATAR_KEY, PNG, "image/png");
-        store.put(GARMENT_KEY, PNG, "image/png");
-        InferHubVtonProvider provider = new InferHubVtonProvider(
-            new InferHubMapper(), new InferHubClient(restClient), store);
-        return new Harness(provider, factory, store);
+        return new InferHubVtonProvider(
+            new InferHubMapper(), new InferHubClient(restClient), store, store);
     }
 
     private static VtonRequest request(LocalStore store) {
@@ -262,6 +307,90 @@ class InferHubVtonProviderTest {
             }
             assertThat(image.toByteArray()).isEqualTo(PNG);
         }
+    }
+
+    /**
+     * The previous handoff kept at most eight outputs in a process-local map, so the ninth
+     * accepted submission evicted the first and openOutput failed with OUTPUT_MISSING. The
+     * durable TEMP handoff must retain every accepted output regardless of count, and a fresh
+     * provider instance (a restart) must still resolve outputs accepted by an earlier one.
+     */
+    @Test
+    void acceptedOutputsBeyondTheOldCacheCapacityRemainFetchable() throws Exception {
+        LocalStore store = new LocalStore();
+        store.put(AVATAR_KEY, PNG, "image/png");
+        store.put(GARMENT_KEY, PNG, "image/png");
+
+        List<GenerationSubmission.Accepted> accepted = new ArrayList<>();
+        for (int i = 0; i < 11; i++) {
+            InferHubVtonProvider writer = providerOver(store, 200, successBody(AVATAR_URI));
+            accepted.add((GenerationSubmission.Accepted) writer.submit(request(store), key()));
+        }
+
+        // A brand-new instance over the same store models the backend restart the old
+        // in-memory map could not survive.
+        InferHubVtonProvider restarted = providerOver(store, 200, successBody(AVATAR_URI));
+        for (GenerationSubmission.Accepted submission : accepted) {
+            StatusQueryResult.Observed status =
+                (StatusQueryResult.Observed) restarted.getStatus(submission.providerJobId());
+            GenerationStatus.Succeeded succeeded = (GenerationStatus.Succeeded) status.status();
+            try (ProviderMediaSource source = restarted.openOutput(succeeded.outputs().get(0))) {
+                assertThat(source.mediaType()).isEqualTo("image/png");
+                assertThat(source.stream().readAllBytes()).isEqualTo(PNG);
+            }
+        }
+    }
+
+    /**
+     * C13 ownership clause: the durable handoff must be filed inside the prefix account
+     * erasure purges ({@code ObjectStore.purgeUserObjects} erases {@code temp/<owner>/}), or a
+     * deleted account's generated image bytes would survive deletion in the private TEMP
+     * bucket. It must also be reachable from the job id alone, since that is all a restarted
+     * worker still holds.
+     */
+    @Test
+    void durableOutputIsFiledUnderTheOwnerPrefixAccountErasurePurges() throws Exception {
+        Harness harness = harness(200, successBody(AVATAR_URI));
+
+        GenerationSubmission.Accepted accepted =
+            (GenerationSubmission.Accepted) harness.provider().submit(request(null), key());
+
+        String owner = "11111111-1111-1111-1111-111111111111";
+        String written = harness.store().objects.keySet().stream()
+            .filter(key -> !key.equals(AVATAR_KEY) && !key.equals(GARMENT_KEY))
+            .findFirst()
+            .orElseThrow(() -> new AssertionError("no durable output object was written"));
+        assertThat(written).startsWith("temp/" + owner + "/");
+
+        // The restarted worker holds only the job id; the object must resolve from it.
+        StatusQueryResult.Observed status =
+            (StatusQueryResult.Observed) harness.provider().getStatus(accepted.providerJobId());
+        GenerationStatus.Succeeded succeeded = (GenerationStatus.Succeeded) status.status();
+        try (ProviderMediaSource source = harness.provider().openOutput(succeeded.outputs().get(0))) {
+            assertThat(source.stream().readAllBytes()).isEqualTo(PNG);
+        }
+    }
+
+    /**
+     * An avatar key with no owner segment cannot yield an erasable durable object, so the
+     * request is refused locally — before the paid provider call, so a malformed request can
+     * never spend.
+     */
+    @Test
+    void avatarKeyWithoutAnOwnerScopeIsRefusedBeforeAnyProviderCall() {
+        Harness harness = harness(200, successBody(AVATAR_URI));
+        VtonRequest unscoped = new VtonRequest(
+            new PrivateMediaRef(new StorageKey("temp/unscoped/avatar.png"), OptionalLong.of(PNG.length)),
+            List.of(new VtonProductAsset(
+                new PrivateMediaRef(new StorageKey(GARMENT_KEY), OptionalLong.of(PNG.length)), CLOTHING)),
+            Optional.empty(),
+            STANDARD);
+
+        GenerationSubmission submission = harness.provider().submit(unscoped, key());
+
+        GenerationSubmission.Rejected rejected = (GenerationSubmission.Rejected) submission;
+        assertThat(rejected.failure().safeCode()).isEqualTo("MEDIA_UNRESOLVABLE");
+        assertThat(harness.factory().sentBody).as("no provider call was made").isNull();
     }
 
     @Test

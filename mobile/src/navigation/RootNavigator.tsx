@@ -128,7 +128,7 @@ export default function RootNavigator({ session: injectedSession }: { session?: 
         {({ navigation }) => <GenerateScreen onCreateLook={lookId => navigation.navigate('Look', { lookId })} onMissingModel={() => navigation.navigate('MyModel')} />}
       </Stack.Screen>
       <Stack.Screen name="Look">
-        {({ route }) => <SessionGate session={session} signedIn={<LookScreen lookId={route.params.lookId} />} />}
+        {({ navigation, route }) => <SessionGate session={session} signedIn={<LookScreen lookId={route.params.lookId} onDeleted={() => navigation.goBack()} />} />}
       </Stack.Screen>
       <Stack.Screen name="ShareImport">
         {({ route }) => <SessionGate session={session} signedIn={<ShareImportScreen payload={route.params.payload} />} />}
