@@ -49,7 +49,9 @@ test('each workspace exposes its required accessible surface', async () => {
   fireEvent.press(screen.getByRole('tab', { name: /STUDIO/ }));
   await screen.findByRole('header', { name: 'Studio' });
   expect(screen.getByRole('button', { name: 'Avatar' })).toBeEnabled();
-  expect(screen.getByRole('button', { name: 'Add from Vault' })).toBeDisabled();
+  for (const slot of ['Top', 'Bottom', 'Footwear']) {
+    expect(screen.getByRole('button', { name: `Add ${slot}` })).toBeDisabled();
+  }
   expect(screen.getByRole('button', { name: 'Generate' })).toBeDisabled();
   expect(screen.getByLabelText('Natural-language command')).toBeTruthy();
 

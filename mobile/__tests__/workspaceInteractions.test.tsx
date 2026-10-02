@@ -140,7 +140,7 @@ test('regenerate handles response loss during polling and resumes without mintin
 
 test('Apply command calls the Studio client with trimmed text', async () => {
   jest.mocked(studioApi.command).mockResolvedValue({ sessionId: 'session-1', itemIds: [] });
-  await render(<StudioScreen studioSessionId="session-1" onAddFromVault={noop} onAvatar={noop} onGenerate={noop} onProfile={noop} />);
+  await render(<StudioScreen studioSessionId="session-1" onAddFromVault={noop} onAvatar={noop} onOpenLook={noop} onProfile={noop} />);
   await fireEvent.changeText(screen.getByLabelText('Natural-language command'), '  remove the hat  ');
   await fireEvent.press(screen.getByRole('button', { name: 'Apply command' }));
   await waitFor(() => expect(studioApi.command).toHaveBeenCalledWith('session-1', 'remove the hat'));
