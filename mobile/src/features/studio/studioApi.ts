@@ -117,6 +117,12 @@ function parseGeneration(value: unknown): GenerationResource {
 
 const config = productionApiConfig;
 
+/** A Studio draft cloned from a Look, plus the explicit gaps the clone reports. */
+export type StudioDraft = StudioState & {
+  unresolved: { vaultItemId: string; reason: string }[];
+  avatarUnavailable: boolean;
+};
+
 function commandBody(command: string, expectedUpdatedAt: string | undefined, extra: Record<string, unknown>): string {
   return JSON.stringify({ command, ...extra, ...(expectedUpdatedAt ? { expectedUpdatedAt } : {}) });
 }
@@ -135,6 +141,24 @@ export const studioApi = {
   },
   async create(): Promise<StudioState> {
     return parseState(await requireOk(await apiRequest(config, '/studio/sessions', { method: 'POST' })));
+  },
+  // Clone an owner-scoped Look's provenance into a NEW Studio draft
+  // (POST /studio/sessions/from-look). Missing source garments are reported in
+  // `unresolved` rather than silently dropped; `avatarUnavailable` says the
+  // draft carries no avatar. A foreign Look is 404 with no disclosure.
+  async createFromLook(lookId: string): Promise<StudioDraft> {
+    const payload = await requireOk(await apiRequest(config, '/studio/sessions/from-look', { method: 'POST', body: JSON.stringify({ lookId }) }));
+    const state = parseState(payload);
+    const row = payload as Record<string, unknown>;
+    const unresolved = Array.isArray(row.unresolved)
+      ? row.unresolved.flatMap(entry => {
+          if (entry === null || typeof entry !== 'object') return [];
+          const item = entry as Record<string, unknown>;
+          if (typeof item.vaultItemId !== 'string' || typeof item.reason !== 'string') return [];
+          return [{ vaultItemId: item.vaultItemId, reason: item.reason }];
+        })
+      : [];
+    return { ...state, unresolved, avatarUnavailable: row.avatarUnavailable === true };
   },
   async addItem(sessionId: string, vaultItemId: string, slot: StudioSlot, expectedUpdatedAt?: string): Promise<StudioState> {
     return parseState(await requireOk(await apiRequest(config, `/studio/sessions/${encodeURIComponent(sessionId)}/commands`, { method: 'POST', body: commandBody('addItem', expectedUpdatedAt, { vaultItemId, slot }) })));

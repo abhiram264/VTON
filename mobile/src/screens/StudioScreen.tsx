@@ -53,6 +53,7 @@ const PHASE_LABELS: Record<CoarseGenerationPhase, string> = {
 
 export default function StudioScreen({ studioSessionId, sourceLookId, selectedVaultItemId, onAddFromVault, onAvatar, onOpenLook, onProfile }: Props) {
   const trimmedSessionId = studioSessionId?.trim() ?? '';
+  const trimmedSourceLookId = sourceLookId?.trim() ?? '';
   const [command, setCommand] = useState('');
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -62,6 +63,7 @@ export default function StudioScreen({ studioSessionId, sourceLookId, selectedVa
   const [itemsLoaded, setItemsLoaded] = useState(false);
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
   const [phase, setPhase] = useState<CoarseGenerationPhase | null>(null);
+  const [unresolved, setUnresolved] = useState<{ vaultItemId: string; reason: string }[]>([]);
   const commandLock = useRef(false);
   const commandRequest = useRef(0);
   const operationRef = useRef(0);
@@ -84,18 +86,28 @@ export default function StudioScreen({ studioSessionId, sourceLookId, selectedVa
     ? activeSession.itemIds.filter(itemId => !SLOTS.some(slot => slot.slot === itemInfo[itemId]?.slot))
     : [];
 
-  // Load the owned draft: an explicit session id when supplied, otherwise the
-  // owner's active draft, creating one when the owner has none yet. This is the
-  // whole point of the Studio screen — it must never dead-end on "no session".
+  // Load the owned draft: an explicit session id when supplied; otherwise clone
+  // the source Look's provenance into a fresh draft when Modify-from-Look sent
+  // one; otherwise the owner's active draft, creating one when there is none.
+  // The screen must never dead-end on "no session".
   useEffect(() => {
     let current = true;
     setStudioState(null);
     setSessionStatus('loading');
     setNotice(null);
     setPhase(null);
+    setUnresolved([]);
     const load = async (): Promise<StudioState> => {
       if (trimmedSessionId) {
         return studioApi.get(trimmedSessionId);
+      }
+      if (trimmedSourceLookId) {
+        const draft = await studioApi.createFromLook(trimmedSourceLookId);
+        setUnresolved(draft.unresolved);
+        if (draft.avatarUnavailable) {
+          setNotice('This draft has no My Model. Add one before generating.');
+        }
+        return draft;
       }
       const active = await studioApi.activeDraft();
       return active ?? (await studioApi.create());
@@ -109,9 +121,12 @@ export default function StudioScreen({ studioSessionId, sourceLookId, selectedVa
       if (!current) return;
       setStudioState(null);
       setSessionStatus('failed');
+      if (trimmedSourceLookId) {
+        setNotice('Could not load that Look into a Studio draft. It may no longer be available.');
+      }
     });
     return () => { current = false; };
-  }, [trimmedSessionId]);
+  }, [trimmedSessionId, trimmedSourceLookId]);
 
   useEffect(() => {
     if (!activeSessionId) {
@@ -295,14 +310,14 @@ export default function StudioScreen({ studioSessionId, sourceLookId, selectedVa
       ))}
       {otherItemIds.length > 0 ? <View style={styles.slotRow}><Text style={styles.slotLabel}>Other</Text><Text testID="slot-OTHER">{otherItemIds.map(itemId => itemInfo[itemId]?.name ?? 'Vault garment').join(', ')}</Text></View> : null}
       {selectedVaultItemId ? <Text accessibilityLiveRegion="polite">Adding the selected Vault item…</Text> : null}
-      {sourceLookId ? <Text>Modify-from-Look is not loaded into this Studio draft.</Text> : null}
+      {unresolved.length > 0 ? <Text accessibilityLiveRegion="polite" testID="studio-unresolved">{`${unresolved.length} source garment(s) from that Look are no longer available and were not added.`}</Text> : null}
       {isFeatureEnabled('NATURAL_LANGUAGE_STUDIO') ? (
         <>
           <TextInput accessibilityLabel="Natural-language command" accessibilityState={{ disabled: !activeSession || busy }} editable={Boolean(activeSession) && !busy} multiline onChangeText={setCommand} placeholder="Describe an outfit change" style={styles.input} value={command} />
           <Action label="Apply command" onPress={applyCommand} disabled={!activeSession || command.trim().length === 0 || busy} />
-          {notice ? <Text accessibilityLiveRegion="polite">{notice}</Text> : null}
         </>
       ) : null}
+      {notice ? <Text accessibilityLiveRegion="polite" testID="studio-notice">{notice}</Text> : null}
       {phase ? <Text accessibilityLiveRegion="polite">{`Generation ${PHASE_LABELS[phase]}.`}</Text> : null}
       <Action label="Generate" onPress={generate} disabled={!activeSession || activeSession.itemIds.length === 0 || busy} />
     </View>

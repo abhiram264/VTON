@@ -12,6 +12,7 @@ jest.mock('../src/features/studio/studioApi', () => ({
     get: jest.fn(),
     activeDraft: jest.fn(),
     create: jest.fn(),
+    createFromLook: jest.fn(),
     addItem: jest.fn(),
     removeItem: jest.fn(),
     replaceItem: jest.fn(),
@@ -152,6 +153,61 @@ test('a Vault selection into an empty slot adds the item', async () => {
 
   await waitFor(() => expect(studioApi.addItem).toHaveBeenCalledWith('session-2', 'item-top', 'UPPER_BODY', '2026-10-03T00:00:00Z'));
   expect(studioApi.replaceItem).not.toHaveBeenCalled();
+});
+
+test('a source Look clones into a draft and reports unresolved source garments explicitly', async () => {
+  jest.mocked(studioApi.createFromLook).mockResolvedValue({
+    sessionId: 'cloned-1',
+    avatarProfileId: 'avatar-1',
+    updatedAt: '2026-10-03T00:00:00Z',
+    itemIds: ['item-top'],
+    unresolved: [{ vaultItemId: 'gone-bottom', reason: 'GARMENT_DELETED' }],
+    avatarUnavailable: false,
+  });
+  jest.mocked(vaultApi.list).mockResolvedValue([
+    { id: 'item-top', category: 'TOP', name: 'Silk top' },
+  ] as never);
+  jest.mocked(avatarApi.list).mockResolvedValue([] as never);
+
+  await render(
+    <StudioScreen sourceLookId="look-1" onAddFromVault={noop} onAvatar={noop} onOpenLook={noop} onProfile={noop} />,
+  );
+
+  await waitFor(() => expect(studioApi.createFromLook).toHaveBeenCalledWith('look-1'));
+  expect(studioApi.activeDraft).not.toHaveBeenCalled();
+  expect(studioApi.create).not.toHaveBeenCalled();
+  await waitFor(() => expect(screen.getByTestId('studio-unresolved')).toHaveTextContent(/1 source garment\(s\)/));
+  expect(within(screen.getByTestId('slot-UPPER_BODY')).getByTestId('item-item-top')).toHaveTextContent('Silk top');
+});
+
+test('a source Look with no avatar says so instead of silently generating without one', async () => {
+  jest.mocked(studioApi.createFromLook).mockResolvedValue({
+    sessionId: 'cloned-2',
+    updatedAt: '2026-10-03T00:00:00Z',
+    itemIds: ['item-top'],
+    unresolved: [],
+    avatarUnavailable: true,
+  });
+  jest.mocked(vaultApi.list).mockResolvedValue([{ id: 'item-top', category: 'TOP', name: 'Silk top' }] as never);
+
+  await render(
+    <StudioScreen sourceLookId="look-2" onAddFromVault={noop} onAvatar={noop} onOpenLook={noop} onProfile={noop} />,
+  );
+
+  await waitFor(() => expect(screen.getByTestId('studio-notice')).toHaveTextContent(/no My Model/));
+});
+
+test('a source Look that cannot be loaded reports it without falling back to an unrelated draft', async () => {
+  jest.mocked(studioApi.createFromLook).mockRejectedValue(new Error('404'));
+
+  await render(
+    <StudioScreen sourceLookId="foreign-look" onAddFromVault={noop} onAvatar={noop} onOpenLook={noop} onProfile={noop} />,
+  );
+
+  await waitFor(() => expect(screen.getByTestId('studio-notice')).toHaveTextContent(/Could not load that Look/));
+  expect(studioApi.activeDraft).not.toHaveBeenCalled();
+  expect(studioApi.create).not.toHaveBeenCalled();
+  expect(screen.queryByTestId('studio-summary')).toBeNull();
 });
 
 test('Generate freezes the owned session item order and opens the completed Look', async () => {
