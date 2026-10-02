@@ -15,6 +15,11 @@ type Props = {
   onAvatar: () => void;
   onOpenLook: (lookId: string) => void;
   onProfile: () => void;
+  // A route param that has been acted on must not survive in the navigator, or
+  // re-entering this tab re-applies a stale selection (the garment comes back
+  // after the user removed it; the same Look is cloned into a second draft).
+  // The screen cannot clear its own route params, so it reports consumption.
+  onConsumed?: () => void;
 };
 
 type ItemInfo = { name: string; slot: StudioSlot; imageUrl: string | null };
@@ -34,7 +39,7 @@ const PHASE_LABELS: Record<CoarseGenerationPhase, string> = {
   FAILED: 'Failed',
 };
 
-export default function StudioScreen({ studioSessionId, sourceLookId, selectedVaultItemId, onAddFromVault, onAvatar, onOpenLook, onProfile }: Props) {
+export default function StudioScreen({ studioSessionId, sourceLookId, selectedVaultItemId, onAddFromVault, onAvatar, onOpenLook, onProfile, onConsumed }: Props) {
   const trimmedSessionId = studioSessionId?.trim() ?? '';
   const trimmedSourceLookId = sourceLookId?.trim() ?? '';
   const [command, setCommand] = useState('');
@@ -49,6 +54,14 @@ export default function StudioScreen({ studioSessionId, sourceLookId, selectedVa
   const [unresolved, setUnresolved] = useState<{ vaultItemId: string; reason: string }[]>([]);
   const commandLock = useRef(false);
   const imageRetried = useRef<Set<string>>(new Set());
+  // Held in a ref so the load/selection effects depend on the route params, not
+  // on a fresh callback identity each render.
+  const consumed = useRef(onConsumed);
+  consumed.current = onConsumed;
+  // The selection effect re-runs as the draft changes; a given param value is
+  // acted on (and reported consumed) exactly once. A cleared param resets the
+  // memo so a genuine later re-selection still applies.
+  const consumedItemId = useRef<string | null>(null);
   const commandRequest = useRef(0);
   const operationRef = useRef(0);
   const mounted = useRef(true);
@@ -104,12 +117,16 @@ export default function StudioScreen({ studioSessionId, sourceLookId, selectedVa
       if (trimmedSessionId && state.sessionId !== trimmedSessionId) throw new Error('Studio session mismatch');
       setStudioState(state);
       setSessionStatus('ready');
+      if (trimmedSourceLookId) consumed.current?.();
     }).catch(() => {
       if (!current) return;
       setStudioState(null);
       setSessionStatus('failed');
       if (trimmedSourceLookId) {
         setNotice('Could not load that Look into a Studio draft. It may no longer be available.');
+        // The param is spent either way: leaving it would re-clone on every
+        // re-entry instead of showing this draft's own failure state.
+        consumed.current?.();
       }
     });
     return () => { current = false; };
@@ -124,7 +141,7 @@ export default function StudioScreen({ studioSessionId, sourceLookId, selectedVa
     let current = true;
     setItemsLoaded(false);
     imageRetried.current.clear();
-    const draftItemIds = activeSession?.itemIds ?? [];
+    const draftItemIds = itemsKey ? itemsKey.split(',') : [];
     vaultApi.list().then(items => {
       if (!current) return;
       setItemInfo(Object.fromEntries(items.map(item => [item.id, { name: item.name, slot: slotForCategory(item.category), imageUrl: null }])));
@@ -165,10 +182,22 @@ export default function StudioScreen({ studioSessionId, sourceLookId, selectedVa
   // through the same owned, revisioned Studio commands as the manual controls.
   useEffect(() => {
     const itemId = selectedVaultItemId?.trim() ?? '';
+    if (!itemId) {
+      consumedItemId.current = null;
+      return;
+    }
+    if (consumedItemId.current === itemId) return;
     // Wait for the Vault categories before deciding add-vs-replace: an empty
     // slot map would classify an occupied slot as empty and add a second item
     // instead of replacing the existing one.
-    if (!itemId || !activeSession || !itemsLoaded || activeSession.itemIds.includes(itemId)) return;
+    if (!activeSession || !itemsLoaded) return;
+    // Already in the outfit: it was applied by an earlier pass and must not be
+    // re-applied when the user later removes it.
+    if (activeSession.itemIds.includes(itemId)) {
+      consumedItemId.current = itemId;
+      consumed.current?.();
+      return;
+    }
     let current = true;
     const sessionId = activeSession.sessionId;
     const expectedUpdatedAt = activeSession.updatedAt;
@@ -181,6 +210,8 @@ export default function StudioScreen({ studioSessionId, sourceLookId, selectedVa
       if (!current) return;
       if (state.sessionId !== sessionId) throw new Error('Studio session mismatch');
       setStudioState(state);
+      consumedItemId.current = itemId;
+      consumed.current?.();
     }).catch(() => {
       if (current) setNotice(replacing ? 'Could not replace that slot item.' : 'Could not add the selected Vault item to this Studio session.');
     });
