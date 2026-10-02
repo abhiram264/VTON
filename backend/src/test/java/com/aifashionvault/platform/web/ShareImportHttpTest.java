@@ -281,7 +281,15 @@ class ShareImportHttpTest {
 
 		assertThat(first.get().failure()).isNull();
 		assertThat(second.get().failure()).isNull();
-		assertThat(first.get().status() + second.get().status()).isEqualTo(401);
+		// The contract is ONE import with ONE shared id. The loser's exact status is a
+		// timing outcome, not a contract: a terminal replay answers 200, and while the
+		// winner's attempt is still held the caller is told 202 ("current state", see
+		// ShareImportService.attachState / replayCreate). Pinning the sum (201+200) made
+		// this test race on how long the winner's resolver took, so it asserted timing
+		// instead of behaviour. Both legitimate pairs are accepted; anything else (two
+		// 201s, two 200s, a conflict) still fails.
+		List<Integer> statuses = List.of(first.get().status(), second.get().status()).stream().sorted().toList();
+		assertThat(statuses).isIn(List.of(200, 201), List.of(201, 202));
 		assertThat(second.get().importId()).isEqualTo(first.get().importId());
 		assertThat(rowCount()).isEqualTo(1);
 	}
