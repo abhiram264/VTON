@@ -1,6 +1,9 @@
-// ponytail: in-memory only; a device restart loses in-flight generation
-// tracking. Add a storage dependency (e.g. AsyncStorage) when restart
-// recovery matters.
+// ponytail: same-process fast path only. This variable does not survive a
+// device restart, and it is deliberately NOT the recovery source of truth:
+// recovery reads the owner-scoped server list (see generationLifecycle.ts
+// recoverActiveGeneration), so a restart resumes from durable state instead
+// of losing an already-charged job. Keeping the id here avoids a list
+// round-trip when the app already knows which job it is polling.
 let activeGenerationId: string | null = null;
 let pollPhaseFailed = false;
 
