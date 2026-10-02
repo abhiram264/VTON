@@ -1,16 +1,20 @@
 import {useCallback, useEffect, useRef, useState} from 'react';
-import {Pressable, StyleSheet, Text, View} from 'react-native';
+import {Pressable, ScrollView, StyleSheet, Text, TextInput, View, Image} from 'react-native';
 import {ApiProblemError} from '../features/my-model/http';
 import {
   choosePhoto,
   isCameraPermissionDenied,
 } from '../features/my-model/photoSource';
-import {createShareImportConfirmer, createShareImportResolver} from '../features/share/importClient';
+import {createShareImportConfirmer, createShareImportPreviewLoader, createShareImportResolver} from '../features/share/importClient';
 import type {
+  ShareImportConfirmCorrections,
   ShareImportConfirmer,
+  ShareImportPreview,
+  ShareImportPreviewLoader,
   ShareImportResolver,
   ShareImportResponse,
 } from '../features/share/importTypes';
+import CollectionsPicker from '../features/collections/CollectionsPicker';
 import {apiConfig, type ShareImportApiConfig} from './share-import/apiConfig';
 import {attachRecoveryImage} from './share-import/recoveryClient';
 import type {SharePayload} from '../features/share/types';
@@ -67,9 +71,18 @@ type Props = {
   payload: SharePayload;
   resolver?: ShareImportResolver;
   confirmer?: ShareImportConfirmer;
+  previewLoader?: ShareImportPreviewLoader;
   picker?: () => Promise<LocalPhoto | null>;
   api?: ShareImportApiConfig;
 };
+
+// Mirrors ProductCategory (backend/normalization/ProductCategory). UNKNOWN is a
+// real server value for an unclassified item, so it is offered rather than
+// hidden; the server remains the authority and rejects an unknown name.
+const CATEGORY_OPTIONS: readonly string[] = [
+  'TOP', 'BOTTOM', 'ONE_PIECE', 'ETHNIC_FULL_BODY', 'SAREE', 'LEHENGA', 'KURTA',
+  'SHERWANI', 'FOOTWEAR', 'HEADWEAR', 'BAG', 'JEWELLERY', 'ACCESSORY', 'UNKNOWN',
+];
 
 // Retry after the bounded in-client backoff spends the 60s lease: the same
 // stable idempotency key replays the import instead of creating a new one.
@@ -117,6 +130,7 @@ export default function ShareImportScreen({
   payload,
   resolver,
   confirmer,
+  previewLoader,
   picker = choosePhoto,
   api = apiConfig,
 }: Props) {
@@ -149,10 +163,43 @@ export default function ShareImportScreen({
   }
   const activeResolver = resolverRef.current.resolve;
 
-  // The confirmer is stateless (server-side identity is derived from owner +
-  // import), so it needs no per-mount ref: the injected test seam or a fresh
-  // client over the same API config is equivalent on every render.
-  const activeConfirmer = confirmer ?? createShareImportConfirmer(api);
+  // The confirmer and preview loader are stateless (server-side identity is
+  // derived from owner + import), but their identity must stay stable: a fresh
+  // closure per render would make the preview effect re-run on every render,
+  // aborting the in-flight load and consuming the response it was waiting for.
+  const clientsRef = useRef<{
+    api: ShareImportApiConfig;
+    confirmer?: ShareImportConfirmer;
+    previewLoader?: ShareImportPreviewLoader;
+    resolved: { confirmer: ShareImportConfirmer; previewLoader: ShareImportPreviewLoader };
+  } | null>(null);
+  if (
+    clientsRef.current === null ||
+    clientsRef.current.api !== api ||
+    clientsRef.current.confirmer !== confirmer ||
+    clientsRef.current.previewLoader !== previewLoader
+  ) {
+    clientsRef.current = {
+      api,
+      confirmer,
+      previewLoader,
+      resolved: {
+        confirmer: confirmer ?? createShareImportConfirmer(api),
+        previewLoader: previewLoader ?? createShareImportPreviewLoader(api),
+      },
+    };
+  }
+  const activeConfirmer = clientsRef.current.resolved.confirmer;
+  const activePreviewLoader = clientsRef.current.resolved.previewLoader;
+  const [preview, setPreview] = useState<ShareImportPreview | null>(null);
+  const [name, setName] = useState('');
+  const [category, setCategory] = useState<string | null>(null);
+  const [selectedCollectionIds, setSelectedCollectionIds] = useState<string[]>(
+    [],
+  );
+  // The collections picker fetches on mount, so it is revealed on demand: a
+  // READY screen that only needs "Save to Vault" issues no collection request.
+  const [showCollections, setShowCollections] = useState(false);
 
   // The client resolver owns staged-image release discipline (exactly once
   // after verified upload completion, or once on cancel before it). The
@@ -248,8 +295,24 @@ export default function ShareImportScreen({
       setNotice(null);
       const controller = new AbortController();
       abortRef.current = controller;
+      const corrections: ShareImportConfirmCorrections = {};
+      const trimmedName = name.trim();
+      if (trimmedName.length > 0) {
+        corrections.name = trimmedName;
+      }
+      if (category !== null) {
+        corrections.category = category;
+      }
+      const collectionId = selectedCollectionIds[0];
+      if (collectionId !== undefined) {
+        corrections.collectionId = collectionId;
+      }
       try {
-        const item = await activeConfirmer(importId, controller.signal);
+        const item = await activeConfirmer(
+          importId,
+          controller.signal,
+          Object.keys(corrections).length === 0 ? undefined : corrections,
+        );
         if (!controller.signal.aborted && operation === operationRef.current) {
           setState({view: 'SAVED', itemId: item.id});
         }
@@ -273,8 +336,36 @@ export default function ShareImportScreen({
         }
       }
     },
-    [activeConfirmer],
+    [activeConfirmer, name, category, selectedCollectionIds],
   );
+
+  // Preview is presentation-only: the route may be absent (unmounted) or the
+  // capability expired, and neither is a reason to block saving a resolved
+  // import. A failed load simply leaves the preview slot empty.
+  const previewImportId = state.view === 'READY' ? state.importId : null;
+  useEffect(() => {
+    if (previewImportId === null) {
+      return;
+    }
+    let active = true;
+    const controller = new AbortController();
+    activePreviewLoader(previewImportId, controller.signal).then(
+      value => {
+        if (active) {
+          setPreview(value);
+        }
+      },
+      () => {
+        if (active) {
+          setPreview(null);
+        }
+      },
+    );
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [previewImportId, activePreviewLoader]);
 
   const recover = useCallback(
     async (_source: 'CHOOSE_SCREENSHOT' | 'UPLOAD_IMAGE') => {
@@ -368,13 +459,84 @@ export default function ShareImportScreen({
         </View>
       ) : null}
       {state.view === 'READY' ? (
-        <>
+        <ScrollView contentContainerStyle={styles.readyContent}>
           <View accessible accessibilityLiveRegion="polite">
             <Text accessibilityRole="header" style={styles.title}>Shared item ready</Text>
             <Text style={styles.body}>
-              Save this item to your Vault to keep it.
+              Check this item, correct anything that looks wrong, then save it to
+              your Vault.
             </Text>
           </View>
+          {preview !== null ? (
+            <>
+              <Image
+                accessible
+                accessibilityRole="image"
+                accessibilityLabel="Shared item preview"
+                source={{uri: preview.previewUrl}}
+                style={styles.preview}
+              />
+              {preview.sourceTitle !== undefined ? (
+                <Text style={styles.body}>{preview.sourceTitle}</Text>
+              ) : null}
+              {preview.sourceSiteName !== undefined ? (
+                <Text style={styles.body}>{preview.sourceSiteName}</Text>
+              ) : null}
+            </>
+          ) : null}
+          <TextInput
+            accessibilityLabel="Item name"
+            accessibilityState={{disabled: busy}}
+            editable={!busy}
+            onChangeText={setName}
+            placeholder="Name (optional)"
+            style={styles.input}
+            value={name}
+          />
+          <Text style={styles.body}>Category</Text>
+          <View accessibilityRole="radiogroup" style={styles.categoryRow}>
+            {CATEGORY_OPTIONS.map(option => {
+              const chosen = category === option;
+              return (
+                <Pressable
+                  key={option}
+                  accessibilityRole="radio"
+                  accessibilityLabel={option}
+                  accessibilityState={{checked: chosen, disabled: busy}}
+                  disabled={busy}
+                  onPress={() => setCategory(chosen ? null : option)}
+                  style={[styles.category, chosen && styles.categorySelected]}
+                >
+                  <Text
+                    style={[
+                      styles.categoryLabel,
+                      chosen && styles.categoryLabelSelected,
+                    ]}
+                  >
+                    {option}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityState={{expanded: showCollections, disabled: busy}}
+            disabled={busy}
+            onPress={() => setShowCollections(value => !value)}
+            style={[styles.button, styles.secondary, busy && styles.disabled]}
+          >
+            <Text style={styles.secondaryLabel}>
+              {showCollections ? 'Hide collections' : 'Add to a collection'}
+            </Text>
+          </Pressable>
+          {showCollections ? (
+            <CollectionsPicker
+              onChange={setSelectedCollectionIds}
+              selectedIds={selectedCollectionIds}
+              vaultItemId={null}
+            />
+          ) : null}
           <View style={styles.actions}>
             <Pressable
               accessibilityRole="button"
@@ -386,7 +548,7 @@ export default function ShareImportScreen({
               <Text style={styles.primaryLabel}>Save to Vault</Text>
             </Pressable>
           </View>
-        </>
+        </ScrollView>
       ) : null}
       {state.view === 'SAVED' ? (
         <View accessible accessibilityLiveRegion="polite">
@@ -504,6 +666,49 @@ const styles = StyleSheet.create({
     fontSize: 15,
     lineHeight: 22,
     textAlign: 'center',
+  },
+  readyContent: {
+    gap: 10,
+    alignSelf: 'stretch',
+    paddingVertical: 8,
+  },
+  preview: {
+    width: '100%',
+    aspectRatio: 2 / 3,
+    borderRadius: 8,
+    backgroundColor: '#ddd8d0',
+  },
+  input: {
+    borderColor: ink,
+    borderWidth: 1,
+    borderRadius: 8,
+    minHeight: 48,
+    paddingHorizontal: 12,
+    color: ink,
+  },
+  categoryRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  category: {
+    borderColor: ink,
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  categorySelected: {
+    backgroundColor: accent,
+    borderColor: accent,
+  },
+  categoryLabel: {
+    color: ink,
+    fontSize: 13,
+  },
+  categoryLabelSelected: {
+    color: paper,
+    fontWeight: '600',
   },
   notice: {
     color: '#8a2f2b',
