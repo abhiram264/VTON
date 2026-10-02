@@ -140,10 +140,15 @@ public class GenerationProcessorConfiguration {
 	) {
 		return factory(PrivacyApprovedInputTransfer.class, () -> {
 			ObjectStore objectStore = objectStores.getIfAvailable();
-			return objectStore == null
+			ConsentService consents = consentServices.getIfAvailable();
+			// A missing consent service is a REFUSAL, not an unchecked transfer: the
+			// transfer component is what enforces "no third-party body-image transfer
+			// without an active consent", so without it there is no generation
+			// processor at all (the worker factory null-checks this bean) rather than
+			// one that would move body images with no consent boundary.
+			return objectStore == null || consents == null
 				? null
-				: new PrivacyApprovedInputTransfer(privacyTransferPolicy, objectStore,
-					consentServices.getIfAvailable());
+				: new PrivacyApprovedInputTransfer(privacyTransferPolicy, objectStore, consents);
 		});
 	}
 

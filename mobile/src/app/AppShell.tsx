@@ -10,6 +10,7 @@ import RootNavigator, {
 } from '../navigation/RootNavigator';
 import { startShareLinkHandling } from '../features/share/linkHandler';
 import { initializeFirebase } from '../config/firebase';
+import { startFeatureFlagSync } from './featureFlagSync';
 
 // Module scope is total and never throws; the surface module memoizes, so no
 // provider/effect is needed and the auth surface resolves before navigation.
@@ -72,6 +73,10 @@ export default function AppShell() {
       ),
     [navigateOrQueue],
   );
+
+  // The backend capability snapshot is authoritative (C22): fetch it once a
+  // session exists so an operator's server-side flag change reaches the app.
+  useEffect(() => startFeatureFlagSync(), []);
 
   return (
     <SafeAreaProvider initialMetrics={initialMetrics}>

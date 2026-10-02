@@ -5,6 +5,7 @@ import type {
   ProductUploader,
 } from './types';
 import { createIdempotencyKey, pollGeneration } from './generationApi';
+import type { ForegroundMonitor } from './generationApi';
 import { ProductRejectedError } from './productUpload';
 import {
   clearActiveGeneration,
@@ -96,6 +97,7 @@ async function resolveGeneration(
   delay?: (ms: number) => Promise<void>,
   hint?: { current: boolean },
   signal?: AbortSignal,
+  foreground?: ForegroundMonitor,
 ): Promise<CreateLookOutcome> {
   const final = await pollGeneration({
     get: api.get,
@@ -104,6 +106,7 @@ async function resolveGeneration(
     delay,
     hint,
     signal,
+    foreground,
   });
   if (final.status !== 'COMPLETED' || final.lookId == null) {
     clearActiveGeneration();
@@ -130,6 +133,7 @@ export async function createLook(input: {
   hint?: { current: boolean };
   photo?: LocalPhoto;
   signal?: AbortSignal;
+  foreground?: ForegroundMonitor;
 }): Promise<CreateLookOutcome> {
   if (input.signal?.aborted) {
     throw new Error('Aborted');
@@ -144,6 +148,7 @@ export async function createLook(input: {
         input.delay,
         input.hint,
         input.signal,
+        input.foreground,
       );
     } catch (error) {
       if (
@@ -184,6 +189,7 @@ export async function createLook(input: {
       input.delay,
       input.hint,
       input.signal,
+      input.foreground,
     );
   } catch (error) {
     if (
