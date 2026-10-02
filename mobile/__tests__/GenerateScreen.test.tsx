@@ -923,6 +923,137 @@ describe('GenerateScreen', () => {
     );
   });
 
+  test('quality retry discloses that it starts a new chargeable request', async () => {
+    const picker = jest.fn().mockResolvedValue(PHOTO_A);
+    fetchMock.mockImplementation(
+      mockGenerationFetch({
+        pollResponse: () =>
+          jsonResponse(200, {
+            id: 'gen-1',
+            status: 'FAILED',
+            phase: 'FAILED',
+            failureCode: 'QUALITY_REJECTED',
+            statusVersion: 1,
+            createdAt: '2026-08-23T12:00:00Z',
+            updatedAt: '2026-08-23T12:00:00Z',
+          }),
+      }),
+    );
+
+    await render(<GenerateScreen picker={picker} />);
+    await act(async () => {
+      fireEvent.press(
+        screen.getByRole('button', { name: 'Choose product photo' }),
+      );
+    });
+
+    expect(await screen.findByText(QUALITY_FAILURE_BODY)).toBeTruthy();
+    expect(
+      screen.getByText(
+        'Trying again starts a new try-on request. It may use another generation credit.',
+      ),
+    ).toBeTruthy();
+  });
+
+  test('an outage that saved the item offers a try-on retry that starts a new request and discloses it', async () => {
+    const picker = jest.fn().mockResolvedValue(PHOTO_A);
+    const vaultSave = jest.fn().mockResolvedValue({ id: 'v-1' } as VaultItemSummary);
+    let generationCreates = 0;
+    const base = mockGenerationFetch({
+      pollResponse: () =>
+        jsonResponse(200, {
+          id: 'gen-1',
+          status: 'FAILED',
+          phase: 'FAILED',
+          failureCode: 'PROVIDER_UNAVAILABLE',
+          statusVersion: 1,
+          createdAt: '2026-08-23T12:00:00Z',
+          updatedAt: '2026-08-23T12:00:00Z',
+        }),
+    });
+    fetchMock.mockImplementation((input, init) => {
+      if (
+        requestUrl(input).endsWith('/generations') &&
+        (init?.method ?? 'GET').toUpperCase() === 'POST'
+      ) {
+        generationCreates += 1;
+      }
+      return base(input, init);
+    });
+
+    await render(
+      <GenerateScreen
+        picker={picker}
+        vault={{ createFromPhoto: vaultSave } as unknown as typeof import('../src/features/vault/vaultApi').vaultApi}
+      />,
+    );
+    await act(async () => {
+      fireEvent.press(
+        screen.getByRole('button', { name: 'Choose product photo' }),
+      );
+    });
+
+    expect(await screen.findByText(OUTAGE_BODY)).toBeTruthy();
+    expect(generationCreates).toBe(1);
+    expect(
+      screen.getByText(
+        'Trying again starts a new try-on request. It may use another generation credit.',
+      ),
+    ).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Try-on again' }));
+    });
+
+    // The retained outfit was reused and a NEW request was created, which is
+    // exactly what the disclosure above told the user.
+    await waitFor(() => expect(generationCreates).toBe(2));
+    expect(picker).toHaveBeenCalledTimes(1);
+  });
+
+  test('the vault-save retry discloses that it starts no new try-on request', async () => {
+    const picker = jest.fn().mockResolvedValue(PHOTO_A);
+    const vaultSave = jest
+      .fn()
+      .mockRejectedValue(new Error('Vault storage unavailable'));
+
+    fetchMock.mockImplementation(
+      mockGenerationFetch({
+        pollResponse: () =>
+          jsonResponse(200, {
+            id: 'gen-1',
+            status: 'FAILED',
+            phase: 'FAILED',
+            failureCode: 'PROVIDER_UNAVAILABLE',
+            statusVersion: 1,
+            createdAt: '2026-08-23T12:00:00Z',
+            updatedAt: '2026-08-23T12:00:00Z',
+          }),
+      }),
+    );
+
+    await render(
+      <GenerateScreen
+        picker={picker}
+        vault={{ createFromPhoto: vaultSave } as unknown as typeof import('../src/features/vault/vaultApi').vaultApi}
+      />,
+    );
+    await act(async () => {
+      fireEvent.press(
+        screen.getByRole('button', { name: 'Choose product photo' }),
+      );
+    });
+
+    expect(
+      await screen.findByText('We could not save this item to the Vault. Try again.'),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        'Retrying saves the same photo to your Vault. It does not start a new try-on request.',
+      ),
+    ).toBeTruthy();
+  });
+
   test('the screen title is exposed as an accessible header', async () => {
     await render(<GenerateScreen />);
 
