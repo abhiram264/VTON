@@ -10,6 +10,7 @@ import { Linking, NativeModules } from 'react-native';
 import ShareImportScreen from '../src/screens/ShareImportScreen';
 import type { ShareImportResolver } from '../src/features/share/importTypes';
 import type { ShareImportResponse } from '../src/features/share/importTypes';
+import { ApiProblemError } from '../src/features/my-model/http';
 import { validateSharePayload } from '../src/features/share/types';
 import { startShareLinkHandling } from '../src/features/share/linkHandler';
 
@@ -1160,6 +1161,45 @@ describe('ShareImportScreen flow', () => {
     ).toBeTruthy();
     expect(view.queryByText('Try Again')).toBeNull();
     expect(view.queryByText('Choose Screenshot')).toBeNull();
+  });
+
+  // C23: an expired session must not be reported as an unsupported share, and
+  // must not send the user round in circles by telling them to re-share.
+  test('an expired session is reported as a session problem with no re-share advice', async () => {
+    const resolver = jest.fn(async (): Promise<ShareImportResponse> => {
+      throw new ApiProblemError('UNAUTHORIZED');
+    });
+    const view = await render(
+      <ShareImportScreen
+        payload={{ kind: 'url', url: SOURCE_URL }}
+        resolver={resolver as unknown as ShareImportResolver}
+      />,
+    );
+
+    expect(
+      await view.findByText(
+        'Your session has expired. Sign in again to continue this share.',
+      ),
+    ).toBeTruthy();
+    expect(view.queryByText(/Start a new share from its app/)).toBeNull();
+    expect(view.queryByText('Try Again')).toBeNull();
+    expect(view.queryByText('Choose Screenshot')).toBeNull();
+  });
+
+  test('an unrelated terminal code keeps the generic start-again advice', async () => {
+    const resolver = jest.fn(async (): Promise<ShareImportResponse> => {
+      throw new ApiProblemError('IMPORT_STATE_CONFLICT');
+    });
+    const view = await render(
+      <ShareImportScreen
+        payload={{ kind: 'url', url: SOURCE_URL }}
+        resolver={resolver as unknown as ShareImportResolver}
+      />,
+    );
+
+    expect(
+      await view.findByText('This shared import has already changed. Share the item again from its app.'),
+    ).toBeTruthy();
   });
 
   test('unmount aborts the in-flight resolution via the signal', async () => {
