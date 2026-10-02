@@ -6,6 +6,7 @@ import { avatarApi } from '../src/features/my-model/avatarApi';
 import { pollGeneration } from '../src/features/generation/generationApi';
 import type { GenerationResource } from '../src/features/generation/types';
 import * as featureFlags from '../src/config/featureFlags';
+import { ApiProblemError } from '../src/features/my-model/http';
 
 jest.mock('../src/features/studio/studioApi', () => ({
   ...jest.requireActual('../src/features/studio/studioApi'),
@@ -441,4 +442,33 @@ test('Generate reports a failed generation honestly and opens no Look', async ()
 
   await waitFor(() => expect(screen.getByText(/Generation failed \(PROVIDER_ERROR\)/)).toBeTruthy());
   expect(onOpenLook).not.toHaveBeenCalled();
+});
+
+// C23: an ended session is not a connection problem, and must not be reported
+// as one.
+test('an expired session is reported as a session problem, not a network one', async () => {
+  jest.mocked(studioApi.activeDraft).mockRejectedValue(new ApiProblemError('UNAUTHORIZED'));
+
+  await render(
+    <StudioScreen onAddFromVault={noop} onAvatar={noop} onOpenLook={noop} onProfile={noop} />,
+  );
+
+  expect(
+    await screen.findByText('Your session has expired. Sign in again to use Studio.'),
+  ).toBeTruthy();
+  expect(
+    screen.queryByText('Could not load your Studio draft. Check the connection and try again.'),
+  ).toBeNull();
+});
+
+test('a transient draft-load failure keeps the connection wording', async () => {
+  jest.mocked(studioApi.activeDraft).mockRejectedValue(new Error('Network request failed'));
+
+  await render(
+    <StudioScreen onAddFromVault={noop} onAvatar={noop} onOpenLook={noop} onProfile={noop} />,
+  );
+
+  expect(
+    await screen.findByText('Could not load your Studio draft. Check the connection and try again.'),
+  ).toBeTruthy();
 });
