@@ -26,6 +26,8 @@ import {
   OUTAGE_BODY,
   OUTAGE_TITLE,
   QUALITY_FAILURE_BODY,
+  RETRY_NEW_CHARGE_NOTICE,
+  RETRY_RESUMES_ACCEPTED_NOTICE,
   isProviderOutage,
 } from '../features/generation/failureContract';
 import type { LocalPhoto } from '../features/my-model/types';
@@ -96,6 +98,11 @@ export default function GenerateScreen({
     'idle' | 'requested' | 'failed'
   >('idle');
   const [inFlightId, setInFlightId] = useState<string | null>(null);
+  // C14 item 6: whether the retry the user is looking at will mint a NEW
+  // generation (a new chargeable request) or merely continue work that was
+  // already accepted and paid for. The screen knows which outcome it reached,
+  // so it sets this at the decision point instead of inferring it from copy.
+  const [chargeableRetry, setChargeableRetry] = useState(false);
   useEffect(() => {
     mountedRef.current = true;
     return () => {
@@ -147,6 +154,9 @@ export default function GenerateScreen({
       }
       setPhase(null);
       if (completed === null) {
+        // Still checking an accepted job: the next action resumes it, so it is
+        // explicitly not a new charge.
+        setChargeableRetry(false);
         setNotice(
           'A previous generation is still being checked. Open this screen again to check it.',
         );
@@ -157,9 +167,11 @@ export default function GenerateScreen({
         return;
       }
       if (completed.failureCode === CANCELLED_BY_USER) {
+        setChargeableRetry(false);
         setNotice('Generation cancelled.');
         return;
       }
+      setChargeableRetry(true);
       setNotice(
         'A previous generation did not finish. Choose a product photo to try again.',
       );
@@ -243,6 +255,7 @@ export default function GenerateScreen({
     setRetryBlocked(false);
     setCancelState('idle');
     setInFlightId(null);
+    setChargeableRetry(false);
     const controller = new AbortController();
     operationAbortRef.current = controller;
     try {
@@ -268,7 +281,15 @@ export default function GenerateScreen({
           importer: effectiveImporter,
         });
         if (isCurrent()) {
-          setOutageState(outcome.outcome === 'saved' ? 'saved' : 'save_failed');
+          if (outcome.outcome === 'saved') {
+            setOutageState('saved');
+          } else {
+            // The retry offered on the save-failed branch re-saves the photo
+            // to the Vault and starts no generation, so it must not be
+            // described as a new chargeable request.
+            setChargeableRetry(false);
+            setOutageState('save_failed');
+          }
         }
       };
       if (saveOnly) {
@@ -339,11 +360,14 @@ export default function GenerateScreen({
         return;
       }
       if (result.code === 'QUALITY_REJECTED') {
+        // Trying again re-runs a full generation from the retained photo.
+        setChargeableRetry(true);
         setIsQualityFailure(true);
         return;
       }
       if (result.retryable === false) {
         setRetryBlocked(true);
+        setChargeableRetry(true);
         setNotice('We could not confirm whether this Look was created.');
         return;
       }
@@ -352,15 +376,21 @@ export default function GenerateScreen({
         result.reason === 'error' && Boolean(result.networkLevel),
       );
       if (isOutage) {
+        setChargeableRetry(true);
         setOutageState('pending');
         const photoToSave = pickedPhoto ?? retainedPhoto;
         if (photoToSave) {
           await savePhoto(photoToSave);
         } else {
+          // The only retry offered on this branch re-saves the photo to the
+          // Vault and starts no generation, so it must not be described as a
+          // new chargeable request.
+          setChargeableRetry(false);
           setOutageState('save_failed');
         }
         return;
       }
+      setChargeableRetry(true);
       setNotice('Could not create the look. Try again.');
     } finally {
       if (isCurrent()) {
@@ -413,6 +443,16 @@ export default function GenerateScreen({
       ) : notice ? (
         <Text accessibilityLiveRegion="polite" style={styles.notice}>
           {notice}
+        </Text>
+      ) : null}
+      {recovering ? (
+        <Text accessibilityLiveRegion="polite" style={styles.body}>
+          {RETRY_RESUMES_ACCEPTED_NOTICE}
+        </Text>
+      ) : null}
+      {chargeableRetry ? (
+        <Text accessibilityLiveRegion="polite" style={styles.body}>
+          {RETRY_NEW_CHARGE_NOTICE}
         </Text>
       ) : null}
       <View style={styles.actions}>
