@@ -235,7 +235,7 @@ acceptance; do not carry this list forward as current.
 |---|---|---|---|
 | C08 | item 1: "Vault **list** shows owner-authorized thumbnails/full images" | `git show friday-guide-c01-c30:mobile/src/screens/VaultScreen.tsx` renders the signed preview only in the item **detail** view (lines ~144-234); the list rows are text-only | **UNMET at `0800318`; RESOLVED later** — worker-01 landed Vault list thumbnails with refresh at `5755d44` (`feat(mobile): Vault list shows owner-authorized thumbnails with refresh`) |
 | C08 | image capability route reachable | `git ls-tree friday-guide-c01-c30 -- .../platform/web` lists no `VaultImageController.java`; the route exists only on `swarm/fr_640bdd25a4/worker-06` (`a004579`) | **IN FLIGHT** (worker-06) — until merged, a live preview call 404s and the UI correctly shows "gone" |
-| C03 | signup, password reset, signout, durable RN persistence | `git grep -n "signOut\|createUserWithEmailAndPassword\|sendPasswordResetEmail\|getReactNativePersistence" friday-guide-c01-c30 -- mobile/src` → only a comment in `config/firebase.ts`; `mobile/src/features/auth` is empty | **IN FLIGHT** (workers 08/17/26) — C03 is materially incomplete on the branch |
+| C03 | signup, password reset, signout, durable RN persistence | `git grep -n "signOut\|createUserWithEmailAndPassword\|sendPasswordResetEmail"` → only a comment at `0800318`; `mobile/src/features/auth` empty | **RESOLVED for signup/reset/signout/isolation/settings (landed, §11); durable RN persistence is EXTERNALLY-DEPENDENT / PARTIALLY MET — see §11** |
 | C12 | Studio multi-item create mounted | `git grep -n "generations/multi" friday-guide-c01-c30 -- backend/src/main/java` → no matches | **IN FLIGHT** (worker-05) — see CONTRACT_INVENTORY §9.1 (frozen seam) |
 
 Cross-checks that PASSED at `0800318` (no action needed): C09 `collectionsApi` matches
@@ -272,8 +272,8 @@ and C07's confirm/attach routes. Each advance below was verified by reading the 
 | Requirement | Advance since the baseline | Evidence (verified at `ba41621`) |
 |---|---|---|
 | C02 | Babel inliner ↔ `firebase.ts` agree; release fails closed on placeholder/localhost/LAN | `mobile/src/config/apiConfig.ts` `resolveApiBaseUrl`; `src/config/releaseConfig.test.ts` 7/7 (independently re-run) |
-| C03 | Signup/reset, account-session isolation, settings surface with sign-out | `mobile/src/screens/{SignInScreen,SettingsScreen}.tsx`, `mobile/src/features/auth/` (`accountSession.ts`), `mobile/src/features/session/`; RootNavigator wires `trackAccountIsolation` (`cf28dc6`) |
-| C04 | Android native PhotoPicker (system picker + camera) | `photopicker/PhotoPickerModule.kt` `getName()="PhotoPicker"`, registered in `MainApplication.kt`; **iOS half pending** |
+| C03 | Signup/reset, account-session isolation, settings surface with sign-out | `mobile/src/screens/{SignInScreen,SettingsScreen}.tsx`, `mobile/src/features/auth/` (`accountSession.ts`), `mobile/src/features/session/`; RootNavigator wires `trackAccountIsolation` (`cf28dc6`). **Durable RN persistence: EXTERNALLY-DEPENDENT / PARTIALLY MET** (operator ruling) — `firebase.ts:179` calls `getAuth(app)` with no persistence deps (in-memory across cold start); no `async-storage` dependency and no test pins it; worker-16 adds an injectable `features/auth/sessionPersistence.ts` seam so adding the real package later is a one-line wiring change |
+| C04 | Android native PhotoPicker (system picker + camera) | `photopicker/PhotoPickerModule.kt` `getName()="PhotoPicker"`, registered in `MainApplication.kt` (iOS `PhotoPicker.m`/`RCT_EXTERN_MODULE(PhotoPicker,...)` landed **after** `ba41621`); **device/compile proof EXTERNALLY-DEPENDENT** |
 | C06 | Consent store/service + HTTP surface + provider-transfer enforcement | `privacy/{ConsentService,JdbcConsentStore,ConsentPurpose}.java`, `platform/web/ConsentConfiguration.java`, `ConsentsController.java`; enforcement `PrivacyApprovedInputTransfer.java`; **fail-open finding open — see below** |
 | C07 | Confirm persists corrected metadata; client calls `/confirm`; mobile preview | `SharesController.java` (confirm + attach), `features/share/importClient.ts`, `ShareImportScreen.tsx` (`ba41621`); ShareImportConfirm 3/3 |
 | C08 | Detail/edit/delete + signed preview with refresh + **list thumbnails** | `mobile/src/features/vault/vaultApi.ts`; thumbnails `5755d44`; image route `VaultImageController.java` (`abc3b88`, `GET /vault/items/{id}/image`) |
@@ -292,6 +292,12 @@ and C07's confirm/attach routes. Each advance below was verified by reading the 
 
 **Open — owner decision, not code:**
 
+- **C03 durable RN session persistence — EXTERNALLY-DEPENDENT / PARTIALLY MET (operator
+  ruling).** No storage dependency is to be added this run (native rebuild + unencrypted
+  AsyncStorage security concern = owner decision). Signup/reset/signout/isolation/settings
+  are EXECUTED; session persistence across a cold start remains in-memory until the owner
+  approves a storage approach. Worker-16 adds an injectable `features/auth/sessionPersistence.ts`
+  seam so the real package later is a one-line wiring change. Not to be claimed.
 - **C16 item 5 (source-link navigation).** No client-visible source URL exists:
   `VaultItemResponse` carries only an opaque `sourceReferenceId` and `LookResource`
   carries none (`git grep sourceUrl` over both → none). Mounting an external source link
@@ -305,11 +311,12 @@ and C07's confirm/attach routes. Each advance below was verified by reading the 
   builds the transfer and would send body images with no consent check. Reported by
   worker-31, independently reproduced by me, fix claimed by worker-09.
 
-**Still in flight at `ba41621`:** C04 iOS native picker (worker-04), C07 share-import
-preview (worker-04), C20 device tokens (worker-25), C21 NL Studio (`natural-language-command`
-route not yet mounted; worker-22), C22 flag-sync wiring (worker-15). (C08 image route
-`abc3b88`; C12 + Studio HTTP mount `daddbcb`; C13 `74e31b0`; C06 enforcement `104aa1d` —
-all landed.)
+**Still in flight at `ba41621`:** C20 device tokens (worker-25), C21 NL Studio
+(`natural-language-command` route not yet mounted; worker-22), C22 flag-sync wiring
+(worker-15); the iOS native picker and C07 mobile preview landed shortly after. (C08 image
+route `abc3b88`; C12 + Studio HTTP mount `daddbcb`; C13 `74e31b0`; C06 enforcement
+`104aa1d` — all landed at/before this pin.) This section is a dated snapshot: later merges
+are recorded in the board's PATCH_SUMMARYs, not here.
 
 **Independently re-run in my worktree (EXECUTED, this host):** C02 7/7, C09 14/14,
 C08 10/10, C07 3/3, C14+C16 52/52.
