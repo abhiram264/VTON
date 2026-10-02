@@ -258,7 +258,10 @@ export default function SignInScreen({
         </Text>
       </Pressable>
       {notice ? (
-        <Text accessibilityLiveRegion="polite" style={styles.notice}>
+        <Text
+          accessibilityLiveRegion="polite"
+          style={notice === RESET_ACCEPTED_MESSAGE ? styles.info : styles.notice}
+        >
           {notice}
         </Text>
       ) : null}
@@ -290,4 +293,5 @@ const styles = StyleSheet.create({
   linkLabel: { color: '#6b4f2a', fontWeight: '600', textAlign: 'center' },
   disabled: { opacity: 0.45 },
   notice: { color: '#8a2f2b' },
+  info: { color: '#2f5233' },
 });

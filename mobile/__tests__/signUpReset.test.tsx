@@ -168,7 +168,11 @@ test('a password reset reports acceptance without confirming the address', async
   await waitFor(() => {
     expect(sendPasswordReset).toHaveBeenCalledWith(EMAIL);
   });
-  expect(screen.getByText(RESET_ACCEPTED_MESSAGE)).toBeTruthy();
+  const accepted = screen.getByText(RESET_ACCEPTED_MESSAGE);
+  expect(accepted).toBeTruthy();
+  // A success line must not be painted as an error: the informational tone is
+  // a different colour from the failure tone.
+  expect(accepted.props.style).not.toMatchObject({ color: '#8a2f2b' });
 });
 
 test('an unknown address for reset still renders the accepted line, never user-not-found', async () => {
