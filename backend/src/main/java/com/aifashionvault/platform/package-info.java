@@ -20,6 +20,9 @@
                 // APIs like the others.
                 "privacy",
                 "studio",
+                // The natural-language Studio route implements the agent's tool port
+                // from outside the module, so that sub-package is a named interface.
+                "studio :: agent",
                 // The generation composition layer emits C22 lifecycle events
                 // through the analytics module's ProductMetrics seam.
                 "analytics",
