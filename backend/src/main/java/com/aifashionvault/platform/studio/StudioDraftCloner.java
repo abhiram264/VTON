@@ -1,4 +1,4 @@
-package com.aifashionvault.studio;
+package com.aifashionvault.platform.studio;
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -21,6 +21,9 @@ import com.aifashionvault.shared.StudioSessionId;
 import com.aifashionvault.shared.StudioSlot;
 import com.aifashionvault.shared.UserId;
 import com.aifashionvault.shared.VaultItemId;
+import com.aifashionvault.studio.JdbcStudioStore;
+import com.aifashionvault.studio.StudioItem;
+import com.aifashionvault.studio.StudioSession;
 
 /**
  * Turns an owned {@link Look} back into an editable Studio draft (the "Modify"
