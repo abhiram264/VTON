@@ -243,3 +243,19 @@ Cross-checks that PASSED at `0800318` (no action needed): C09 `collectionsApi` m
 500/25/250 USD/1d defaults preserved; C17 commits the `deleted_at` barrier before media
 purge; OFFLINE-ECHO is dev-only and fail-closed; the C08 mobile image client and worker-06's
 unmerged route agree on `GET /vault/items/{id}/image` → `{url, expiresAt}`.
+
+### 10.1 Cross-checks at the next integration head `d2e3478`
+
+Checked after worker-08 merged (C04 native picker + C03 account-session isolation):
+
+- **C04 (PASS):** the merged native module's `getName()` returns `"PhotoPicker"` and it
+  exposes `@ReactMethod choosePhoto`/`takePhoto`, registered in `MainApplication.kt` —
+  exactly the `NativeModules.PhotoPicker` shape `mobile/src/features/my-model/photoSource.ts`
+  requires. Native bridge presence confirmed in source; on-device capture proof remains
+  EXTERNALLY-DEPENDENT.
+- **C07 (PASS):** the mobile confirmer now calls `POST /share/imports/{importId}/confirm`
+  (`features/share/importClient.ts:283-298`) and `ShareImportScreen` presents the saved
+  state only from that response; the backend route is mounted (`SharesController.java:80`).
+  Both sides agree.
+- **Corroboration:** peer worker-03 independently reproduced the C01 route census
+  (37 mappings, 10 controllers) and verified the C22 analytics tests at `ae358d7`.
