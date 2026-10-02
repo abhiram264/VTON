@@ -12,6 +12,8 @@
 const fs = require('fs');
 const path = require('path');
 
+const {assertReleaseApiTarget} = require('./releaseEnvGuard');
+
 function readPublicEnv(envDir) {
   const envPath = path.join(envDir, '.env');
   const map = {};
@@ -48,6 +50,14 @@ module.exports = {
       // fail-closed tests. babel-jest declares caller name 'babel-jest'
       // (node_modules/babel-jest/build/index.js); Metro declares 'metro'.
       const isJest = api.caller(c => c != null && c.name === 'babel-jest');
+      // Release guard (C02): Metro runs release bundles with
+      // BABEL_ENV=production. Refuse to build a bundle whose inlined public
+      // API target is missing, a placeholder, plain HTTP, or a
+      // loopback/emulator/LAN host. Dev-server and jest transforms are not
+      // release builds and stay unguarded.
+      if (!isJest && api.env('production')) {
+        assertReleaseApiTarget(publicEnv.EXPO_PUBLIC_API_URL);
+      }
       return {
         visitor: {
           MemberExpression(nodePath) {
