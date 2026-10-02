@@ -234,6 +234,33 @@ public class ShareImportConfiguration {
 				.deleteObject(key);
 		}
 
+		/**
+		 * Short-lived signed read for the resolved import object. The resolver
+		 * publishes every import object into the VAULT boundary, so the preview
+		 * signs that same boundary; the URL is time-boxed and re-issuable. An
+		 * unavailable store yields empty (the API answers 503) rather than a
+		 * fabricated capability.
+		 */
+		@Override
+		public Optional<com.aifashionvault.platform.objectstore.PresignedAccess> presignPreview(
+				UserId ownerId, StorageKey key) {
+			if (key == null) {
+				return Optional.empty();
+			}
+			try {
+				return Optional.of(store.presignGet(
+					new com.aifashionvault.platform.objectstore.ObjectRef(
+						com.aifashionvault.shared.StorageDomain.VAULT, key.value()),
+					PREVIEW_TTL));
+			}
+			catch (com.aifashionvault.platform.objectstore.ObjectStoreExceptions.ObjectStoreUnavailableException ex) {
+				return Optional.empty();
+			}
+		}
+
+		/** Preview capability lifetime: short so a leaked URL expires quickly. */
+		private static final java.time.Duration PREVIEW_TTL = java.time.Duration.ofMinutes(5);
+
 		private com.aifashionvault.platform.objectstore.ObjectStoreImportMediaAccess ownerScoped(UserId ownerId) {
 			return new com.aifashionvault.platform.objectstore.ObjectStoreImportMediaAccess(store, inspector, null,
 				ownerId);
