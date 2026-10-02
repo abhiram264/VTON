@@ -120,6 +120,25 @@ export function createGenerationApi(
       );
       return parseLook(payload);
     },
+
+    async list() {
+      const payload = await requireOk(
+        await apiRequest(config, '/generations', { method: 'GET' }),
+      );
+      if (!Array.isArray(payload)) {
+        throw new Error('Invalid generation list response');
+      }
+      return payload.map(parseGeneration);
+    },
+
+    async cancel(id) {
+      const payload = await requireOk(
+        await apiRequest(config, `/generations/${id}/cancel`, {
+          method: 'POST',
+        }),
+      );
+      return parseGeneration(payload);
+    },
   };
 }
 
