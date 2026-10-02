@@ -6,7 +6,7 @@ import type { AuthSession } from '../src/config/firebase';
 import type { SharePayload } from '../src/features/share/types';
 
 jest.mock('../src/features/vault/vaultApi', () => ({ vaultApi: { list: jest.fn().mockResolvedValue([]) } }));
-jest.mock('../src/features/vault/collectionApi', () => ({ collectionApi: { list: jest.fn().mockResolvedValue([]) } }));
+jest.mock('../src/features/collections/collectionsApi', () => ({ collectionsApi: { list: jest.fn().mockResolvedValue([]) } }));
 jest.mock('../src/features/looks/looksApi', () => ({ looksApi: { list: jest.fn().mockResolvedValue([]) } }));
 
 // Probe: records every payload the navigator hands to the Share Import
