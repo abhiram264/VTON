@@ -10,13 +10,15 @@ package com.aifashionvault.featureflag;
  * unsupported capability reports disabled and cannot be enabled through
  * {@link FeatureFlags#override} or {@link FeatureFlagProperties#setEnabled}.
  *
- * <p>Unsupported today: multi-item creation (C12) and natural-language Studio
- * (C21) are incomplete, HD generation is advertised without a consumer, and the
- * new quality gate (C18) is a future, externally blocked capability.
+ * <p>Unsupported today: HD generation is advertised without a consumer, and the
+ * new quality gate (C18) is a future, externally blocked capability. Multi-item
+ * creation (C12) and natural-language Studio (C21) now HAVE a mounted backing
+ * path, so they are supported-but-default-OFF: the property decides, and the
+ * default keeps them out of a release until they are approved.
  */
 public enum FeatureFlagName {
 	MULTI_ITEM(false),
-	NATURAL_LANGUAGE_STUDIO(false),
+	NATURAL_LANGUAGE_STUDIO(true),
 	TRYON_MAX(true),
 	HD_GENERATION(false),
 	SHARE_IMPORT_ANDROID(true),

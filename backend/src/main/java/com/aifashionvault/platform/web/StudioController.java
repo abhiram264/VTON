@@ -30,6 +30,8 @@ import com.aifashionvault.shared.StudioSessionId;
 import com.aifashionvault.shared.StudioSlot;
 import com.aifashionvault.shared.UserId;
 import com.aifashionvault.shared.VaultItemId;
+import com.aifashionvault.featureflag.FeatureFlagName;
+import com.aifashionvault.featureflag.FeatureFlags;
 import com.aifashionvault.platform.studio.StudioDraftCloner;
 import com.aifashionvault.studio.JdbcStudioStore;
 import com.aifashionvault.studio.StudioItem;
@@ -82,6 +84,7 @@ public class StudioController {
 	private final ObjectProvider<StudioDraftCloner> cloners;
 	private final ObjectProvider<StudioAgentTools> agentTools;
 	private final ObjectProvider<StudioCommandPlanner> planners;
+	private final ObjectProvider<FeatureFlags> flagsProvider;
 	private final Clock clock;
 
 	public StudioController(
@@ -89,12 +92,14 @@ public class StudioController {
 		ObjectProvider<StudioDraftCloner> cloners,
 		ObjectProvider<StudioAgentTools> agentTools,
 		ObjectProvider<StudioCommandPlanner> planners,
+		ObjectProvider<FeatureFlags> flagsProvider,
 		ObjectProvider<Clock> clocks
 	) {
 		this.stores = stores;
 		this.cloners = cloners;
 		this.agentTools = agentTools;
 		this.planners = planners;
+		this.flagsProvider = flagsProvider;
 		this.clock = clocks.getIfAvailable(Clock::systemUTC);
 	}
 
@@ -158,6 +163,9 @@ public class StudioController {
 		@PathVariable String id,
 		@RequestBody ObjectNode body
 	) {
+		if (!naturalLanguageEnabled()) {
+			throw new CapabilityDisabled();
+		}
 		if (body == null) {
 			throw new Invalid();
 		}
@@ -233,6 +241,16 @@ public class StudioController {
 	@ExceptionHandler(Unavailable.class)
 	ResponseEntity<Problem> unavailable() {
 		return problem(HttpStatus.SERVICE_UNAVAILABLE, "STUDIO_UNAVAILABLE");
+	}
+
+	/**
+	 * The capability is off in this release. Distinct from {@code STUDIO_UNAVAILABLE}
+	 * (a missing dependency): this one means the route is not part of the release,
+	 * so a client must stop offering it rather than retry.
+	 */
+	@ExceptionHandler(CapabilityDisabled.class)
+	ResponseEntity<Problem> capabilityDisabled() {
+		return problem(HttpStatus.SERVICE_UNAVAILABLE, "STUDIO_NATURAL_LANGUAGE_DISABLED");
 	}
 
 	@ExceptionHandler({
@@ -322,6 +340,22 @@ public class StudioController {
 			throw new Unavailable();
 		}
 		return planner;
+	}
+
+	/**
+	 * The backend is the capability authority (C22): a release that declares
+	 * natural-language Studio unsupported must refuse the route even if a client
+	 * ignores the flags. A missing flag service is therefore DISABLED, not enabled —
+	 * the capability fails closed.
+	 */
+	private boolean naturalLanguageEnabled() {
+		FeatureFlags flags;
+		try {
+			flags = flagsProvider.getIfAvailable();
+		} catch (NoUniqueBeanDefinitionException ex) {
+			return false;
+		}
+		return flags != null && flags.isEnabled(FeatureFlagName.NATURAL_LANGUAGE_STUDIO);
 	}
 
 	private static CloneResponse cloneResponse(StudioSession session, StudioDraftCloner.CloneResult result) {
@@ -533,6 +567,9 @@ public class StudioController {
 	}
 
 	private static final class Unavailable extends RuntimeException {
+	}
+
+	private static final class CapabilityDisabled extends RuntimeException {
 	}
 
 	private static final class Invalid extends RuntimeException {

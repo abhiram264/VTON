@@ -26,13 +26,18 @@ import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 
+import com.aifashionvault.featureflag.FeatureFlagName;
+import com.aifashionvault.featureflag.FeatureFlagProperties;
+import com.aifashionvault.featureflag.FeatureFlagService;
 import com.aifashionvault.platform.security.ExternalTokenVerifier;
 import com.aifashionvault.platform.security.InProcessJwtFixture;
+import com.aifashionvault.shared.UserId;
 
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
@@ -47,7 +52,12 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * mutates nothing and asks, a refused command leaves the draft exactly as it
  * was, and a session owned by someone else discloses nothing.</p>
  */
-@SpringBootTest(properties = "spring.autoconfigure.exclude=")
+@SpringBootTest(properties = {
+	"spring.autoconfigure.exclude=",
+	// Natural-language Studio is a supported-but-default-OFF capability (C22):
+	// these tests exercise the enabled behaviour, so they turn it on explicitly.
+	"vault.feature-flags.natural-language-studio=true"
+})
 @AutoConfigureMockMvc
 class StudioNaturalLanguageCommandTest {
 
@@ -74,6 +84,29 @@ class StudioNaturalLanguageCommandTest {
 	void reset() {
 		NOW.set(Instant.parse("2026-09-01T09:00:00Z"));
 		jdbc.update("TRUNCATE studio_item, studio_session, vault_item, identity_mapping, users CASCADE");
+	}
+
+	@Test
+	void theCapabilityIsRefusedWhenTheReleaseDoesNotAdvertiseIt() throws Exception {
+		// C22: the backend is the capability authority. With the flag off the route
+		// is not part of the release, so it refuses before reading the draft —
+		// distinct from STUDIO_UNAVAILABLE (a missing dependency).
+		FeatureFlagService flags = new FeatureFlagService(new FeatureFlagProperties());
+		org.springframework.beans.factory.support.DefaultListableBeanFactory factory =
+			new org.springframework.beans.factory.support.DefaultListableBeanFactory();
+		StudioController controller = new StudioController(
+			factory.getBeanProvider(com.aifashionvault.studio.JdbcStudioStore.class),
+			factory.getBeanProvider(com.aifashionvault.platform.studio.StudioDraftCloner.class),
+			factory.getBeanProvider(com.aifashionvault.studio.agent.StudioAgentTools.class),
+			factory.getBeanProvider(com.aifashionvault.studio.agent.StudioCommandPlanner.class),
+			flagProvider(flags),
+			factory.getBeanProvider(Clock.class));
+		assertThat(flags.isEnabled(FeatureFlagName.NATURAL_LANGUAGE_STUDIO)).isFalse();
+		assertThatThrownBy(() -> controller.naturalLanguageCommand(
+			new UserId(UUID.randomUUID()), UUID.randomUUID().toString(), null))
+			.isInstanceOf(RuntimeException.class);
+		assertThat(controller.capabilityDisabled().getBody().code())
+			.isEqualTo("STUDIO_NATURAL_LANGUAGE_DISABLED");
 	}
 
 	@Test
@@ -250,6 +283,28 @@ class StudioNaturalLanguageCommandTest {
 
 	private static String bearer(String token) {
 		return "Bearer " + token;
+	}
+
+	private static org.springframework.beans.factory.ObjectProvider<com.aifashionvault.featureflag.FeatureFlags> flagProvider(
+		com.aifashionvault.featureflag.FeatureFlags flags
+	) {
+		return new org.springframework.beans.factory.ObjectProvider<>() {
+			@Override public com.aifashionvault.featureflag.FeatureFlags getObject() {
+				return flags;
+			}
+
+			@Override public com.aifashionvault.featureflag.FeatureFlags getObject(Object... args) {
+				return flags;
+			}
+
+			@Override public com.aifashionvault.featureflag.FeatureFlags getIfAvailable() {
+				return flags;
+			}
+
+			@Override public com.aifashionvault.featureflag.FeatureFlags getIfUnique() {
+				return flags;
+			}
+		};
 	}
 
 	@TestConfiguration
