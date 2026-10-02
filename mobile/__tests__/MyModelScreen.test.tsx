@@ -354,4 +354,29 @@ describe('MyModelScreen', () => {
     expect(screen.queryByText('AVATAR_PREFLIGHT_UNAVAILABLE')).toBeNull();
     expect(screen.queryByText(/https?:\/\//)).toBeNull();
   });
+
+  test('privacy choices are reachable from My Model in every load state', async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : String(input);
+      if (url.endsWith('/me/consents')) {
+        return jsonResponse(200, { consents: [] });
+      }
+      if (url.endsWith('/avatars')) {
+        return jsonResponse(200, []);
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    });
+
+    await render(<MyModelScreen />);
+
+    // The consent surface must be present even before the avatar loads, so a
+    // user can always reach their privacy choices.
+    expect(screen.getByText('Privacy choices')).toBeTruthy();
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: 'Grant: Process my body photo' }),
+      ).toBeTruthy(),
+    );
+    expect(screen.getByText(/Policy version/)).toBeTruthy();
+  });
 });
