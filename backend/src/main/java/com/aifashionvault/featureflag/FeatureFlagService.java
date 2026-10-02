@@ -9,6 +9,15 @@ import java.util.concurrent.ConcurrentMap;
 
 import org.springframework.stereotype.Service;
 
+/**
+ * Backend authority for capability flags.
+ *
+ * <p>This service is the single source of truth for what the release advertises:
+ * a capability is reported enabled only when it is supported by the release and
+ * not explicitly disabled by configuration. Unsupported capabilities fail closed —
+ * they always report disabled and cannot be enabled through {@link #override},
+ * so an offline flag fetch or a remote override can never turn one on (C22).
+ */
 @Service
 public class FeatureFlagService implements FeatureFlags {
 
@@ -22,6 +31,9 @@ public class FeatureFlagService implements FeatureFlags {
 	@Override
 	public boolean isEnabled(FeatureFlagName name) {
 		Objects.requireNonNull(name, "name must not be null");
+		if (!name.isSupported()) {
+			return false;
+		}
 		Boolean overridden = this.overrides.get(name);
 		if (overridden != null) {
 			return overridden;
@@ -32,6 +44,10 @@ public class FeatureFlagService implements FeatureFlags {
 	@Override
 	public void override(FeatureFlagName name, boolean enabled) {
 		Objects.requireNonNull(name, "name must not be null");
+		if (enabled && !name.isSupported()) {
+			throw new UnsupportedOperationException(
+				"feature flag " + name + " is not supported by this release and cannot be enabled");
+		}
 		this.overrides.put(name, enabled);
 	}
 
