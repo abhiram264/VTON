@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Image, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { isFeatureEnabled } from '../config/featureFlags';
 import { studioApi, slotForCategory, type StudioSlot, type StudioState } from '../features/studio/studioApi';
+import { ApiProblemError } from '../features/my-model/http';
 import { vaultApi } from '../features/vault/vaultApi';
 import { avatarApi } from '../features/my-model/avatarApi';
 import { generationApi, pollGeneration } from '../features/generation/generationApi';
@@ -46,6 +47,9 @@ export default function StudioScreen({ studioSessionId, sourceLookId, selectedVa
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [sessionStatus, setSessionStatus] = useState<'loading' | 'ready' | 'failed'>('loading');
+  // C23: why the draft failed to load. A revoked session is not a connection
+  // problem, so it must not be reported as one.
+  const [loadFailure, setLoadFailure] = useState<'unauthorized' | 'retryable' | null>(null);
   const [studioState, setStudioState] = useState<StudioState | null>(null);
   const [itemInfo, setItemInfo] = useState<Record<string, ItemInfo>>({});
   const [itemsLoaded, setItemsLoaded] = useState(false);
@@ -95,6 +99,7 @@ export default function StudioScreen({ studioSessionId, sourceLookId, selectedVa
     let current = true;
     setStudioState(null);
     setSessionStatus('loading');
+    setLoadFailure(null);
     setNotice(null);
     setPhase(null);
     setUnresolved([]);
@@ -119,10 +124,15 @@ export default function StudioScreen({ studioSessionId, sourceLookId, selectedVa
       setStudioState(state);
       setSessionStatus('ready');
       if (trimmedSourceLookId) consumed.current?.();
-    }).catch(() => {
+    }).catch((error: unknown) => {
       if (!current) return;
       setStudioState(null);
       setSessionStatus('failed');
+      setLoadFailure(
+        error instanceof ApiProblemError && error.code === 'UNAUTHORIZED'
+          ? 'unauthorized'
+          : 'retryable',
+      );
       if (trimmedSourceLookId) {
         setNotice('Could not load that Look into a Studio draft. It may no longer be available.');
         // The param is spent either way: leaving it would re-clone on every
@@ -386,7 +396,13 @@ export default function StudioScreen({ studioSessionId, sourceLookId, selectedVa
       </View>
       <Text accessibilityRole="header" style={styles.heading}>Active outfit</Text>
       {sessionStatus === 'loading' ? <Text accessibilityLiveRegion="polite">Loading your Studio draft.</Text> : null}
-      {sessionStatus === 'failed' ? <Text accessibilityLiveRegion="polite">Could not load your Studio draft. Check the connection and try again.</Text> : null}
+      {sessionStatus === 'failed' ? (
+        <Text accessibilityLiveRegion="polite">
+          {loadFailure === 'unauthorized'
+            ? 'Your session has expired. Sign in again to use Studio.'
+            : 'Could not load your Studio draft. Check the connection and try again.'}
+        </Text>
+      ) : null}
       {activeSession ? <Text testID="studio-summary">{activeSession.itemIds.length > 0 ? `Studio outfit has ${activeSession.itemIds.length} item(s).` : 'Your Studio outfit is empty. Add garments from your Vault.'}</Text> : null}
       <Text accessibilityRole="header" style={styles.heading}>Slots</Text>
       {slotRows.map(row => (
