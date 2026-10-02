@@ -162,6 +162,39 @@ describe('CollectionsPicker', () => {
     expect(screen.getByLabelText('Rename Autumn')).toBeTruthy();
   });
 
+  test('management mode shows create/rename/delete and no membership checkbox', async () => {
+    const created: Collection = {
+      id: '55555555-5555-5555-5555-555555555555',
+      name: 'Travel',
+      createdAt: '2026-09-01T00:00:00Z',
+      updatedAt: '2026-09-01T00:00:00Z',
+      items: [],
+    };
+    const api = fakeApi({ create: jest.fn().mockResolvedValue(created) });
+    await mount(<CollectionsPicker vaultItemId={null} manageOnly api={api} />);
+
+    // No item and no selection exist here, so no membership control is shown:
+    // a checkbox would be a control that does nothing.
+    expect(screen.queryByLabelText('Membership Summer')).toBeNull();
+    expect(screen.queryByLabelText('Membership Work')).toBeNull();
+    // Create, rename and delete remain reachable.
+    expect(screen.getByLabelText('Rename Summer')).toBeTruthy();
+    expect(screen.getByLabelText('Delete Work')).toBeTruthy();
+
+    await interact(() =>
+      fireEvent.changeText(
+        screen.getByLabelText('New collection name'),
+        'Travel',
+      ),
+    );
+    await interact(() =>
+      fireEvent.press(screen.getByLabelText('Create collection')),
+    );
+    expect(api.create).toHaveBeenCalledWith('Travel');
+    expect(api.addItem).not.toHaveBeenCalled();
+    expect(screen.getByLabelText('Rename Travel')).toBeTruthy();
+  });
+
   test('a load failure surfaces a retry and reports the error', async () => {
     const api = fakeApi({
       list: jest.fn().mockRejectedValue(new Error('offline')),

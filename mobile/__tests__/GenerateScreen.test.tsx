@@ -80,6 +80,7 @@ function mockGenerationFetch(options: {
   createResponse?: () => Promise<Response>;
   uploadResponse?: () => Promise<Response>;
   lookResponse?: () => Promise<Response>;
+  listResponse?: () => Promise<Response>;
 }) {
   return (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = requestUrl(input);
@@ -87,6 +88,12 @@ function mockGenerationFetch(options: {
 
     if (url.startsWith('file:///')) {
       return bytesResponse(PNG_BYTES, 'image/png');
+    }
+    if (url.endsWith('/generations') && method === 'GET') {
+      if (options.listResponse) {
+        return options.listResponse();
+      }
+      return jsonResponse(200, []);
     }
     if (url.includes('/uploads') && method === 'POST') {
       if (url.includes('/complete')) {
@@ -845,6 +852,75 @@ describe('GenerateScreen', () => {
     expect(screen.queryByText(OUTAGE_TITLE)).toBeNull();
     expect(screen.queryByText(OUTAGE_BODY)).toBeNull();
     expect(vaultSave).not.toHaveBeenCalled();
+  });
+
+  test('an in-flight generation found on the server is resumed instead of starting a second one', async () => {
+    const picker = jest.fn();
+    const onCreateLook = jest.fn();
+    let listCalls = 0;
+
+    fetchMock.mockImplementation((input, init) => {
+      const url = requestUrl(input);
+      const method = (init?.method ?? 'GET').toUpperCase();
+      if (url.endsWith('/generations') && method === 'GET') {
+        listCalls += 1;
+        return jsonResponse(200, [
+          {
+            id: 'gen-1',
+            status: 'GENERATING',
+            phase: 'GENERATING',
+            statusVersion: 2,
+            createdAt: '2026-08-23T12:00:00Z',
+            updatedAt: '2026-08-23T12:01:00Z',
+          },
+        ]);
+      }
+      if (url.includes('/generations/gen-1') && method === 'GET') {
+        return jsonResponse(200, {
+          id: 'gen-1',
+          status: 'COMPLETED',
+          phase: 'READY',
+          lookId: 'look-1',
+          statusVersion: 3,
+          createdAt: '2026-08-23T12:00:00Z',
+          updatedAt: '2026-08-23T12:02:00Z',
+        });
+      }
+      throw new Error(`unexpected fetch ${method} ${url}`);
+    });
+
+    await render(<GenerateScreen picker={picker} onCreateLook={onCreateLook} />);
+
+    await waitFor(() => expect(onCreateLook).toHaveBeenCalledWith('look-1'));
+    expect(listCalls).toBe(1);
+    // The whole point: recovery resumed the accepted job and never re-created
+    // it (no POST /generations) and never asked for another photo.
+    const methods = fetchMock.mock.calls.map(
+      ([input, init]) =>
+        `${(init?.method ?? 'GET').toUpperCase()} ${requestUrl(input)}`,
+    );
+    expect(methods).toEqual([
+      'GET https://api.test/generations',
+      'GET https://api.test/generations/gen-1',
+    ]);
+    expect(picker).not.toHaveBeenCalled();
+  });
+
+  test('an empty server list leaves the normal choose-a-photo flow usable', async () => {
+    const picker = jest.fn().mockResolvedValue(PHOTO_A);
+
+    fetchMock.mockImplementation(mockGenerationFetch({}));
+
+    await render(<GenerateScreen picker={picker} />);
+    await act(async () => {
+      fireEvent.press(
+        screen.getByRole('button', { name: 'Choose product photo' }),
+      );
+    });
+
+    await waitFor(() =>
+      expect(picker).toHaveBeenCalledTimes(1),
+    );
   });
 
   test('the screen title is exposed as an accessible header', async () => {
