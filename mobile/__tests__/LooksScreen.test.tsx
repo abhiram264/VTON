@@ -6,16 +6,23 @@ import type { GenerationResource, LookResource } from '../src/features/generatio
 import { generationApi } from '../src/features/generation/generationApi';
 import { Share } from 'react-native';
 jest.mock('../src/features/looks/looksApi', () => ({
-  looksApi: { list: jest.fn(), regenerate: jest.fn() },
+  looksApi: { list: jest.fn(), regenerate: jest.fn(), get: jest.fn(), remove: jest.fn() },
 }));
 // `pollGeneration` stays real so the bound under test is the real one; only the
 // network client is faked, and it is faked per test by clearAllMocks.
 jest.mock('../src/features/generation/generationApi', () => ({
-  generationApi: { get: jest.fn() },
+  generationApi: { get: jest.fn(), list: jest.fn() },
   pollGeneration: jest.requireActual('../src/features/generation/generationApi').pollGeneration,
+  // generationLifecycle (real, under test) classifies terminal states with the
+  // real predicate; only the network client is faked.
+  isTerminalGeneration: jest.requireActual('../src/features/generation/generationApi')
+    .isTerminalGeneration,
 }));
 
 const noop = () => undefined;
+
+const FIRST_LABEL = 'Look from 30 Aug 2026';
+const SECOND_LABEL = 'Look from 31 Aug 2026';
 
 const firstLook: LookResource = {
   id: 'look-1',
@@ -46,7 +53,21 @@ const queuedGeneration: GenerationResource = {
   updatedAt: '2026-08-30T10:00:00Z',
 };
 
-beforeEach(() => jest.clearAllMocks());
+const completedGeneration: GenerationResource = {
+  id: 'g-1',
+  status: 'COMPLETED',
+  phase: 'READY',
+  statusVersion: 4,
+  createdAt: '2026-08-30T10:00:00Z',
+  updatedAt: '2026-08-30T10:03:00Z',
+  lookId: 'look-9',
+};
+
+beforeEach(() => {
+  jest.clearAllMocks();
+  // Default: nothing in flight. Individual tests override.
+  jest.mocked(generationApi.list).mockResolvedValue([]);
+});
 // Unmount between tests: a screen left mounted keeps the focus effect active and
 // blurs the next test's screen, which is a harness artefact, not a product bug.
 afterEach(cleanup);
@@ -69,8 +90,9 @@ test('shows every saved Look the API returns as a viewable image', async () => {
   await renderLooksScreen();
 
   for (const look of [firstLook, secondLook]) {
+    const label = look.id === firstLook.id ? FIRST_LABEL : SECOND_LABEL;
     const image = await screen.findByRole('image', {
-      name: `Look image ${look.id}`,
+      name: `${label} preview`,
     });
     expect(image.props.source).toEqual({ uri: look.image.url });
   }
@@ -83,6 +105,110 @@ test('shows an honest empty state when no Looks are saved', async () => {
 
   expect(await screen.findByText('No saved Looks yet.')).toBeTruthy();
   expect(screen.queryAllByRole('image')).toHaveLength(0);
+});
+
+test('no raw Look or generation id is ever rendered to the user', async () => {
+  jest.mocked(looksApi.list).mockResolvedValue([firstLook, secondLook]);
+  jest.mocked(looksApi.regenerate).mockResolvedValue(queuedGeneration);
+  jest.mocked(generationApi.get).mockResolvedValue(completedGeneration);
+  await renderLooksScreen();
+
+  // Break the first thumbnail so the broken-preview notice renders too: it used
+  // to print the raw Look id.
+  const image = await screen.findByRole('image', { name: `${FIRST_LABEL} preview` });
+  await fireEvent(image, 'error');
+  expect(
+    await screen.findByText(`Preview unavailable for ${FIRST_LABEL}.`),
+  ).toBeTruthy();
+
+  // A regeneration is recorded so the "Recent generations" row renders.
+  await fireEvent.press(await screen.findByRole('button', { name: FIRST_LABEL }));
+  await waitFor(() =>
+    expect(
+      screen.getByRole('button', { name: 'Regenerate' }).props.accessibilityState.disabled,
+    ).toBe(false),
+  );
+  await fireEvent.press(screen.getByRole('button', { name: 'Regenerate' }));
+  await waitFor(() => expect(screen.getByText(/Last regeneration: COMPLETED/)).toBeTruthy());
+
+  // Neither identifier appears anywhere in the rendered tree.
+  for (const id of [firstLook.id, secondLook.id, queuedGeneration.id, firstLook.generationId]) {
+    expect(screen.queryByText(new RegExp(id))).toBeNull();
+    expect(screen.queryByLabelText(new RegExp(id))).toBeNull();
+  }
+});
+
+test('an expired signed preview is refreshed from the mounted Look route, not left broken', async () => {
+  jest.mocked(looksApi.list).mockResolvedValue([firstLook]);
+  jest.mocked(looksApi.get).mockResolvedValue({
+    ...firstLook,
+    image: { url: 'https://signed.example.invalid/read?X-Amz-Signature=fresh', expiresAt: '2026-08-30T10:20:00Z' },
+    items: [],
+    provider: null,
+    providerModel: null,
+    qualityStatus: null,
+  });
+  await renderLooksScreen();
+
+  const image = await screen.findByRole('image', { name: `${FIRST_LABEL} preview` });
+  await fireEvent(image, 'error');
+  expect(await screen.findByText(`Preview unavailable for ${FIRST_LABEL}.`)).toBeTruthy();
+
+  await fireEvent.press(screen.getByRole('button', { name: `Refresh preview for ${FIRST_LABEL}` }));
+
+  // The fresh signed read is now the one on screen; the Look was re-read, not
+  // re-created, and no share capability was involved.
+  const refreshed = await screen.findByRole('image', { name: `${FIRST_LABEL} preview` });
+  expect(refreshed.props.source).toEqual({
+    uri: 'https://signed.example.invalid/read?X-Amz-Signature=fresh',
+  });
+  expect(looksApi.get).toHaveBeenCalledWith(firstLook.id);
+});
+
+test('a refresh that fails says so and keeps the honest broken-preview state', async () => {
+  jest.mocked(looksApi.list).mockResolvedValue([firstLook]);
+  jest.mocked(looksApi.get).mockRejectedValue(new Error('HTTP_503'));
+  await renderLooksScreen();
+
+  const image = await screen.findByRole('image', { name: `${FIRST_LABEL} preview` });
+  await fireEvent(image, 'error');
+  await fireEvent.press(screen.getByRole('button', { name: `Refresh preview for ${FIRST_LABEL}` }));
+
+  expect(await screen.findByText('Could not refresh that preview. Try again later.')).toBeTruthy();
+  expect(screen.queryByRole('image', { name: `${FIRST_LABEL} preview` })).toBeNull();
+});
+
+test('a regeneration accepted before a restart is resumed, never re-charged', async () => {
+  jest.mocked(looksApi.list).mockResolvedValue([firstLook]);
+  // The server still holds the in-flight job this process never got to poll.
+  jest.mocked(generationApi.list).mockResolvedValue([queuedGeneration]);
+  jest.mocked(generationApi.get).mockResolvedValue(completedGeneration);
+  const onOpenLook = jest.fn();
+  await render(
+    <NavigationContainer>
+      <LooksScreen onModify={noop} onOpenLook={onOpenLook} onProfile={noop} pollDelay={async () => undefined} />
+    </NavigationContainer>,
+  );
+
+  expect(
+    await screen.findByText(
+      'A regeneration is already in progress. Press Regenerate to resume it without starting another.',
+    ),
+  ).toBeTruthy();
+
+  await fireEvent.press(await screen.findByRole('button', { name: FIRST_LABEL }));
+  await waitFor(() =>
+    expect(
+      screen.getByRole('button', { name: 'Regenerate' }).props.accessibilityState.disabled,
+    ).toBe(false),
+  );
+  await fireEvent.press(screen.getByRole('button', { name: 'Regenerate' }));
+
+  // The recovered job is polled...
+  await waitFor(() => expect(generationApi.get).toHaveBeenCalledWith(queuedGeneration.id));
+  // ...and NO second (chargeable) regeneration is started.
+  expect(looksApi.regenerate).not.toHaveBeenCalled();
+  await waitFor(() => expect(onOpenLook).toHaveBeenCalledWith(completedGeneration.lookId));
 });
 
 test('no Look share URL is ever produced or handed to the OS share sheet', async () => {
@@ -101,7 +227,7 @@ test('no Look share URL is ever produced or handed to the OS share sheet', async
   jest.mocked(generationApi.get).mockResolvedValue(queuedGeneration);
   const shareSpy = jest.spyOn(Share, 'share');
 
-  await fireEvent.press(await screen.findByRole('button', { name: `Look ${firstLook.id}` }));
+  await fireEvent.press(await screen.findByRole('button', { name: FIRST_LABEL }));
   await screen.findByRole('button', { name: 'Regenerate' });
   await waitFor(() =>
     expect(screen.getByRole('button', { name: 'Modify' }).props.accessibilityState.disabled).toBe(
@@ -129,7 +255,7 @@ test('a poll that never settles is bounded, releases the busy lock, and shows an
   // Never terminal: the generation is still GENERATING on every single poll.
   jest.mocked(generationApi.get).mockResolvedValue(queuedGeneration);
 
-  await fireEvent.press(await screen.findByRole('button', { name: `Look ${firstLook.id}` }));
+  await fireEvent.press(await screen.findByRole('button', { name: FIRST_LABEL }));
   await screen.findByRole('button', { name: 'Regenerate' });
   await waitFor(() =>
     expect(

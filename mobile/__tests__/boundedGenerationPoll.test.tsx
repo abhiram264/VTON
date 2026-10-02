@@ -15,7 +15,7 @@ jest.mock('../src/features/looks/looksApi', () => ({
 }));
 
 jest.mock('../src/features/generation/generationApi', () => ({
-  generationApi: { get: jest.fn() },
+  generationApi: { get: jest.fn(), list: jest.fn().mockResolvedValue([]) },
   // The real poller: the bound under test lives in it, not in a double.
   pollGeneration: jest.requireActual('../src/features/generation/generationApi')
     .pollGeneration,
@@ -115,7 +115,7 @@ test('a generation that cannot be checked ends in a visible error and releases t
       />
     </NavigationContainer>,
   );
-  await fireEvent.press(await screen.findByRole('button', { name: 'Look look-1' }));
+  await fireEvent.press(await screen.findByRole('button', { name: 'Look from 30 Aug 2026' }));
   const regenerate = screen.getByRole('button', { name: 'Regenerate' });
   await fireEvent.press(regenerate);
 

@@ -1,4 +1,4 @@
-package com.aifashionvault.studio;
+package com.aifashionvault.platform.web;
 
 import javax.sql.DataSource;
 
@@ -6,6 +6,10 @@ import org.springframework.beans.factory.FactoryBean;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+
+import com.aifashionvault.look.LookStore;
+import com.aifashionvault.platform.studio.StudioDraftCloner;
+import com.aifashionvault.studio.JdbcStudioStore;
 
 /**
  * Studio persistence wiring. The store is only created when a {@link DataSource}
@@ -29,6 +33,32 @@ class StudioConfiguration {
 			@Override
 			public Class<?> getObjectType() {
 				return JdbcStudioStore.class;
+			}
+
+			@Override
+			public boolean isSingleton() {
+				return true;
+			}
+		};
+	}
+
+	/** Clone-from-Look needs the Look read seam and the studio DataSource; null without both. */
+	@Bean
+	FactoryBean<StudioDraftCloner> studioDraftCloner(
+		ObjectProvider<LookStore> lookStores,
+		ObjectProvider<DataSource> sources
+	) {
+		return new FactoryBean<>() {
+			@Override
+			public StudioDraftCloner getObject() {
+				LookStore looks = lookStores.getIfAvailable();
+				DataSource source = sources.getIfAvailable();
+				return looks == null || source == null ? null : new StudioDraftCloner(looks, source);
+			}
+
+			@Override
+			public Class<?> getObjectType() {
+				return StudioDraftCloner.class;
 			}
 
 			@Override
