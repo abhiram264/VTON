@@ -5,6 +5,7 @@ import { vaultApi } from '../src/features/vault/vaultApi';
 import { avatarApi } from '../src/features/my-model/avatarApi';
 import { pollGeneration } from '../src/features/generation/generationApi';
 import type { GenerationResource } from '../src/features/generation/types';
+import * as featureFlags from '../src/config/featureFlags';
 
 jest.mock('../src/features/studio/studioApi', () => ({
   ...jest.requireActual('../src/features/studio/studioApi'),
@@ -43,6 +44,9 @@ beforeEach(() => {
   jest.mocked(vaultApi.list).mockResolvedValue([]);
   jest.mocked(vaultApi.image).mockImplementation(async (itemId: string) => ({ url: `https://cdn/${itemId}.jpg`, expiresAt: '2026-10-03T00:05:00Z' }));
   jest.mocked(avatarApi.list).mockResolvedValue([]);
+  // C22 ships NATURAL_LANGUAGE_STUDIO off; these cases exercise that surface,
+  // so enable just that capability rather than changing the shipped default.
+  jest.spyOn(featureFlags, 'isFeatureEnabled').mockImplementation(name => name === 'NATURAL_LANGUAGE_STUDIO');
 });
 
 test('renders the owned outfit as garment names and images, never raw item ids', async () => {
@@ -288,6 +292,105 @@ test('a source Look that cannot be loaded still reports the spent param', async 
   );
 
   await waitFor(() => expect(onConsumed).toHaveBeenCalledTimes(1));
+});
+
+test('an ambiguous command shows the server prompt and the owned candidates, and confirming re-sends the structured command', async () => {
+  jest.mocked(studioApi.get).mockResolvedValue({ sessionId: 'session-1', updatedAt: '2026-10-03T00:00:00Z', itemIds: [] });
+  jest.mocked(vaultApi.list).mockResolvedValue([] as never);
+  jest.mocked(studioApi.command).mockResolvedValue({
+    state: { sessionId: 'session-1', updatedAt: '2026-10-03T00:00:00Z', itemIds: [] },
+    outcome: 'CONFIRM_REQUIRED',
+    message: 'Which top did you mean?',
+    candidates: [
+      { vaultItemId: 'item-top', label: 'Silk top', slot: 'UPPER_BODY' },
+      { vaultItemId: 'item-top-2', label: 'Linen top', slot: 'UPPER_BODY' },
+    ],
+  });
+  jest.mocked(studioApi.addItem).mockResolvedValue({ sessionId: 'session-1', updatedAt: '2026-10-03T00:01:00Z', itemIds: ['item-top'] });
+
+  await render(
+    <StudioScreen studioSessionId="session-1" onAddFromVault={noop} onAvatar={noop} onOpenLook={noop} onProfile={noop} />,
+  );
+
+  await fireEvent.changeText(await screen.findByLabelText('Natural-language command'), 'add a top');
+  await fireEvent.press(screen.getByRole('button', { name: 'Apply command' }));
+
+  // Nothing was mutated, so the draft is untouched and the typed command is kept.
+  await waitFor(() => expect(screen.getByText('Which top did you mean?')).toBeTruthy());
+  expect(screen.getByLabelText('Natural-language command').props.value).toBe('add a top');
+  expect(screen.queryByTestId('item-item-top')).toBeNull();
+
+  await fireEvent.press(screen.getByRole('button', { name: 'Linen top' }));
+
+  // Confirmation uses the structured manual command with the planner's own slot.
+  await waitFor(() => expect(studioApi.addItem).toHaveBeenCalledWith('session-1', 'item-top-2', 'UPPER_BODY', '2026-10-03T00:00:00Z'));
+  expect(studioApi.command).toHaveBeenCalledTimes(1);
+});
+
+test('an explained command shows the server answer and leaves the draft and the typed text intact', async () => {
+  jest.mocked(studioApi.get).mockResolvedValue({ sessionId: 'session-1', updatedAt: '2026-10-03T00:00:00Z', itemIds: ['item-top'] });
+  jest.mocked(vaultApi.list).mockResolvedValue([{ id: 'item-top', category: 'TOP', name: 'Silk top' }] as never);
+  jest.mocked(studioApi.command).mockResolvedValue({
+    state: { sessionId: 'session-1', updatedAt: '2026-10-03T00:00:00Z', itemIds: ['item-top'] },
+    outcome: 'EXPLAINED',
+    message: 'A full-body garment cannot be combined with a separate top.',
+    candidates: [],
+  });
+
+  await render(
+    <StudioScreen studioSessionId="session-1" onAddFromVault={noop} onAvatar={noop} onOpenLook={noop} onProfile={noop} />,
+  );
+
+  await fireEvent.changeText(await screen.findByLabelText('Natural-language command'), 'add a saree');
+  await fireEvent.press(screen.getByRole('button', { name: 'Apply command' }));
+
+  await waitFor(() => expect(screen.getByText('A full-body garment cannot be combined with a separate top.')).toBeTruthy());
+  expect(screen.getByLabelText('Natural-language command').props.value).toBe('add a saree');
+  expect(within(screen.getByTestId('slot-UPPER_BODY')).getByTestId('item-item-top')).toHaveTextContent('Silk top');
+  expect(studioApi.addItem).not.toHaveBeenCalled();
+});
+
+test('a refused command says so and does not claim a change', async () => {
+  jest.mocked(studioApi.get).mockResolvedValue({ sessionId: 'session-1', updatedAt: '2026-10-03T00:00:00Z', itemIds: [] });
+  jest.mocked(vaultApi.list).mockResolvedValue([] as never);
+  jest.mocked(studioApi.command).mockResolvedValue({
+    state: { sessionId: 'session-1', updatedAt: '2026-10-03T00:00:00Z', itemIds: [] },
+    outcome: 'REFUSED',
+    message: 'That is not something I can change.',
+    candidates: [],
+  });
+
+  await render(
+    <StudioScreen studioSessionId="session-1" onAddFromVault={noop} onAvatar={noop} onOpenLook={noop} onProfile={noop} />,
+  );
+
+  await fireEvent.changeText(await screen.findByLabelText('Natural-language command'), 'delete my account');
+  await fireEvent.press(screen.getByRole('button', { name: 'Apply command' }));
+
+  await waitFor(() => expect(screen.getByText('That is not something I can change.')).toBeTruthy());
+  expect(screen.getByTestId('studio-summary')).toHaveTextContent(/Your Studio outfit is empty/);
+  expect(screen.getByLabelText('Natural-language command').props.value).toBe('delete my account');
+});
+
+test('an applied command replaces the draft and clears the input', async () => {
+  jest.mocked(studioApi.get).mockResolvedValue({ sessionId: 'session-1', updatedAt: '2026-10-03T00:00:00Z', itemIds: [] });
+  jest.mocked(vaultApi.list).mockResolvedValue([{ id: 'item-top', category: 'TOP', name: 'Silk top' }] as never);
+  jest.mocked(studioApi.command).mockResolvedValue({
+    state: { sessionId: 'session-1', updatedAt: '2026-10-03T00:01:00Z', itemIds: ['item-top'] },
+    outcome: 'APPLIED',
+    message: null,
+    candidates: [],
+  });
+
+  await render(
+    <StudioScreen studioSessionId="session-1" onAddFromVault={noop} onAvatar={noop} onOpenLook={noop} onProfile={noop} />,
+  );
+
+  await fireEvent.changeText(await screen.findByLabelText('Natural-language command'), 'add the silk top');
+  await fireEvent.press(screen.getByRole('button', { name: 'Apply command' }));
+
+  await waitFor(() => expect(within(screen.getByTestId('slot-UPPER_BODY')).getByTestId('item-item-top')).toHaveTextContent('Silk top'));
+  expect(screen.getByLabelText('Natural-language command').props.value).toBe('');
 });
 
 test('Generate freezes the owned session item order and opens the completed Look', async () => {

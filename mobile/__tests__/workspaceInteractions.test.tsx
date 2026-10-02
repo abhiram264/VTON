@@ -173,7 +173,12 @@ test('Apply command calls the Studio client with trimmed text', async () => {
     .spyOn(featureFlags, 'isFeatureEnabled')
     .mockImplementation(name => name === 'NATURAL_LANGUAGE_STUDIO');
   try {
-    jest.mocked(studioApi.command).mockResolvedValue({ sessionId: 'session-1', itemIds: [] });
+    jest.mocked(studioApi.command).mockResolvedValue({
+      state: { sessionId: 'session-1', itemIds: [] },
+      outcome: 'APPLIED',
+      message: null,
+      candidates: [],
+    });
     await render(<StudioScreen studioSessionId="session-1" onAddFromVault={noop} onAvatar={noop} onOpenLook={noop} onProfile={noop} />);
     await fireEvent.changeText(screen.getByLabelText('Natural-language command'), '  remove the hat  ');
     await fireEvent.press(screen.getByRole('button', { name: 'Apply command' }));
