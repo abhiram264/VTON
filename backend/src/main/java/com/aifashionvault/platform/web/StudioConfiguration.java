@@ -1,5 +1,7 @@
 package com.aifashionvault.platform.web;
 
+import java.time.Clock;
+
 import javax.sql.DataSource;
 
 import org.springframework.beans.factory.FactoryBean;
@@ -82,7 +84,8 @@ class StudioConfiguration {
 	FactoryBean<StudioAgentTools> studioAgentTools(
 		ObjectProvider<JdbcStudioStore> studioStores,
 		ObjectProvider<DataSource> sources,
-		ObjectProvider<CollectionStore> collectionStores
+		ObjectProvider<CollectionStore> collectionStores,
+		ObjectProvider<Clock> clocks
 	) {
 		return new FactoryBean<>() {
 			@Override
@@ -93,7 +96,8 @@ class StudioConfiguration {
 				if (studio == null || source == null || collections == null) {
 					return null;
 				}
-				return new StudioAgentToolAdapter(studio, new JdbcVaultStore(source), collections);
+				return new StudioAgentToolAdapter(
+					studio, new JdbcVaultStore(source), collections, clocks.getIfAvailable(Clock::systemUTC));
 			}
 
 			@Override
