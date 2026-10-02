@@ -2,7 +2,6 @@ package com.aifashionvault.privacy;
 
 import java.time.Clock;
 import java.time.Instant;
-import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 
@@ -79,10 +78,5 @@ public final class ConsentService {
 			return false;
 		}
 		return this.store.active(userId, purpose.wireName()).isPresent();
-	}
-
-	/** The owner's consent history, oldest first, for the consent surface. */
-	public List<Consent> list(UserId userId) {
-		return userId == null ? List.of() : this.store.list(userId);
 	}
 }

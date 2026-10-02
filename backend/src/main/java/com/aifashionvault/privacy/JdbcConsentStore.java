@@ -4,7 +4,6 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Instant;
-import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -73,17 +72,6 @@ public class JdbcConsentStore implements ConsentStore {
 				purpose)
 			.stream()
 			.findFirst();
-	}
-
-	@Override
-	public List<Consent> list(UserId userId) {
-		if (userId == null) {
-			return List.of();
-		}
-		return jdbc.query(
-			"SELECT " + COLUMNS + " FROM consent WHERE user_id = ? ORDER BY granted_at ASC, id ASC",
-			MAPPER,
-			userId.value());
 	}
 
 	@Override

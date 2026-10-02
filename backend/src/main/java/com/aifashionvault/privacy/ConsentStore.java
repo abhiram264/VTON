@@ -1,7 +1,6 @@
 package com.aifashionvault.privacy;
 
 import java.time.Instant;
-import java.util.List;
 import java.util.Optional;
 
 import com.aifashionvault.shared.UserId;
@@ -21,9 +20,6 @@ public interface ConsentStore {
 
 	/** The newest non-revoked grant for this owner and purpose, if any. */
 	Optional<Consent> active(UserId userId, String purpose);
-
-	/** Every grant for the owner, oldest first, so the surface can show the history. */
-	List<Consent> list(UserId userId);
 
 	/**
 	 * Revokes every non-revoked grant for this owner and purpose.

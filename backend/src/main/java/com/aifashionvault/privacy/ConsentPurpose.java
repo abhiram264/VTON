@@ -14,10 +14,7 @@ public enum ConsentPurpose {
 	BODY_IMAGE_PROCESSING("body_image_processing"),
 
 	/** Sending the user's body photo to a third-party AI image provider. */
-	THIRD_PARTY_AI_TRANSFER("third_party_ai_transfer"),
-
-	/** Keeping the body photo and generated results for the stated retention window. */
-	RETENTION("retention");
+	THIRD_PARTY_AI_TRANSFER("third_party_ai_transfer");
 
 	private final String wireName;
 
@@ -27,23 +24,5 @@ public enum ConsentPurpose {
 
 	public String wireName() {
 		return this.wireName;
-	}
-
-	/**
-	 * Parses a stored/requested purpose string back into the closed vocabulary.
-	 * An unrecognised value is empty rather than a silent new purpose: a purpose
-	 * the product cannot enforce must never be recorded.
-	 */
-	public static java.util.Optional<ConsentPurpose> fromWire(String value) {
-		if (value == null) {
-			return java.util.Optional.empty();
-		}
-		String normalized = value.strip().toLowerCase(java.util.Locale.ROOT);
-		for (ConsentPurpose purpose : values()) {
-			if (purpose.wireName.equals(normalized)) {
-				return java.util.Optional.of(purpose);
-			}
-		}
-		return java.util.Optional.empty();
 	}
 }

@@ -78,6 +78,32 @@ function bytesResponse(
   } as unknown as Response);
 }
 
+const CONSENT_POLICY = '2026-10-03';
+
+// Server-shaped consent snapshot with body-image processing granted, so a
+// test that exercises the upload path is not blocked by the consent gate.
+function consentSnapshot(bodyActive: boolean): unknown {
+  return {
+    policyVersion: CONSENT_POLICY,
+    purposes: [
+      {
+        purpose: 'body_image_processing',
+        active: bodyActive,
+        version: bodyActive ? CONSENT_POLICY : null,
+        grantedAt: bodyActive ? '2026-10-03T12:00:00Z' : null,
+        policyVersion: CONSENT_POLICY,
+      },
+      {
+        purpose: 'third_party_ai_transfer',
+        active: false,
+        version: null,
+        grantedAt: null,
+        policyVersion: CONSENT_POLICY,
+      },
+    ],
+  };
+}
+
 const CLEAR_PHOTO_CODES = [
   'AVATAR_PERSON_NOT_SINGLE',
   'AVATAR_FACE_NOT_VISIBLE',
@@ -99,32 +125,6 @@ function requestUrl(input: RequestInfo | URL): string {
 }
 
 describe('MyModelScreen', () => {
-  // Body-image processing is gated on an active consent, so every photo-flow test
-  // must answer the consent read with a grant; the rest of the API is delegated.
-  const GRANTED_CONSENT = {
-    consents: [
-      {
-        purpose: 'body_image_processing',
-        version: '2026-10-01',
-        grantedAt: '2026-10-01T10:00:00Z',
-        revokedAt: null,
-        active: true,
-      },
-    ],
-  };
-
-  function withGrantedConsent(
-    responder: (url: string, init: RequestInit) => Promise<Response> | Response,
-  ): void {
-    fetchMock.mockImplementation((input, init) => {
-      const url = requestUrl(input as RequestInfo | URL);
-      if (url.endsWith('/me/consents')) {
-        return jsonResponse(200, GRANTED_CONSENT);
-      }
-      return Promise.resolve(responder(url, (init ?? {}) as RequestInit));
-    });
-  }
-
   const fetchMock = jest.fn();
 
   beforeEach(() => {
@@ -139,7 +139,7 @@ describe('MyModelScreen', () => {
   });
 
   test('empty guidance is visible', async () => {
-    withGrantedConsent(() => jsonResponse(200, []));
+    fetchMock.mockResolvedValue(await jsonResponse(200, []));
 
     await render(<MyModelScreen />);
 
@@ -154,7 +154,7 @@ describe('MyModelScreen', () => {
   });
 
   test('cancelled take photo leaves the empty screen unchanged', async () => {
-    withGrantedConsent(() => jsonResponse(200, []));
+    fetchMock.mockResolvedValue(await jsonResponse(200, []));
     takePhotoMock.mockResolvedValue(null);
 
     await render(<MyModelScreen />);
@@ -177,7 +177,7 @@ describe('MyModelScreen', () => {
   });
 
   test('cancelled choose photo leaves the empty screen unchanged', async () => {
-    withGrantedConsent(() => jsonResponse(200, []));
+    fetchMock.mockResolvedValue(await jsonResponse(200, []));
     choosePhotoMock.mockResolvedValue(null);
 
     await render(<MyModelScreen />);
@@ -200,7 +200,7 @@ describe('MyModelScreen', () => {
   });
 
   test('null pick shows a user-visible notice instead of a silent no-op', async () => {
-    withGrantedConsent(() => jsonResponse(200, []));
+    fetchMock.mockResolvedValue(await jsonResponse(200, []));
     takePhotoMock.mockResolvedValue(null);
 
     await render(<MyModelScreen />);
@@ -218,7 +218,7 @@ describe('MyModelScreen', () => {
   });
 
   test('ready state shows the private preview', async () => {
-    withGrantedConsent(() => jsonResponse(200, [AVATAR]));
+    fetchMock.mockResolvedValue(await jsonResponse(200, [AVATAR]));
 
     await render(<MyModelScreen />);
 
@@ -230,8 +230,12 @@ describe('MyModelScreen', () => {
   });
 
   test('delete returns to empty', async () => {
-    withGrantedConsent((url, init) => {
+    fetchMock.mockImplementation((input, init) => {
+      const url = requestUrl(input);
       const method = (init?.method ?? 'GET').toUpperCase();
+      if (url.endsWith('/consents') && method === 'GET') {
+        return jsonResponse(200, consentSnapshot(false));
+      }
       if (url.endsWith('/avatars') && method === 'GET') {
         return jsonResponse(200, [AVATAR]);
       }
@@ -277,8 +281,12 @@ describe('MyModelScreen', () => {
     'semantic 422 code %s displays clearer photo copy with polite live region and no sensitive leaks',
     async code => {
       takePhotoMock.mockResolvedValue({ uri: 'file:///photo.jpg' });
-      withGrantedConsent((url, init) => {
+      fetchMock.mockImplementation((input, init) => {
+        const url = requestUrl(input);
         const method = (init?.method ?? 'GET').toUpperCase();
+        if (url.endsWith('/consents') && method === 'GET') {
+          return jsonResponse(200, consentSnapshot(true));
+        }
         if (url.endsWith('/avatars') && method === 'GET') {
           return jsonResponse(200, []);
         }
@@ -327,8 +335,12 @@ describe('MyModelScreen', () => {
 
   test('avatar preflight unavailable 503 retains generic error notice', async () => {
     takePhotoMock.mockResolvedValue({ uri: 'file:///photo.jpg' });
-    withGrantedConsent((url, init) => {
+    fetchMock.mockImplementation((input, init) => {
+      const url = requestUrl(input);
       const method = (init?.method ?? 'GET').toUpperCase();
+      if (url.endsWith('/consents') && method === 'GET') {
+        return jsonResponse(200, consentSnapshot(true));
+      }
       if (url.endsWith('/avatars') && method === 'GET') {
         return jsonResponse(200, []);
       }
@@ -378,49 +390,96 @@ describe('MyModelScreen', () => {
     expect(screen.queryByText(/https?:\/\//)).toBeNull();
   });
 
-  test('privacy choices are reachable from My Model in every load state', async () => {
-    withGrantedConsent(url => {
-      if (url.endsWith('/me/consents')) {
-        return jsonResponse(200, { consents: [] });
+  test('consent surface names both purposes with the server policy version and invents no grant', async () => {
+    fetchMock.mockImplementation((input, init) => {
+      const url = requestUrl(input);
+      const method = (init?.method ?? 'GET').toUpperCase();
+      if (url.endsWith('/consents') && method === 'GET') {
+        return jsonResponse(200, consentSnapshot(false));
       }
-      if (url.endsWith('/avatars')) {
+      if (url.endsWith('/avatars') && method === 'GET') {
         return jsonResponse(200, []);
       }
-      throw new Error(`unexpected fetch ${url}`);
+      throw new Error(`unexpected fetch ${method} ${url}`);
     });
 
     await render(<MyModelScreen />);
 
-    // The consent surface must be present even before the avatar loads, so a
-    // user can always reach their privacy choices.
-    expect(screen.getByText('Privacy choices')).toBeTruthy();
-    await waitFor(() =>
-      expect(
-        screen.getByRole('button', { name: 'Withdraw: Process my body photo' }),
-      ).toBeTruthy(),
-    );
-    expect(screen.getByText(/Policy version/)).toBeTruthy();
+    expect(await screen.findByText('Policy version 2026-10-03.')).toBeTruthy();
+    expect(screen.getByText('Body-image processing')).toBeTruthy();
+    expect(screen.getByText('Third-party AI transfer')).toBeTruthy();
+    expect(
+      screen.getAllByText('Not granted. New processing for this purpose is paused.'),
+    ).toHaveLength(2);
+    expect(
+      screen.getByRole('button', { name: 'Grant Body-image processing' }),
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole('button', { name: 'Withdraw Body-image processing' }),
+    ).toBeNull();
   });
 
-  test('a photo cannot be submitted while body-image consent is not granted', async () => {
+  test('body-image processing is not uploaded while its consent is not granted', async () => {
     takePhotoMock.mockResolvedValue({ uri: 'file:///photo.jpg' });
     fetchMock.mockImplementation((input, init) => {
-      const url = requestUrl(input as RequestInfo | URL);
-      if (url.endsWith('/me/consents')) {
-        return jsonResponse(200, { consents: [] });
+      const url = requestUrl(input);
+      const method = (init?.method ?? 'GET').toUpperCase();
+      if (url.endsWith('/consents') && method === 'GET') {
+        return jsonResponse(200, consentSnapshot(false));
       }
-      if (url.endsWith('/avatars')) {
+      if (url.endsWith('/avatars') && method === 'GET') {
         return jsonResponse(200, []);
       }
-      throw new Error(`unexpected fetch ${url} ${init?.method ?? 'GET'}`);
+      if (url === 'file:///photo.jpg') {
+        return bytesResponse(JPEG_BYTES, 'image/jpeg');
+      }
+      throw new Error(`unexpected fetch ${method} ${url}`);
     });
 
     await render(<MyModelScreen />);
-    await waitFor(() =>
-      expect(
-        screen.getByRole('button', { name: 'Grant: Process my body photo' }),
-      ).toBeTruthy(),
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Take photo' })).toBeTruthy();
+    });
+
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Take photo' }));
+    });
+
+    const notice = await screen.findByText(
+      'Grant consent for body-image processing before adding or replacing My Model.',
     );
+    expect(notice.props.accessibilityLiveRegion).toBe('polite');
+    // The body photo never left the device.
+    expect(
+      fetchMock.mock.calls.some(([input]) =>
+        requestUrl(input).includes('/uploads'),
+      ),
+    ).toBe(false);
+  });
+
+  test('unavailable consent settings pause processing instead of assuming a grant', async () => {
+    takePhotoMock.mockResolvedValue({ uri: 'file:///photo.jpg' });
+    fetchMock.mockImplementation((input, init) => {
+      const url = requestUrl(input);
+      const method = (init?.method ?? 'GET').toUpperCase();
+      if (url.endsWith('/consents') && method === 'GET') {
+        return jsonResponse(503, { code: 'CONSENT_UNAVAILABLE' });
+      }
+      if (url.endsWith('/avatars') && method === 'GET') {
+        return jsonResponse(200, []);
+      }
+      throw new Error(`unexpected fetch ${method} ${url}`);
+    });
+
+    await render(<MyModelScreen />);
+    expect(
+      await screen.findByText(
+        'Consent settings are unavailable, so new body-image processing is paused.',
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole('button', { name: 'Retry consent settings' }),
+    ).toBeTruthy();
 
     await act(async () => {
       fireEvent.press(screen.getByRole('button', { name: 'Take photo' }));
@@ -428,22 +487,135 @@ describe('MyModelScreen', () => {
 
     expect(
       await screen.findByText(
-        'Grant "Process my body photo" below before adding a My Model photo.',
+        'Consent settings could not be loaded, so new body-image processing is paused. Retry the consent settings below.',
       ),
     ).toBeTruthy();
-    // The picker must not even open, and no avatar write may be attempted.
-    expect(takePhotoMock).not.toHaveBeenCalled();
     expect(
       fetchMock.mock.calls.some(([input]) =>
-        requestUrl(input as RequestInfo | URL).endsWith('/avatars'),
-      ),
-    ).toBe(true); // only the initial list read
-    expect(
-      fetchMock.mock.calls.some(
-        ([input, init]) =>
-          requestUrl(input as RequestInfo | URL).endsWith('/avatars') &&
-          (init?.method ?? 'GET').toUpperCase() === 'POST',
+        requestUrl(input).includes('/uploads'),
       ),
     ).toBe(false);
+  });
+
+  test('granting consent enables the upload path and withdrawing pauses it again', async () => {
+    takePhotoMock.mockResolvedValue({ uri: 'file:///photo.jpg' });
+    let bodyActive = false;
+    fetchMock.mockImplementation((input, init) => {
+      const url = requestUrl(input);
+      const method = (init?.method ?? 'GET').toUpperCase();
+      if (url.endsWith('/consents') && method === 'GET') {
+        return jsonResponse(200, consentSnapshot(bodyActive));
+      }
+      if (url === 'file:///photo.jpg') {
+        return bytesResponse(JPEG_BYTES, 'image/jpeg');
+      }
+      if (url.endsWith('/consents/body_image_processing') && method === 'POST') {
+        bodyActive = true;
+        return jsonResponse(200, {
+          purpose: 'body_image_processing',
+          active: true,
+          version: CONSENT_POLICY,
+          grantedAt: '2026-10-03T12:00:00Z',
+          policyVersion: CONSENT_POLICY,
+        });
+      }
+      if (
+        url.endsWith('/consents/body_image_processing') &&
+        method === 'DELETE'
+      ) {
+        bodyActive = false;
+        return jsonResponse(200, {
+          purpose: 'body_image_processing',
+          active: false,
+          version: null,
+          grantedAt: null,
+          policyVersion: CONSENT_POLICY,
+        });
+      }
+      if (url.endsWith('/avatars') && method === 'GET') {
+        return jsonResponse(200, []);
+      }
+      if (url.includes('/uploads') && method === 'POST') {
+        if (url.includes('/complete')) {
+          return jsonResponse(200, { id: 'up-1', status: 'READY' });
+        }
+        return jsonResponse(200, {
+          id: 'up-1',
+          method: 'PUT',
+          url: 'https://upload.invalid/1',
+          headers: { 'Content-Type': 'image/jpeg' },
+          expiresAt: '2026-08-23T12:00:00Z',
+        });
+      }
+      if (url === 'https://upload.invalid/1' && method === 'PUT') {
+        return emptyResponse(200);
+      }
+      if (url.endsWith('/avatars') && method === 'POST') {
+        return jsonResponse(200, AVATAR);
+      }
+      throw new Error(`unexpected fetch ${method} ${url}`);
+    });
+
+    await render(<MyModelScreen />);
+    await screen.findByRole('button', { name: 'Grant Body-image processing' });
+
+    await act(async () => {
+      fireEvent.press(
+        screen.getByRole('button', { name: 'Grant Body-image processing' }),
+      );
+    });
+    expect(
+      await screen.findByRole('button', {
+        name: 'Withdraw Body-image processing',
+      }),
+    ).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Take photo' }));
+    });
+    expect(await screen.findByLabelText('My Model preview')).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.press(
+        screen.getByRole('button', { name: 'Withdraw Body-image processing' }),
+      );
+    });
+    await screen.findByRole('button', { name: 'Grant Body-image processing' });
+    expect(
+      screen.getAllByText('Not granted. New processing for this purpose is paused.'),
+    ).toHaveLength(2);
+  });
+
+  test('a failed consent change changes nothing and says so', async () => {
+    fetchMock.mockImplementation((input, init) => {
+      const url = requestUrl(input);
+      const method = (init?.method ?? 'GET').toUpperCase();
+      if (url.endsWith('/consents') && method === 'GET') {
+        return jsonResponse(200, consentSnapshot(false));
+      }
+      if (url.endsWith('/consents/body_image_processing') && method === 'POST') {
+        return jsonResponse(503, { code: 'CONSENT_UNAVAILABLE' });
+      }
+      if (url.endsWith('/avatars') && method === 'GET') {
+        return jsonResponse(200, []);
+      }
+      throw new Error(`unexpected fetch ${method} ${url}`);
+    });
+
+    await render(<MyModelScreen />);
+    await act(async () => {
+      fireEvent.press(
+        await screen.findByRole('button', {
+          name: 'Grant Body-image processing',
+        }),
+      );
+    });
+
+    expect(
+      await screen.findByText('Could not update consent. Nothing was changed.'),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole('button', { name: 'Grant Body-image processing' }),
+    ).toBeTruthy();
   });
 });
