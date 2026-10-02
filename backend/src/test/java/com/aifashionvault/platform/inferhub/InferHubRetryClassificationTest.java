@@ -31,7 +31,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  *       only touches 429 to assert the contract version, never the category or retryability.
  *       Pinned here for the first time.</li>
  *   <li>401/403 -> {@code AUTH_CONFIGURATION} + NOT retryable: 401 is pinned at
- *       {@code InferHubMapperContractTest:232-240} and {@code InferHubVtonProviderTest:295-304};
+ *       {@code InferHubMapperContractTest:232-240} and {@code InferHubVtonProviderTest:424-432};
  *       403 is not. Both are pinned here together because the pair is one branch
  *       ({@code InferHubMapper.java:189-191}) and an asymmetric regression of only 403
  *       would otherwise go unnoticed.</li>

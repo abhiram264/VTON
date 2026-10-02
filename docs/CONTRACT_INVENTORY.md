@@ -459,12 +459,12 @@ This section is **appended**, not a rewrite. §2 and §4 above are the dated PR-
 The full current inventory, per-package status, and externally blocked packages are in
 [docs/RELEASE_COMPLETION_LEDGER.md](RELEASE_COMPLETION_LEDGER.md).
 
-### 9.1 Frozen seam — C12 multi-item generation (`POST /generations/multi`)
+### 9.1 C12 multi-item generation (`POST /generations/multi`)
 
-**Status: FROZEN SEAM, implementation in flight (worker-05) — NOT yet mounted.** This
-records the agreed contract so backend/mobile work can proceed in parallel, per the C01
-contract-first rule (guide §5.3). Do not read it as a mounted route until the
-implementation merge lands and this heading is updated.
+**Status: MOUNTED at integration `daddbcb`** (verified against `GenerationsController.java:110`).
+The contract below was frozen first so backend/mobile work could proceed in parallel
+(guide §5.3); the landed implementation matched it, so the fields are unchanged and only
+the status has moved from "seam" to "mounted".
 
 | Aspect | Contract |
 |---|---|

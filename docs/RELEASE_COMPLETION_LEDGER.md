@@ -259,3 +259,44 @@ Checked after worker-08 merged (C04 native picker + C03 account-session isolatio
   Both sides agree.
 - **Corroboration:** peer worker-03 independently reproduced the C01 route census
   (37 mappings, 10 controllers) and verified the C22 analytics tests at `ae358d7`.
+
+## 11. Post-run status at integration `f2994b4` (2026-10-03)
+
+**Appended; §1–§10 and the `1f13d34` baseline rows above are preserved.** Each advance
+below was verified by reading the integrated branch at `f2994b4` (file/route existence,
+plus the focused tests re-run in §7), not taken from a peer report alone.
+
+| Requirement | Advance since the baseline | Evidence (verified at `f2994b4`) |
+|---|---|---|
+| C02 | Babel inliner ↔ `firebase.ts` agree; release fails closed on placeholder/localhost/LAN | `mobile/src/config/apiConfig.ts` `resolveApiBaseUrl`; `src/config/releaseConfig.test.ts` 7/7 (independently re-run) |
+| C03 | Signup/reset, account-session isolation, sign-out control | `mobile/src/screens/SignInScreen.tsx`, `mobile/src/features/auth/`, `mobile/src/features/session/` |
+| C04 | Android native PhotoPicker (system picker + camera) | `photopicker/PhotoPickerModule.kt` `getName()="PhotoPicker"`, registered in `MainApplication.kt`; **iOS half pending** |
+| C06 | Consent store/service + HTTP surface, owner-scoped | `privacy/{ConsentService,JdbcConsentStore,ConsentPurpose}.java`, `platform/web/ConsentConfiguration.java` |
+| C07 | Confirm persists corrected metadata; client calls `/confirm` | `SharesController.java:80`, `features/share/importClient.ts:283-298`; ShareImportConfirm 3/3 |
+| C08 | Detail/edit/delete + signed preview with refresh + **list thumbnails** | `mobile/src/features/vault/vaultApi.ts`; thumbnails `5755d44`; image route **in flight** (worker-06 `a004579`) |
+| C09 | Collections client + picker + Vault mount | `features/collections/{collectionsApi,CollectionsPicker}.tsx`; 14/14 |
+| C10/C11 | Studio HTTP mount + persistent sessions + clone-from-Look | `platform/web/StudioController.java` (POST `/studio/sessions`, GET `/active`, GET `/{id}`, POST `/{id}/commands`, POST `/from-look`) + `studio/JdbcStudioStore.java`; merged `daddbcb` |
+| C12 | Multi-item create mounted | `POST /generations/multi` (`GenerationsController.java:110`, `GenerationMultiRequest`) — frozen seam now **MOUNTED**; merged `daddbcb` |
+| C13 | Durable owner-scoped InferHub output handoff | `platform/inferhub/InferHubVtonProvider.java` — in-memory map replaced by `temp/<owner>/inferhub-outputs/` handoff, merged `74e31b0` |
+| C14 | Server-backed recovery + truthful cancel states | `features/generation/generationLifecycle.ts`, `GET /generations`; 52/52 (with C16) |
+| C15 | Look delete UI + provenance + signed-preview refresh | `mobile/src/screens/LookScreen.tsx` (`3eedc98`, `6bd97e2`) |
+| C16 | Export module + Android bridge + disclosure-gated UI | `features/export/` (`98a4620`), `export/LookExportStagerModule.kt`; **item 5 open — see below** |
+| C17 | Deletion barrier + V021 store + mobile deletion UI | `privacy/JdbcAccountDeletionWorkflowStore.java` (`762eeb7`), `mobile/src/features/account/` (`f624f4c`), barrier `89fdaa7` |
+| C19 | Spend caps config-bound + admission parity | `GenerationSpendProperties.java`; regenerate/multi parity (workers 27/05) |
+| C22 | Capability flags fail closed (mobile + backend) + analytics taxonomy | `mobile/src/config/featureFlags.ts`, backend `featureflag` |
+| C23 | Per-screen product-state slices | HomeScreen `537d9cc`, GenerateScreen `54c1d4f`, Look/Looks (worker-20) |
+| OFFLINE-ECHO | Dev-only echo backstop landed | `platform/offlineecho/**` (`f082f4d`, merged `f6bc7ea`) |
+
+**Open — owner decision, not code:**
+
+- **C16 item 5 (source-link navigation).** No client-visible source URL exists:
+  `VaultItemResponse` carries only an opaque `sourceReferenceId` and `LookResource`
+  carries none (`git grep sourceUrl` over both → none). Mounting an external source link
+  needs a product/owner decision (or a new field), not a client change.
+
+**Still in flight at `f2994b4`:** C08 image route (worker-06), StudioScreen mobile wiring
+(worker-07), C20 device tokens (worker-25), C21 NL Studio (worker-14). (C13 landed
+`74e31b0`; C12 + Studio HTTP mount landed `daddbcb`; C06 enforcement `104aa1d`.)
+
+**Independently re-run in my worktree (EXECUTED, this host):** C02 7/7, C09 14/14,
+C08 10/10, C07 3/3, C14+C16 52/52.
