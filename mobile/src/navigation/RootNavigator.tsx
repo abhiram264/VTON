@@ -6,6 +6,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { subscribeToAuthSession, type AuthSession } from '../config/firebase';
 import { trackAccountIsolation } from '../features/auth/accountSession';
 import AccountDeletionCard from '../features/account/AccountDeletionCard';
+import NotificationPreferencesSection from '../features/notifications/NotificationPreferencesSection';
 import SignInScreen from '../screens/SignInScreen';
 import GenerateScreen from '../screens/GenerateScreen';
 import HomeScreen from '../screens/HomeScreen';
@@ -95,6 +96,7 @@ function ProfileSettings({
       onOpenMyModel={() => navigation.navigate('MyModel')}
     >
       <AccountDeletionCard />
+      <NotificationPreferencesSection />
     </SettingsScreen>
   );
 }

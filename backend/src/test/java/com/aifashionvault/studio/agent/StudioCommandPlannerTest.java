@@ -94,8 +94,26 @@ class StudioCommandPlannerTest {
     assertThat(selection.candidates()).extracting(StudioCommandPlanner.SelectionCandidate::label)
         .containsExactly("Blue Shirt A", "Blue Shirt B");
     assertThat(selection.prompt()).contains("item id");
+    // The command's own target slot is carried through, so the client does not
+    // have to re-derive it from the garment's category.
+    assertThat(selection.slot()).isEqualTo(StudioSlot.UPPER_BODY);
     // Only the read-only lookup ran: the draft is untouched.
     assertThat(tools.invocations).containsExactly("searchVault");
+    assertThat(tools.mutations).isEmpty();
+  }
+
+  @Test
+  void ambiguityCarriesTheTargetSlotFromReplaceAndNoneFromABareLookup() {
+    tools.matches = List.of(summary("Blue Shirt A"), summary("Blue Shirt B"));
+
+    StudioCommandPlanner.NeedsSelection fromReplace = (StudioCommandPlanner.NeedsSelection) planner
+        .plan(actor, session, "replace the bottom with my blue shirt");
+    assertThat(fromReplace.slot()).isEqualTo(StudioSlot.LOWER_BODY);
+
+    StudioCommandPlanner.NeedsSelection fromRemove = (StudioCommandPlanner.NeedsSelection) planner
+        .plan(actor, session, "remove my blue shirt");
+    assertThat(fromRemove.slot()).isNull();
+
     assertThat(tools.mutations).isEmpty();
   }
 

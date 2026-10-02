@@ -193,6 +193,37 @@ class VaultControllerTest {
 			.isEqualTo(JSON.readTree(first.getResponse().getContentAsString()).get("id").stringValue());
 	}
 
+	@Test
+	void itemExposesItsOriginalProductUrlWithoutLeakingRawMetadata() throws Exception {
+		String token = InProcessJwtFixture.bearerToken();
+		UUID sourceId = UUID.randomUUID();
+		jdbc.update(
+			"INSERT INTO source_reference (id, url, retailer, raw_metadata, created_at) VALUES (?,?,?,?::jsonb,now())",
+			sourceId, "https://shop.example.invalid/products/trail-boots", "Example Retailer",
+			"{\"secret\":\"internal-import-metadata\"}");
+		String body = "{\"uploadId\":\"" + UUID.randomUUID() + "\",\"sourceReferenceId\":\"" + sourceId
+			+ "\",\"name\":\"Trail Boots\",\"brand\":\"Acme\",\"category\":\"FOOTWEAR\"}";
+		MvcResult created = mockMvc.perform(post("/vault/items").header(HttpHeaders.AUTHORIZATION, bearer(token))
+				.contentType(MediaType.APPLICATION_JSON).content(body))
+			.andExpect(status().isCreated()).andReturn();
+		String id = JSON.readTree(created.getResponse().getContentAsString()).get("id").stringValue();
+
+		// The read path is the one the client uses to offer "open original product",
+		// so the persisted retailer URL must survive the round trip.
+		MvcResult got = mockMvc.perform(get("/vault/items/" + id).header(HttpHeaders.AUTHORIZATION, bearer(token)))
+			.andExpect(status().isOk()).andReturn();
+		String payload = got.getResponse().getContentAsString();
+		JsonNode item = JSON.readTree(payload);
+		assertThat(item.get("sourceUrl").stringValue())
+			.isEqualTo("https://shop.example.invalid/products/trail-boots");
+		assertThat(item.get("sourceReferenceId").stringValue()).isEqualTo(sourceId.toString());
+		assertThat(payload).doesNotContain("internal-import-metadata", "raw_metadata");
+
+		// A photo-created item has no source at all: the field is null, not absent.
+		JsonNode photo = create(token, "TOP", "No Source");
+		assertThat(photo.get("sourceUrl").isNull()).isTrue();
+	}
+
 	private JsonNode create(String token, String category, String name) throws Exception {
 		MvcResult result = mockMvc.perform(post("/vault/items").header(HttpHeaders.AUTHORIZATION, bearer(token))
 				.contentType(MediaType.APPLICATION_JSON).content(createBody(category, name)))
@@ -207,9 +238,13 @@ class VaultControllerTest {
 	}
 
 	private static void assertPublicResource(JsonNode node) {
-		assertThat(node.propertyNames()).containsExactly("id", "sourceReferenceId", "name", "brand", "category",
-			"subcategory", "color", "pattern", "attributes", "createdAt");
-		assertThat(node.toString()).doesNotContain("userId", "storageKey", "imageAssetId", "bucket", "objectKey", "Url", "bytes");
+		assertThat(node.propertyNames()).containsExactly("id", "sourceReferenceId", "sourceUrl", "name", "brand",
+			"category", "subcategory", "color", "pattern", "attributes", "createdAt");
+		// sourceUrl is the retailer product link, deliberately exposed so the client
+		// can offer "open original product". What must never appear is the stored
+		// object's own address or the raw import metadata.
+		assertThat(node.toString()).doesNotContain("userId", "storageKey", "imageAssetId", "bucket", "objectKey",
+			"bytes", "rawMetadata", "raw_metadata", "x-amz-");
 	}
 
 	private static String bearer(String token) { return "Bearer " + token; }

@@ -189,7 +189,7 @@ public final class ShareImportService {
 		ShareImportId id = parseImportId(importId);
 		Confirmation corrections = parseConfirmation(request);
 		return store.confirm(owner, id, corrections.name(), corrections.category(), corrections.collectionId())
-			.map(item -> new VaultItemResponse(item.itemId().toString(), item.sourceReferenceId().toString(),
+			.map(item -> new VaultItemResponse(item.itemId().toString(), item.sourceReferenceId().toString(), null,
 				item.name(), null, category(item.category()), null, null, null, null, item.createdAt()))
 			.orElseThrow(ShareImportProblem::notFound);
 	}
