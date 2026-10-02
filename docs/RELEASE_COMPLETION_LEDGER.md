@@ -223,3 +223,23 @@ with its real LocalStack prerequisites.
   C22 (analytics/flags) must all have evidence before any "all V1 features" claim.
 - **Extended roadmap (R01–R09):** out of scope for the first store release; kept in
   guide §13 so "whole project" has an explicit boundary.
+
+## 10. Acceptance clauses verified UNMET at integration `0800318` (2026-10-03)
+
+This is a point-in-time record, not a defect list. Each clause below was checked by a
+command against the **integrated branch** (`friday-guide-c01-c30` at `0800318`). Work that
+a peer is actively implementing is labelled **in flight**, not broken. Re-verify before
+acceptance; do not carry this list forward as current.
+
+| Requirement | Clause | Evidence (at `0800318`) | State |
+|---|---|---|---|
+| C08 | item 1: "Vault **list** shows owner-authorized thumbnails/full images" | `git show friday-guide-c01-c30:mobile/src/screens/VaultScreen.tsx` renders the signed preview only in the item **detail** view (lines ~144-234); the list rows are text-only | **UNMET** — the detail half works; the list half is not implemented (worker-31 recorded this tradeoff explicitly: `GET /vault/items` embeds no capability, so list thumbnails would be N presign round-trips with no pagination) |
+| C08 | image capability route reachable | `git ls-tree friday-guide-c01-c30 -- .../platform/web` lists no `VaultImageController.java`; the route exists only on `swarm/fr_640bdd25a4/worker-06` (`a004579`) | **IN FLIGHT** (worker-06) — until merged, a live preview call 404s and the UI correctly shows "gone" |
+| C03 | signup, password reset, signout, durable RN persistence | `git grep -n "signOut\|createUserWithEmailAndPassword\|sendPasswordResetEmail\|getReactNativePersistence" friday-guide-c01-c30 -- mobile/src` → only a comment in `config/firebase.ts`; `mobile/src/features/auth` is empty | **IN FLIGHT** (workers 08/17/26) — C03 is materially incomplete on the branch |
+| C12 | Studio multi-item create mounted | `git grep -n "generations/multi" friday-guide-c01-c30 -- backend/src/main/java` → no matches | **IN FLIGHT** (worker-05) — see CONTRACT_INVENTORY §9.1 (frozen seam) |
+
+Cross-checks that PASSED at `0800318` (no action needed): C09 `collectionsApi` matches
+`CollectionsController` exactly; C19 spend caps wired via `@ConfigurationProperties` with
+500/25/250 USD/1d defaults preserved; C17 commits the `deleted_at` barrier before media
+purge; OFFLINE-ECHO is dev-only and fail-closed; the C08 mobile image client and worker-06's
+unmerged route agree on `GET /vault/items/{id}/image` → `{url, expiresAt}`.
