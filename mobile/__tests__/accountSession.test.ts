@@ -5,6 +5,7 @@ import {
 } from '../src/features/auth/accountSession';
 import {
   applyFeatureFlagPayload,
+  DEFAULT_FEATURE_FLAGS,
   isFeatureEnabled,
 } from '../src/config/featureFlags';
 import {
@@ -44,7 +45,16 @@ describe('account session isolation (C03 signout / expired session)', () => {
     clearAccountBoundState();
 
     expect(getActiveGeneration()).toBeNull();
-    expect(isFeatureEnabled('MULTI_ITEM')).toBe(true);
+    // "Restores the declared defaults" is the actual contract. Pinning the
+    // literals here would re-break every time a default legitimately changes
+    // (C22 flipped MULTI_ITEM off), so the expectation is derived from the
+    // declaration instead of restated. TRYON_MAX and SHARE_IMPORT_ANDROID are
+    // read because neither is gated by UNSUPPORTED_CAPABILITIES, so
+    // isFeatureEnabled reports the flag's own value for them.
+    expect(isFeatureEnabled('TRYON_MAX')).toBe(DEFAULT_FEATURE_FLAGS.TRYON_MAX);
+    expect(isFeatureEnabled('SHARE_IMPORT_ANDROID')).toBe(
+      DEFAULT_FEATURE_FLAGS.SHARE_IMPORT_ANDROID,
+    );
     expect(isFeatureEnabled('NEW_QUALITY_GATE')).toBe(false);
   });
 
