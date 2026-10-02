@@ -153,6 +153,69 @@ class StudioMultiItemGenerationIntegrationTest {
 		assertThat(count("generation_work_outbox")).isZero();
 	}
 
+	@Test
+	void editingTheDraftAfterSubmissionDoesNotChangeTheAcceptedJobsInputs() throws Exception {
+		Owner owner = seedOwner();
+		UUID top = insertVaultItem(owner.userId(), "TOPS");
+		UUID bottom = insertVaultItem(owner.userId(), "BOTTOMS");
+		UUID shoes = insertVaultItem(owner.userId(), "FOOTWEAR");
+		UUID lateArrival = insertVaultItem(owner.userId(), "TOPS");
+
+		String sessionId = createStudioSession(owner);
+		JsonNode draft = addItem(owner, sessionId, top, "UPPER_BODY");
+		draft = addItem(owner, sessionId, bottom, "LOWER_BODY", draft.get("updatedAt").stringValue());
+		draft = addItem(owner, sessionId, shoes, "FEET", draft.get("updatedAt").stringValue());
+		List<String> submittedOrder = itemIdsOf(draft);
+
+		// The user submits the outfit...
+		MvcResult accepted = mockMvc.perform(post("/generations/multi")
+				.header(HttpHeaders.AUTHORIZATION, bearer(owner.token()))
+				.header("Idempotency-Key", "frozen-intent-key")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("{\"studioSessionId\":\"" + sessionId + "\",\"productVaultItemIds\":[\""
+					+ String.join("\",\"", submittedOrder) + "\"],\"mode\":\"standard\"}"))
+			.andExpect(status().isAccepted())
+			.andReturn();
+		UUID jobId = UUID.fromString(MAPPER.readTree(accepted.getResponse().getContentAsString()).get("id").stringValue());
+		List<String> frozenBeforeEdit = renderStepOrder(jobId).stream().map(UUID::toString).toList();
+		assertThat(frozenBeforeEdit).containsExactlyElementsOf(submittedOrder);
+
+		// ...and then keeps editing the draft: adds a garment, then clears the
+		// outfit entirely. Neither may reach the job that was already accepted.
+		JsonNode current = getSession(owner, sessionId);
+		addItem(owner, sessionId, lateArrival, "ACCESSORY", current.get("updatedAt").stringValue());
+		JsonNode afterAdd = getSession(owner, sessionId);
+		mockMvc.perform(post("/studio/sessions/" + sessionId + "/commands")
+				.header(HttpHeaders.AUTHORIZATION, bearer(owner.token()))
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("{\"expectedUpdatedAt\":\"" + afterAdd.get("updatedAt").stringValue()
+					+ "\",\"command\":\"clearOutfit\"}"))
+			.andExpect(status().isOk());
+		assertThat(itemIdsOf(getSession(owner, sessionId))).isEmpty();
+
+		// The accepted job still holds exactly the submitted items, in order.
+		assertThat(renderStepOrder(jobId).stream().map(UUID::toString).toList())
+			.containsExactlyElementsOf(frozenBeforeEdit);
+		assertThat(jobProducts(jobId).stream().map(UUID::toString).toList())
+			.containsExactlyInAnyOrderElementsOf(submittedOrder);
+		assertThat(jdbc.queryForObject("SELECT total_steps FROM generation_job WHERE id = ?", Integer.class, jobId))
+			.isEqualTo(3);
+		assertThat(jdbc.queryForObject("SELECT studio_session_id FROM generation_job WHERE id = ?", UUID.class, jobId))
+			.isEqualTo(UUID.fromString(sessionId));
+		assertThat(jobProducts(jobId)).doesNotContain(lateArrival);
+	}
+
+	private JsonNode getSession(Owner owner, String sessionId) throws Exception {
+		MvcResult result = mockMvc.perform(MockMvcRequestBuilders.get("/studio/sessions/" + sessionId)
+				.header(HttpHeaders.AUTHORIZATION, bearer(owner.token()))).andExpect(status().isOk()).andReturn();
+		return MAPPER.readTree(result.getResponse().getContentAsString());
+	}
+
+	private List<UUID> jobProducts(UUID jobId) {
+		return jdbc.query("SELECT vault_item_id FROM generation_job_product WHERE generation_job_id = ?",
+			(rs, row) -> rs.getObject("vault_item_id", UUID.class), jobId);
+	}
+
 	private String createStudioSession(Owner owner) throws Exception {
 		MvcResult result = mockMvc.perform(post("/studio/sessions")
 				.header(HttpHeaders.AUTHORIZATION, bearer(owner.token()))
