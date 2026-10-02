@@ -33,21 +33,18 @@ const UNAVAILABLE: AuthSurface = {
 describe('account session isolation (C03 signout / expired session)', () => {
   beforeEach(() => {
     // A previous account's state, as it would look right before sign-out.
-    // TRYON_MAX is a supported flag whose declared default is true, so it can
-    // show an override being reset; MULTI_ITEM is now a C22 unsupported
-    // capability that is always off and would make the reset untestable.
     setActiveGeneration('generation-from-first-account');
-    applyFeatureFlagPayload({ TRYON_MAX: false, NEW_QUALITY_GATE: true });
+    applyFeatureFlagPayload({ MULTI_ITEM: false, NEW_QUALITY_GATE: true });
   });
 
   test('clearAccountBoundState drops the active generation and restores flag defaults', () => {
     expect(getActiveGeneration()).toBe('generation-from-first-account');
-    expect(isFeatureEnabled('TRYON_MAX')).toBe(false);
+    expect(isFeatureEnabled('MULTI_ITEM')).toBe(false);
 
     clearAccountBoundState();
 
     expect(getActiveGeneration()).toBeNull();
-    expect(isFeatureEnabled('TRYON_MAX')).toBe(true);
+    expect(isFeatureEnabled('MULTI_ITEM')).toBe(true);
     expect(isFeatureEnabled('NEW_QUALITY_GATE')).toBe(false);
   });
 
