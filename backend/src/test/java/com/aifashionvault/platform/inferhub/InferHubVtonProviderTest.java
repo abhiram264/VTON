@@ -341,6 +341,58 @@ class InferHubVtonProviderTest {
         }
     }
 
+    /**
+     * C13 ownership clause: the durable handoff must be filed inside the prefix account
+     * erasure purges ({@code ObjectStore.purgeUserObjects} erases {@code temp/<owner>/}), or a
+     * deleted account's generated image bytes would survive deletion in the private TEMP
+     * bucket. It must also be reachable from the job id alone, since that is all a restarted
+     * worker still holds.
+     */
+    @Test
+    void durableOutputIsFiledUnderTheOwnerPrefixAccountErasurePurges() throws Exception {
+        Harness harness = harness(200, successBody(AVATAR_URI));
+
+        GenerationSubmission.Accepted accepted =
+            (GenerationSubmission.Accepted) harness.provider().submit(request(null), key());
+
+        String owner = "11111111-1111-1111-1111-111111111111";
+        String written = harness.store().objects.keySet().stream()
+            .filter(key -> !key.equals(AVATAR_KEY) && !key.equals(GARMENT_KEY))
+            .findFirst()
+            .orElseThrow(() -> new AssertionError("no durable output object was written"));
+        assertThat(written).startsWith("temp/" + owner + "/");
+
+        // The restarted worker holds only the job id; the object must resolve from it.
+        StatusQueryResult.Observed status =
+            (StatusQueryResult.Observed) harness.provider().getStatus(accepted.providerJobId());
+        GenerationStatus.Succeeded succeeded = (GenerationStatus.Succeeded) status.status();
+        try (ProviderMediaSource source = harness.provider().openOutput(succeeded.outputs().get(0))) {
+            assertThat(source.stream().readAllBytes()).isEqualTo(PNG);
+        }
+    }
+
+    /**
+     * An avatar key with no owner segment cannot yield an erasable durable object, so the
+     * request is refused locally — before the paid provider call, so a malformed request can
+     * never spend.
+     */
+    @Test
+    void avatarKeyWithoutAnOwnerScopeIsRefusedBeforeAnyProviderCall() {
+        Harness harness = harness(200, successBody(AVATAR_URI));
+        VtonRequest unscoped = new VtonRequest(
+            new PrivateMediaRef(new StorageKey("temp/unscoped/avatar.png"), OptionalLong.of(PNG.length)),
+            List.of(new VtonProductAsset(
+                new PrivateMediaRef(new StorageKey(GARMENT_KEY), OptionalLong.of(PNG.length)), CLOTHING)),
+            Optional.empty(),
+            STANDARD);
+
+        GenerationSubmission submission = harness.provider().submit(unscoped, key());
+
+        GenerationSubmission.Rejected rejected = (GenerationSubmission.Rejected) submission;
+        assertThat(rejected.failure().safeCode()).isEqualTo("MEDIA_UNRESOLVABLE");
+        assertThat(harness.factory().sentBody).as("no provider call was made").isNull();
+    }
+
     @Test
     void malformedResponseIsRejectedAsClassifiedFailureAndNothingIsCached() {
         Harness harness = harness(200, "{\"choices\":[]}");

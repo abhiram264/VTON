@@ -64,8 +64,9 @@ class RealAdapterPortContractTest {
     private static final String FASHN_RUN_URL = "https://api.fashn.ai/v1/run";
     private static final String FASHN_PREDICTION = "contract-prediction-1";
     private static final String INFERHUB_URL = "https://api.inferhub.dev/v1/chat/completions";
-    private static final String AVATAR_KEY = "temp/contract/avatar.png";
-    private static final String PRODUCT_KEY = "temp/contract/product.png";
+    /** Owner-scoped, exactly like the production staging/persistent key shapes. */
+    private static final String AVATAR_KEY = "temp/11111111-1111-1111-1111-111111111111/avatars/avatar.png";
+    private static final String PRODUCT_KEY = "temp/11111111-1111-1111-1111-111111111111/avatars/product.png";
     private static final ItemCategory CLOTHING = new ItemCategory("clothing");
     private static final VtonMode STANDARD = new VtonMode("standard");
     /** Deliberately outside both adapters' declared mode sets. */

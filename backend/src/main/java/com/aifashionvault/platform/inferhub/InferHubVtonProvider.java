@@ -32,11 +32,10 @@ import com.aifashionvault.shared.StorageKey;
 
 public final class InferHubVtonProvider extends ValidatingVtonProvider {
     /**
-     * Durable handoff prefix for synchronous provider outputs. The decoded image is written
-     * into the private TEMP boundary before the submission is accepted, so a worker restart
-     * or eviction between submit and openOutput cannot lose an already-paid result.
+     * Durable handoff prefix for synchronous provider outputs, under the owner's TEMP prefix
+     * so {@code ObjectStore.purgeUserObjects} erases it with the rest of that account's media.
      */
-    private static final String OUTPUT_KEY_PREFIX = "temp/inferhub-outputs/";
+    private static final String OUTPUT_KEY_PREFIX = "temp/";
 
     private final InferHubMapper mapper;
     private final InferHubClient client;
@@ -82,10 +81,18 @@ public final class InferHubVtonProvider extends ValidatingVtonProvider {
     /**
      * InferHub is synchronous: this call performs the whole generation (~170s) and the
      * accepted submission carries a synthetic job id whose decoded image is written into the
-     * private TEMP boundary for the subsequent getStatus/openOutput handoff.
+     * owner's private TEMP prefix for the subsequent getStatus/openOutput handoff.
      */
     @Override
     protected GenerationSubmission submitValid(VtonRequest request, SubmissionKey submissionKey) {
+        // Ownership is recorded BEFORE the paid call: the durable output is filed under the
+        // owner scope of the resolved avatar key, so account erasure purges it. An avatar key
+        // with no owner segment is refused here rather than producing an un-purgeable object.
+        Optional<String> ownerScope = mapper.ownerScope(request.avatar().storageKey());
+        if (ownerScope.isEmpty()) {
+            return new GenerationSubmission.Rejected(InferHubMapper.failure(
+                ProviderFailureCategory.INVALID_REQUEST, false, "MEDIA_UNRESOLVABLE"));
+        }
         Transfer avatar = transfer(request.avatar());
         if (avatar.failure() != null) {
             return new GenerationSubmission.Rejected(avatar.failure());
@@ -103,10 +110,12 @@ public final class InferHubVtonProvider extends ValidatingVtonProvider {
             product.category(),
             request.instructions())));
         if (run.submission() instanceof GenerationSubmission.Accepted accepted) {
-            ProviderFailure persistFailure = persistOutput(accepted.providerJobId(), run.dataUri());
+            ProviderJobId scoped = mapper.scopedJobId(accepted.providerJobId(), ownerScope.get());
+            ProviderFailure persistFailure = persistOutput(scoped, run.dataUri());
             if (persistFailure != null) {
                 return new GenerationSubmission.Rejected(persistFailure);
             }
+            return new GenerationSubmission.Accepted(scoped, accepted.usage());
         }
         return run.submission();
     }
@@ -116,8 +125,12 @@ public final class InferHubVtonProvider extends ValidatingVtonProvider {
         if (providerJobId == null) {
             throw new IllegalArgumentException("provider job id is required");
         }
+        Optional<ObjectRef> output = outputObject(mapper.outputRefValue(providerJobId));
+        if (output.isEmpty()) {
+            return mapper.mapStatus(providerJobId, false);
+        }
         try {
-            objectStore.head(outputObject(mapper.outputRefValue(providerJobId)));
+            objectStore.head(output.get());
             return mapper.mapStatus(providerJobId, true);
         } catch (ObjectStoreExceptions.StagedObjectMissingException ex) {
             return mapper.mapStatus(providerJobId, false);
@@ -135,7 +148,12 @@ public final class InferHubVtonProvider extends ValidatingVtonProvider {
         if (outputRef == null) {
             throw new IllegalArgumentException("provider output reference is required");
         }
-        ObjectRef object = outputObject(mapper.outputRefValue(outputRef));
+        Optional<ObjectRef> resolved = outputObject(mapper.outputRefValue(outputRef));
+        if (resolved.isEmpty()) {
+            throw new InferHubProviderException(InferHubMapper.failure(
+                ProviderFailureCategory.PROTOCOL_VIOLATION, false, "OUTPUT_MISSING"));
+        }
+        ObjectRef object = resolved.get();
         ObjectMetadata metadata;
         try {
             metadata = objectStore.head(object);
@@ -173,8 +191,8 @@ public final class InferHubVtonProvider extends ValidatingVtonProvider {
     }
 
     /**
-     * Writes the synchronous result into the private TEMP boundary before the submission is
-     * accepted. A store failure is classified and returned so the caller rejects honestly
+     * Writes the synchronous result into the owner's private TEMP prefix before the submission
+     * is accepted. A store failure is classified and returned so the caller rejects honestly
      * instead of handing back an output reference that no restart could resolve.
      */
     private ProviderFailure persistOutput(ProviderJobId providerJobId, String dataUri) {
@@ -184,9 +202,13 @@ public final class InferHubVtonProvider extends ValidatingVtonProvider {
         } catch (InferHubProviderException ex) {
             return ex.failure();
         }
+        Optional<StorageKey> key = outputKey(mapper.outputRefValue(providerJobId));
+        if (key.isEmpty()) {
+            return InferHubMapper.failure(ProviderFailureCategory.INVALID_REQUEST, false, "MEDIA_UNRESOLVABLE");
+        }
         try {
             mediaStore.putBounded(
-                outputKey(mapper.outputRefValue(providerJobId)),
+                key.get(),
                 new ByteArrayInputStream(image.bytes()),
                 InferHubMapper.MAX_OUTPUT_BYTES,
                 image.mediaType());
@@ -199,12 +221,23 @@ public final class InferHubVtonProvider extends ValidatingVtonProvider {
         }
     }
 
-    private static ObjectRef outputObject(String outputRefValue) {
-        return new ObjectRef(StorageDomain.TEMP, outputKey(outputRefValue).value());
+    private Optional<ObjectRef> outputObject(String outputRefValue) {
+        return outputKey(outputRefValue).map(key -> new ObjectRef(StorageDomain.TEMP, key.value()));
     }
 
-    private static StorageKey outputKey(String outputRefValue) {
-        return new StorageKey(OUTPUT_KEY_PREFIX + outputRefValue);
+    /**
+     * The durable key for one output reference: inside {@code temp/<owner>/} — the prefix
+     * {@code ObjectStore.purgeUserObjects} erases — or empty when the reference carries no
+     * owner scope this adapter minted, in which case no object is read or written.
+     */
+    private Optional<StorageKey> outputKey(String outputRefValue) {
+        return mapper.jobOwnerScope(new ProviderJobId(jobIdOf(outputRefValue)))
+            .map(scope -> new StorageKey(OUTPUT_KEY_PREFIX + scope + "/inferhub-outputs/" + outputRefValue));
+    }
+
+    private static String jobIdOf(String outputRefValue) {
+        int split = outputRefValue.lastIndexOf(':');
+        return split < 0 ? outputRefValue : outputRefValue.substring(0, split);
     }
 
     @Override
