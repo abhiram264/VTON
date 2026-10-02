@@ -44,6 +44,7 @@ import com.aifashionvault.platform.objectstore.ObjectStore;
 import com.aifashionvault.platform.objectstore.S3ObjectStore;
 import com.aifashionvault.platform.queue.GenerationWorkQueue;
 import com.aifashionvault.platform.queue.WorkOutboxStore;
+import com.aifashionvault.privacy.ConsentService;
 import io.micrometer.core.instrument.MeterRegistry;
 
 /**
@@ -134,13 +135,15 @@ public class GenerationProcessorConfiguration {
 	@Bean
 	FactoryBean<PrivacyApprovedInputTransfer> privacyApprovedInputTransfer(
 		PrivacyTransferPolicy privacyTransferPolicy,
-		ObjectProvider<ObjectStore> objectStores
+		ObjectProvider<ObjectStore> objectStores,
+		ObjectProvider<ConsentService> consentServices
 	) {
 		return factory(PrivacyApprovedInputTransfer.class, () -> {
 			ObjectStore objectStore = objectStores.getIfAvailable();
 			return objectStore == null
 				? null
-				: new PrivacyApprovedInputTransfer(privacyTransferPolicy, objectStore);
+				: new PrivacyApprovedInputTransfer(privacyTransferPolicy, objectStore,
+					consentServices.getIfAvailable());
 		});
 	}
 

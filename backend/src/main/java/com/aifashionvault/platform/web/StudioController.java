@@ -1,4 +1,4 @@
-package com.aifashionvault.studio;
+package com.aifashionvault.platform.web;
 
 import java.time.Clock;
 import java.time.Instant;
@@ -24,11 +24,16 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.node.ObjectNode;
 
 import com.aifashionvault.shared.AvatarProfileId;
+import com.aifashionvault.shared.LookId;
 import com.aifashionvault.shared.StudioItemId;
 import com.aifashionvault.shared.StudioSessionId;
 import com.aifashionvault.shared.StudioSlot;
 import com.aifashionvault.shared.UserId;
 import com.aifashionvault.shared.VaultItemId;
+import com.aifashionvault.platform.studio.StudioDraftCloner;
+import com.aifashionvault.studio.JdbcStudioStore;
+import com.aifashionvault.studio.StudioItem;
+import com.aifashionvault.studio.StudioSession;
 
 /**
  * Mounts the Studio HTTP surface the mobile client already calls (C10):
@@ -53,10 +58,16 @@ import com.aifashionvault.shared.VaultItemId;
 public class StudioController {
 
 	private final ObjectProvider<JdbcStudioStore> stores;
+	private final ObjectProvider<StudioDraftCloner> cloners;
 	private final Clock clock;
 
-	public StudioController(ObjectProvider<JdbcStudioStore> stores, ObjectProvider<Clock> clocks) {
+	public StudioController(
+		ObjectProvider<JdbcStudioStore> stores,
+		ObjectProvider<StudioDraftCloner> cloners,
+		ObjectProvider<Clock> clocks
+	) {
 		this.stores = stores;
+		this.cloners = cloners;
 		this.clock = clocks.getIfAvailable(Clock::systemUTC);
 	}
 
@@ -112,6 +123,24 @@ public class StudioController {
 			case STALE -> throw new Stale();
 			case NOT_FOUND -> throw new NotFound();
 		};
+	}
+
+	@PostMapping("/from-look")
+	public ResponseEntity<CloneResponse> fromLook(
+		@AuthenticationPrincipal UserId owner,
+		@RequestBody(required = false) ObjectNode body
+	) {
+		if (body == null) {
+			throw new Invalid();
+		}
+		LookId lookId = new LookId(uuid(body, "lookId"));
+		StudioDraftCloner.CloneResult result = cloner().cloneFromLook(lookId, owner, clock.instant());
+		if (result.notFound()) {
+			// A foreign or unknown Look discloses nothing — same posture as the owner-scoped read.
+			throw new NotFound();
+		}
+		StudioSession persisted = store().create(result.draft());
+		return ResponseEntity.status(HttpStatus.CREATED).body(cloneResponse(persisted, result));
 	}
 
 	@ExceptionHandler(NotFound.class)
@@ -177,6 +206,35 @@ public class StudioController {
 			throw new Unavailable();
 		}
 		return store;
+	}
+
+	private StudioDraftCloner cloner() {
+		StudioDraftCloner cloner;
+		try {
+			cloner = cloners.getIfAvailable();
+		} catch (NoUniqueBeanDefinitionException ex) {
+			throw new Unavailable();
+		}
+		if (cloner == null) {
+			throw new Unavailable();
+		}
+		return cloner;
+	}
+
+	private static CloneResponse cloneResponse(StudioSession session, StudioDraftCloner.CloneResult result) {
+		return new CloneResponse(
+			session.id().value().toString(),
+			session.avatarProfileId() == null ? null : session.avatarProfileId().value().toString(),
+			session.items().stream().map(item -> item.vaultItemId().value().toString()).toList(),
+			session.updatedAt(),
+			result.unresolvedGarments().stream()
+				.map(unresolved -> new UnresolvedGarmentResponse(
+					unresolved.slot().name(),
+					unresolved.vaultItemId().value().toString(),
+					unresolved.reason().name()))
+				.toList(),
+			result.avatarUnavailable()
+		);
 	}
 
 	private static StudioSessionResponse response(StudioSession session) {
@@ -295,6 +353,20 @@ public class StudioController {
 	}
 
 	public record StudioSessionResponse(String sessionId, String avatarProfileId, List<String> itemIds, Instant updatedAt) {
+	}
+
+	/** Clone response adds the explicit missing-item report C10 item 6 / C15 item 4 require. */
+	public record CloneResponse(
+		String sessionId,
+		String avatarProfileId,
+		List<String> itemIds,
+		Instant updatedAt,
+		List<UnresolvedGarmentResponse> unresolved,
+		boolean avatarUnavailable
+	) {
+	}
+
+	public record UnresolvedGarmentResponse(String slot, String vaultItemId, String reason) {
 	}
 
 	record Problem(String code) {

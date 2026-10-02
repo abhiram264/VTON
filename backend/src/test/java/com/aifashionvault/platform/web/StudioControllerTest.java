@@ -1,4 +1,4 @@
-package com.aifashionvault.studio;
+package com.aifashionvault.platform.web;
 
 import java.sql.Timestamp;
 import java.time.Clock;
@@ -29,7 +29,9 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
 
 import com.aifashionvault.platform.security.ExternalTokenVerifier;
 import com.aifashionvault.platform.security.InProcessJwtFixture;
+import com.aifashionvault.platform.studio.StudioDraftCloner;
 import com.aifashionvault.shared.UserId;
+import com.aifashionvault.studio.JdbcStudioStore;
 
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
@@ -209,11 +211,75 @@ class StudioControllerTest {
 		org.springframework.beans.factory.support.DefaultListableBeanFactory factory =
 			new org.springframework.beans.factory.support.DefaultListableBeanFactory();
 		StudioController controller = new StudioController(
-			factory.getBeanProvider(JdbcStudioStore.class), factory.getBeanProvider(Clock.class));
+			factory.getBeanProvider(JdbcStudioStore.class),
+			factory.getBeanProvider(StudioDraftCloner.class),
+			factory.getBeanProvider(Clock.class));
 		assertThatThrownBy(() -> controller.get(new UserId(UUID.randomUUID()), UUID.randomUUID().toString()))
 			.isInstanceOf(RuntimeException.class);
 		assertThat(controller.unavailable().getStatusCode().value()).isEqualTo(503);
 		assertThat(controller.unavailable().getBody().code()).isEqualTo("STUDIO_UNAVAILABLE");
+	}
+
+	@Test
+	void cloneFromLookPersistsADraftAndReportsUnresolvedGarments() throws Exception {
+		String token = InProcessJwtFixture.bearerToken();
+		String subject = InProcessJwtFixture.subject();
+		UUID top = insertVaultForSubject(subject, "top");
+		UUID bottom = insertVaultForSubject(subject, "bottom");
+		UUID foreignItem = insertVaultForSubject("foreign-item-owner", "foreign");
+
+		UUID ownedLook = insertLook(subject, new String[][] {
+			{ "UPPER_BODY", top.toString() },
+			{ "LOWER_BODY", bottom.toString() } });
+		JsonNode cloned = JSON.readTree(mvc.perform(post("/studio/sessions/from-look")
+				.header(HttpHeaders.AUTHORIZATION, bearer(token)).contentType(MediaType.APPLICATION_JSON)
+				.content("{\"lookId\":\"" + ownedLook + "\"}"))
+			.andExpect(status().isCreated())
+			.andExpect(jsonPath("$.unresolved.length()").value(0))
+			.andReturn().getResponse().getContentAsString());
+		assertThat(cloned.get("itemIds")).hasSize(2);
+		String newSessionId = cloned.get("sessionId").stringValue();
+		// The clone is a real persisted draft, not just an in-memory response.
+		mvc.perform(get("/studio/sessions/" + newSessionId).header(HttpHeaders.AUTHORIZATION, bearer(token)))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.itemIds.length()").value(2));
+
+		// A garment owned by someone else is reported, never silently dropped.
+		UUID mixedLook = insertLook(subject, new String[][] {
+			{ "UPPER_BODY", top.toString() },
+			{ "LOWER_BODY", foreignItem.toString() } });
+		JsonNode mixed = JSON.readTree(mvc.perform(post("/studio/sessions/from-look")
+				.header(HttpHeaders.AUTHORIZATION, bearer(token)).contentType(MediaType.APPLICATION_JSON)
+				.content("{\"lookId\":\"" + mixedLook + "\"}"))
+			.andExpect(status().isCreated()).andReturn().getResponse().getContentAsString());
+		assertThat(mixed.get("itemIds")).hasSize(1);
+		assertThat(mixed.get("unresolved")).hasSize(1);
+		assertThat(mixed.get("unresolved").get(0).get("reason").stringValue()).isEqualTo("GARMENT_NOT_OWNED");
+
+		// A foreign-owned or unknown look id discloses nothing; malformed is a 400.
+		UUID foreignLook = insertLook("foreign-item-owner", new String[][] { { "UPPER_BODY", foreignItem.toString() } });
+		for (String candidate : List.of(foreignLook.toString(), UUID.randomUUID().toString())) {
+			mvc.perform(post("/studio/sessions/from-look").header(HttpHeaders.AUTHORIZATION, bearer(token))
+					.contentType(MediaType.APPLICATION_JSON).content("{\"lookId\":\"" + candidate + "\"}"))
+				.andExpect(status().isNotFound())
+				.andExpect(content().json("{\"code\":\"STUDIO_SESSION_NOT_FOUND\"}"));
+		}
+		mvc.perform(post("/studio/sessions/from-look").header(HttpHeaders.AUTHORIZATION, bearer(token))
+				.contentType(MediaType.APPLICATION_JSON).content("{\"lookId\":\"bad\"}"))
+			.andExpect(status().isBadRequest())
+			.andExpect(content().json("{\"code\":\"STUDIO_INVALID_REQUEST\"}"));
+	}
+
+	private UUID insertLook(String subject, String[][] items) {
+		UUID user = jdbc.queryForObject("SELECT user_id FROM identity_mapping WHERE subject=?", UUID.class, subject);
+		UUID lookId = UUID.randomUUID();
+		jdbc.update("INSERT INTO look(id,user_id,storage_key,quality_status,created_at) VALUES(?,?,?,?,?)",
+			lookId, user, "users/" + user + "/looks/" + lookId + ".png", "PASS", Timestamp.from(NOW.get()));
+		for (String[] item : items) {
+			jdbc.update("INSERT INTO look_item(look_id,vault_item_id,slot) VALUES(?,?,?)",
+				lookId, UUID.fromString(item[1]), item[0]);
+		}
+		return lookId;
 	}
 
 	private JsonNode create(String token) throws Exception {

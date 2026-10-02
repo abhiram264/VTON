@@ -1,29 +1,115 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { generationApi } from '../features/generation/generationApi';
-import type { LookResource } from '../features/generation/types';
+import { looksApi, type LookDetail } from '../features/looks/looksApi';
+import { createLookExporter, type LookExportAction, type LookExportOutcome } from '../features/export/lookExport';
+import { vaultApi } from '../features/vault/vaultApi';
+
+const SLOT_LABELS: Record<string, string> = {
+  HEAD: 'Head',
+  UPPER_BODY: 'Top',
+  LOWER_BODY: 'Bottom',
+  FULL_BODY: 'Full body',
+  FEET: 'Footwear',
+  BAG: 'Bag',
+  JEWELLERY: 'Jewellery',
+  ACCESSORY: 'Accessory',
+};
+
+const QUALITY_LABELS: Record<string, string> = {
+  PASS: 'Quality check passed',
+  RETRY: 'Quality check retried',
+  FAIL: 'Rejected by the quality check',
+};
+
+// Every export outcome gets its own sentence. A status the UI does not
+// recognise is never rendered as success, so a new outcome added to the module
+// fails visibly instead of silently reporting a share that did not happen.
+const EXPORT_OUTCOME_TEXT: Record<LookExportOutcome['status'], string> = {
+  SHARED: 'Shared. The copy you sent is outside this app and cannot be deleted from here.',
+  SAVED: 'Saved to your photos.',
+  CANCELLED: 'Export cancelled. Nothing was sent.',
+  PERMISSION_DENIED: 'Export needs photo permission, which was denied. Nothing was sent.',
+  STAGING_FAILED: 'Could not prepare the image for export. Nothing was sent.',
+  SHARE_FAILED: 'Sharing failed. Nothing was sent.',
+  SAVE_FAILED: 'Could not save to your photos.',
+  SHARE_UNAVAILABLE: 'Sharing is not available on this device yet.',
+  DISCLOSURE_REQUIRED: 'Confirm that the copy leaves the app before exporting.',
+};
+
+// Provenance names are fetched separately from the Look itself, so "we have
+// not asked yet", "the answer is in", and "we could not ask" stay distinct.
+type VaultNames =
+  | { status: 'loading' }
+  | { status: 'ready'; names: ReadonlyMap<string, string> }
+  | { status: 'unavailable' };
 
 // The read capability is minted on demand and short-lived; it is never
-// persisted as identity.
-export default function LookScreen({ lookId }: { lookId: string }) {
-  const [look, setLook] = useState<LookResource | null>(null);
+// persisted as identity. Provenance (source garments, provider, outcome) comes
+// from the same owner-scoped GET /looks/{id} that mints it.
+export default function LookScreen({
+  lookId,
+  onDeleted,
+}: {
+  lookId: string;
+  onDeleted?: () => void;
+}) {
+  const [look, setLook] = useState<LookDetail | null>(null);
   const [notice, setNotice] = useState<{ lookId: string; text: string } | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [imageUnavailable, setImageUnavailable] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleted, setDeleted] = useState(false);
+  const [pendingExport, setPendingExport] = useState<LookExportAction | null>(null);
+  const [exportNotice, setExportNotice] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
+  // The Look's frozen provenance carries ids only, and a raw id is not a
+  // garment a person can recognise. Names come from the owner-scoped Vault
+  // list. Three distinct facts are kept apart: still asking, answered (an id
+  // absent from the answer was deleted or unshared), and could-not-ask — the
+  // last must never be shown as "the garment is gone".
+  const [vaultNames, setVaultNames] = useState<VaultNames>({ status: 'loading' });
+
+  // One exporter per mount: the native bridge is resolved once, and the sweep
+  // below runs against the same instance the buttons use.
+  const exporter = useRef(createLookExporter()).current;
+
+  useEffect(() => {
+    // Private staging from a crashed or abandoned export is swept on mount;
+    // the per-export path already removes the file it just shared.
+    void exporter.cleanupExpiredStaging();
+  }, [exporter]);
 
   useEffect(() => {
     setLook(null);
     setNotice(null);
     setImageUnavailable(false);
+    setConfirmingDelete(false);
+    setDeleted(false);
+    setPendingExport(null);
+    setExportNotice(null);
+    setVaultNames({ status: 'loading' });
     setLoading(true);
     let cancelled = false;
     (async () => {
       try {
-        const resource = await generationApi.getLook(lookId);
-        if (!cancelled) {
-          setLook(resource);
-          setLoading(false);
+        const resource = await looksApi.get(lookId);
+        if (cancelled) return;
+        setLook(resource);
+        setLoading(false);
+        if (resource.items.length === 0) {
+          setVaultNames({ status: 'ready', names: new Map() });
+          return;
+        }
+        try {
+          const owned = await vaultApi.list();
+          if (cancelled) return;
+          setVaultNames({ status: 'ready', names: new Map(owned.map(item => [item.id, item.name])) });
+        } catch {
+          // The look is still readable; only the garment names are missing, so
+          // the list says so instead of claiming the garments are gone.
+          if (!cancelled) setVaultNames({ status: 'unavailable' });
         }
       } catch {
         if (!cancelled) {
@@ -36,8 +122,52 @@ export default function LookScreen({ lookId }: { lookId: string }) {
       cancelled = true;
     };
   }, [lookId, attempt]);
+
+  async function deleteLook() {
+    setDeleting(true);
+    try {
+      await looksApi.remove(lookId);
+      setDeleting(false);
+      setConfirmingDelete(false);
+      setDeleted(true);
+      setLook(null);
+      onDeleted?.();
+    } catch {
+      setDeleting(false);
+      setConfirmingDelete(false);
+      setNotice({
+        lookId,
+        text: 'Could not delete the look. It is still saved.',
+      });
+    }
+  }
+
+  async function runExport(action: LookExportAction, imageUrl: string) {
+    if (exporting) return;
+    setExporting(true);
+    setExportNotice(null);
+    // The acknowledgement is the user's press on the disclosure confirmation,
+    // never a constant: this call is only reachable from that control.
+    const outcome = await exporter.exportLook(
+      {
+        lookId,
+        imageUrl,
+        disclosureAcknowledged: true,
+        fileName: `look-${lookId}.jpg`,
+      },
+      action,
+    );
+    setPendingExport(null);
+    setExporting(false);
+    setExportNotice(EXPORT_OUTCOME_TEXT[outcome.status] ?? 'Export did not complete.');
+  }
+
   const visibleLook = look?.id === lookId ? look : null;
   const visibleNotice = notice?.lookId === lookId ? notice.text : null;
+  const quality =
+    visibleLook && visibleLook.qualityStatus !== null
+      ? QUALITY_LABELS[visibleLook.qualityStatus] ?? visibleLook.qualityStatus
+      : null;
   return (
     <ScrollView contentContainerStyle={styles.page}>
       <Text accessibilityRole="header" style={styles.title}>Look</Text>
@@ -48,6 +178,10 @@ export default function LookScreen({ lookId }: { lookId: string }) {
       ) : visibleNotice ? (
         <Text accessibilityLiveRegion="polite" style={styles.notice}>
           {visibleNotice}
+        </Text>
+      ) : deleted ? (
+        <Text accessibilityLiveRegion="polite" style={styles.notice}>
+          Look deleted. Your saved garments are unchanged.
         </Text>
       ) : null}
       {visibleLook ? (
@@ -68,6 +202,7 @@ export default function LookScreen({ lookId }: { lookId: string }) {
               </Text>
               <Pressable
                 accessibilityRole="button"
+                accessibilityLabel="Retry preview"
                 onPress={() => setAttempt((value) => value + 1)}
                 style={styles.retry}
               >
@@ -76,8 +211,147 @@ export default function LookScreen({ lookId }: { lookId: string }) {
             </View>
           )}
           <Text style={styles.body}>
+            Created {visibleLook.createdAt}
+          </Text>
+          {quality ? (
+            <Text style={styles.body}>Outcome: {quality}</Text>
+          ) : null}
+          {visibleLook.provider ? (
+            <Text style={styles.body}>
+              Generated with {visibleLook.provider}
+              {visibleLook.providerModel ? ` (${visibleLook.providerModel})` : ''}
+            </Text>
+          ) : null}
+          <Text accessibilityRole="header" style={styles.heading}>
+            Made from
+          </Text>
+          {visibleLook.items.length === 0 ? (
+            <Text style={styles.body}>
+              No source garments are recorded for this look.
+            </Text>
+          ) : (
+            visibleLook.items.map(item => (
+              <Text key={`${item.slot}:${item.vaultItemId}`} style={styles.body}>
+                {SLOT_LABELS[item.slot] ?? item.slot} —{' '}
+                {vaultNames.status === 'loading'
+                  ? 'checking your Vault…'
+                  : vaultNames.status === 'unavailable'
+                    ? 'name unavailable right now'
+                    : vaultNames.names.get(item.vaultItemId) ??
+                      'no longer in your Vault — use Modify to build a new look without it'}
+              </Text>
+            ))
+          )}
+          <Text style={styles.body}>
             Private preview link expires at {visibleLook.image.expiresAt}.
           </Text>
+          {exportNotice ? (
+            <Text accessibilityLiveRegion="polite" style={styles.body}>
+              {exportNotice}
+            </Text>
+          ) : null}
+          {pendingExport ? (
+            <View style={styles.stack}>
+              <Text accessibilityLiveRegion="polite" style={styles.body}>
+                Exporting makes a copy of this look outside the app. It will not be covered by
+                deleting the look here, and you will not be able to remove it from this app.
+              </Text>
+              <View style={styles.row}>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={
+                    pendingExport === 'save' ? 'Confirm save to photos' : 'Confirm export copy'
+                  }
+                  accessibilityState={{ disabled: exporting, busy: exporting }}
+                  disabled={exporting}
+                  onPress={() => runExport(pendingExport, visibleLook.image.url)}
+                  style={[styles.retry, exporting && styles.disabled]}
+                >
+                  <Text style={styles.retryLabel}>
+                    {exporting
+                      ? 'Exporting…'
+                      : pendingExport === 'save'
+                        ? 'Save to photos'
+                        : 'Share a copy'}
+                  </Text>
+                </Pressable>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Cancel export"
+                  accessibilityState={{ disabled: exporting }}
+                  disabled={exporting}
+                  onPress={() => setPendingExport(null)}
+                  style={[styles.secondary, exporting && styles.disabled]}
+                >
+                  <Text style={styles.secondaryLabel}>Cancel</Text>
+                </Pressable>
+              </View>
+            </View>
+          ) : (
+            <View style={styles.row}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Share look"
+                accessibilityState={{ disabled: exporting, busy: exporting }}
+                disabled={exporting}
+                onPress={() => setPendingExport('share')}
+                style={[styles.retry, exporting && styles.disabled]}
+              >
+                <Text style={styles.retryLabel}>Share</Text>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Save look to photos"
+                accessibilityState={{ disabled: exporting, busy: exporting }}
+                disabled={exporting}
+                onPress={() => setPendingExport('save')}
+                style={[styles.secondary, exporting && styles.disabled]}
+              >
+                <Text style={styles.secondaryLabel}>Save to photos</Text>
+              </Pressable>
+            </View>
+          )}
+          {confirmingDelete ? (
+            <View style={styles.stack}>
+              <Text accessibilityLiveRegion="polite" style={styles.body}>
+                Delete this look? The rendered image is removed; the garments it used stay in
+                your Vault.
+              </Text>
+              <View style={styles.row}>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Confirm delete look"
+                  accessibilityState={{ disabled: deleting, busy: deleting }}
+                  disabled={deleting}
+                  onPress={deleteLook}
+                  style={[styles.danger, deleting && styles.disabled]}
+                >
+                  <Text style={styles.retryLabel}>
+                    {deleting ? 'Deleting…' : 'Delete look'}
+                  </Text>
+                </Pressable>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Cancel delete look"
+                  accessibilityState={{ disabled: deleting }}
+                  disabled={deleting}
+                  onPress={() => setConfirmingDelete(false)}
+                  style={[styles.secondary, deleting && styles.disabled]}
+                >
+                  <Text style={styles.secondaryLabel}>Keep look</Text>
+                </Pressable>
+              </View>
+            </View>
+          ) : (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Delete look"
+              onPress={() => setConfirmingDelete(true)}
+              style={styles.secondary}
+            >
+              <Text style={styles.secondaryLabel}>Delete look</Text>
+            </Pressable>
+          )}
         </View>
       ) : null}
     </ScrollView>
@@ -100,7 +374,16 @@ const styles = StyleSheet.create({
     fontSize: 28,
     fontWeight: '700',
   },
+  heading: {
+    color: ink,
+    fontSize: 18,
+    fontWeight: '700',
+  },
   stack: {
+    gap: 12,
+  },
+  row: {
+    flexDirection: 'row',
     gap: 12,
   },
   preview: {
@@ -131,5 +414,29 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 14,
     fontWeight: '600',
+  },
+  secondary: {
+    minHeight: 44,
+    alignSelf: 'flex-start',
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: ink,
+  },
+  secondaryLabel: {
+    color: ink,
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  danger: {
+    minHeight: 44,
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    backgroundColor: '#8a2f2b',
+  },
+  disabled: {
+    opacity: 0.45,
   },
 });
