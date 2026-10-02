@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import LookScreen from '../src/screens/LookScreen';
 import { looksApi, type LookDetail } from '../src/features/looks/looksApi';
+import { createLookExporter } from '../src/features/export/lookExport';
 
 jest.mock('../src/features/looks/looksApi', () => ({
   looksApi: {
@@ -10,6 +11,16 @@ jest.mock('../src/features/looks/looksApi', () => ({
     regenerate: jest.fn(),
   },
 }));
+
+// The export bridge is a native seam; the screen is tested against the real
+// orchestration contract (request shape + outcome copy) with the bridge faked.
+jest.mock('../src/features/export/lookExport', () => ({
+  createLookExporter: jest.fn(),
+}));
+
+const exportLook = jest.fn();
+const cleanupExpiredStaging = jest.fn();
+jest.mocked(createLookExporter).mockReturnValue({ exportLook, cleanupExpiredStaging });
 
 const LOOK_ID = '55555555-5555-5555-5555-555555555555';
 const GENERATION_ID = '44444444-4444-4444-4444-444444444444';
@@ -39,6 +50,8 @@ const remove = looksApi.remove as jest.Mock;
 describe('LookScreen', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    exportLook.mockResolvedValue({ status: 'SHARED' });
+    cleanupExpiredStaging.mockResolvedValue(undefined);
   });
 
   test('a saved look renders the stored look it resolved, not a placeholder', async () => {
@@ -175,5 +188,96 @@ describe('LookScreen', () => {
     expect(screen.getByText('Could not delete the look. It is still saved.')).toBeTruthy();
     expect(screen.getByRole('image')).toBeTruthy();
     expect(onDeleted).not.toHaveBeenCalled();
+  });
+
+  test('nothing is exported until the user acknowledges the copy leaves the app', async () => {
+    get.mockResolvedValue({ ...STORED_LOOK });
+
+    await render(<LookScreen lookId={LOOK_ID} />);
+    await screen.findByRole('image');
+
+    // Staging is swept on mount, but no export happens by merely opening the look.
+    expect(cleanupExpiredStaging).toHaveBeenCalledTimes(1);
+    expect(exportLook).not.toHaveBeenCalled();
+
+    // Asking to share only raises the disclosure; the bytes are not touched yet.
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Share look' }));
+    });
+    expect(exportLook).not.toHaveBeenCalled();
+    expect(screen.getByText(/copy of this look outside the app/)).toBeTruthy();
+
+    // Backing out exports nothing at all.
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Cancel export' }));
+    });
+    expect(exportLook).not.toHaveBeenCalled();
+    expect(screen.queryByText(/copy of this look outside the app/)).toBeNull();
+  });
+
+  test('confirming an export hands the acknowledged signed preview to the exporter and reports the result', async () => {
+    get.mockResolvedValue({ ...STORED_LOOK });
+
+    await render(<LookScreen lookId={LOOK_ID} />);
+    await screen.findByRole('image');
+
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Share look' }));
+    });
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Confirm export copy' }));
+    });
+
+    expect(exportLook).toHaveBeenCalledTimes(1);
+    expect(exportLook).toHaveBeenCalledWith(
+      expect.objectContaining({
+        lookId: LOOK_ID,
+        imageUrl: SIGNED_URL,
+        disclosureAcknowledged: true,
+      }),
+      'share',
+    );
+    expect(
+      await screen.findByText(
+        'Shared. The copy you sent is outside this app and cannot be deleted from here.',
+      ),
+    ).toBeTruthy();
+  });
+
+  test('a device without the export bridge is told sharing is unavailable, not that it shared', async () => {
+    get.mockResolvedValue({ ...STORED_LOOK });
+    exportLook.mockResolvedValue({ status: 'SHARE_UNAVAILABLE' });
+
+    await render(<LookScreen lookId={LOOK_ID} />);
+    await screen.findByRole('image');
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Share look' }));
+    });
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Confirm export copy' }));
+    });
+
+    expect(await screen.findByText('Sharing is not available on this device yet.')).toBeTruthy();
+    expect(screen.queryByText(/^Shared\./)).toBeNull();
+  });
+
+  test('save-to-photos reports a denied permission distinctly from a saved copy', async () => {
+    get.mockResolvedValue({ ...STORED_LOOK });
+    exportLook.mockResolvedValue({ status: 'PERMISSION_DENIED' });
+
+    await render(<LookScreen lookId={LOOK_ID} />);
+    await screen.findByRole('image');
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Save look to photos' }));
+    });
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Confirm save to photos' }));
+    });
+
+    expect(exportLook).toHaveBeenCalledWith(expect.anything(), 'save');
+    expect(
+      await screen.findByText('Export needs photo permission, which was denied. Nothing was sent.'),
+    ).toBeTruthy();
+    expect(screen.queryByText('Saved to your photos.')).toBeNull();
   });
 });

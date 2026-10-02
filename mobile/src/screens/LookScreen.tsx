@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { looksApi, type LookDetail } from '../features/looks/looksApi';
+import { createLookExporter, type LookExportAction, type LookExportOutcome } from '../features/export/lookExport';
 
 const SLOT_LABELS: Record<string, string> = {
   HEAD: 'Head',
@@ -17,6 +18,21 @@ const QUALITY_LABELS: Record<string, string> = {
   PASS: 'Quality check passed',
   RETRY: 'Quality check retried',
   FAIL: 'Rejected by the quality check',
+};
+
+// Every export outcome gets its own sentence. A status the UI does not
+// recognise is never rendered as success, so a new outcome added to the module
+// fails visibly instead of silently reporting a share that did not happen.
+const EXPORT_OUTCOME_TEXT: Record<LookExportOutcome['status'], string> = {
+  SHARED: 'Shared. The copy you sent is outside this app and cannot be deleted from here.',
+  SAVED: 'Saved to your photos.',
+  CANCELLED: 'Export cancelled. Nothing was sent.',
+  PERMISSION_DENIED: 'Export needs photo permission, which was denied. Nothing was sent.',
+  STAGING_FAILED: 'Could not prepare the image for export. Nothing was sent.',
+  SHARE_FAILED: 'Sharing failed. Nothing was sent.',
+  SAVE_FAILED: 'Could not save to your photos.',
+  SHARE_UNAVAILABLE: 'Sharing is not available on this device yet.',
+  DISCLOSURE_REQUIRED: 'Confirm that the copy leaves the app before exporting.',
 };
 
 // The read capability is minted on demand and short-lived; it is never
@@ -37,6 +53,19 @@ export default function LookScreen({
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleted, setDeleted] = useState(false);
+  const [pendingExport, setPendingExport] = useState<LookExportAction | null>(null);
+  const [exportNotice, setExportNotice] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
+
+  // One exporter per mount: the native bridge is resolved once, and the sweep
+  // below runs against the same instance the buttons use.
+  const exporter = useRef(createLookExporter()).current;
+
+  useEffect(() => {
+    // Private staging from a crashed or abandoned export is swept on mount;
+    // the per-export path already removes the file it just shared.
+    void exporter.cleanupExpiredStaging();
+  }, [exporter]);
 
   useEffect(() => {
     setLook(null);
@@ -44,6 +73,8 @@ export default function LookScreen({
     setImageUnavailable(false);
     setConfirmingDelete(false);
     setDeleted(false);
+    setPendingExport(null);
+    setExportNotice(null);
     setLoading(true);
     let cancelled = false;
     (async () => {
@@ -82,6 +113,26 @@ export default function LookScreen({
         text: 'Could not delete the look. It is still saved.',
       });
     }
+  }
+
+  async function runExport(action: LookExportAction, imageUrl: string) {
+    if (exporting) return;
+    setExporting(true);
+    setExportNotice(null);
+    // The acknowledgement is the user's press on the disclosure confirmation,
+    // never a constant: this call is only reachable from that control.
+    const outcome = await exporter.exportLook(
+      {
+        lookId,
+        imageUrl,
+        disclosureAcknowledged: true,
+        fileName: `look-${lookId}.jpg`,
+      },
+      action,
+    );
+    setPendingExport(null);
+    setExporting(false);
+    setExportNotice(EXPORT_OUTCOME_TEXT[outcome.status] ?? 'Export did not complete.');
   }
 
   const visibleLook = look?.id === lookId ? look : null;
@@ -161,6 +212,72 @@ export default function LookScreen({
           <Text style={styles.body}>
             Private preview link expires at {visibleLook.image.expiresAt}.
           </Text>
+          {exportNotice ? (
+            <Text accessibilityLiveRegion="polite" style={styles.body}>
+              {exportNotice}
+            </Text>
+          ) : null}
+          {pendingExport ? (
+            <View style={styles.stack}>
+              <Text accessibilityLiveRegion="polite" style={styles.body}>
+                Exporting makes a copy of this look outside the app. It will not be covered by
+                deleting the look here, and you will not be able to remove it from this app.
+              </Text>
+              <View style={styles.row}>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={
+                    pendingExport === 'save' ? 'Confirm save to photos' : 'Confirm export copy'
+                  }
+                  accessibilityState={{ disabled: exporting, busy: exporting }}
+                  disabled={exporting}
+                  onPress={() => runExport(pendingExport, visibleLook.image.url)}
+                  style={[styles.retry, exporting && styles.disabled]}
+                >
+                  <Text style={styles.retryLabel}>
+                    {exporting
+                      ? 'Exporting…'
+                      : pendingExport === 'save'
+                        ? 'Save to photos'
+                        : 'Share a copy'}
+                  </Text>
+                </Pressable>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Cancel export"
+                  accessibilityState={{ disabled: exporting }}
+                  disabled={exporting}
+                  onPress={() => setPendingExport(null)}
+                  style={[styles.secondary, exporting && styles.disabled]}
+                >
+                  <Text style={styles.secondaryLabel}>Cancel</Text>
+                </Pressable>
+              </View>
+            </View>
+          ) : (
+            <View style={styles.row}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Share look"
+                accessibilityState={{ disabled: exporting, busy: exporting }}
+                disabled={exporting}
+                onPress={() => setPendingExport('share')}
+                style={[styles.retry, exporting && styles.disabled]}
+              >
+                <Text style={styles.retryLabel}>Share</Text>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Save look to photos"
+                accessibilityState={{ disabled: exporting, busy: exporting }}
+                disabled={exporting}
+                onPress={() => setPendingExport('save')}
+                style={[styles.secondary, exporting && styles.disabled]}
+              >
+                <Text style={styles.secondaryLabel}>Save to photos</Text>
+              </Pressable>
+            </View>
+          )}
           {confirmingDelete ? (
             <View style={styles.stack}>
               <Text accessibilityLiveRegion="polite" style={styles.body}>
