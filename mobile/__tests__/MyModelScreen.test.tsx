@@ -99,6 +99,32 @@ function requestUrl(input: RequestInfo | URL): string {
 }
 
 describe('MyModelScreen', () => {
+  // Body-image processing is gated on an active consent, so every photo-flow test
+  // must answer the consent read with a grant; the rest of the API is delegated.
+  const GRANTED_CONSENT = {
+    consents: [
+      {
+        purpose: 'body_image_processing',
+        version: '2026-10-01',
+        grantedAt: '2026-10-01T10:00:00Z',
+        revokedAt: null,
+        active: true,
+      },
+    ],
+  };
+
+  function withGrantedConsent(
+    responder: (url: string, init: RequestInit) => Promise<Response> | Response,
+  ): void {
+    fetchMock.mockImplementation((input, init) => {
+      const url = requestUrl(input as RequestInfo | URL);
+      if (url.endsWith('/me/consents')) {
+        return jsonResponse(200, GRANTED_CONSENT);
+      }
+      return Promise.resolve(responder(url, (init ?? {}) as RequestInit));
+    });
+  }
+
   const fetchMock = jest.fn();
 
   beforeEach(() => {
@@ -113,7 +139,7 @@ describe('MyModelScreen', () => {
   });
 
   test('empty guidance is visible', async () => {
-    fetchMock.mockResolvedValue(await jsonResponse(200, []));
+    withGrantedConsent(() => jsonResponse(200, []));
 
     await render(<MyModelScreen />);
 
@@ -128,7 +154,7 @@ describe('MyModelScreen', () => {
   });
 
   test('cancelled take photo leaves the empty screen unchanged', async () => {
-    fetchMock.mockResolvedValue(await jsonResponse(200, []));
+    withGrantedConsent(() => jsonResponse(200, []));
     takePhotoMock.mockResolvedValue(null);
 
     await render(<MyModelScreen />);
@@ -151,7 +177,7 @@ describe('MyModelScreen', () => {
   });
 
   test('cancelled choose photo leaves the empty screen unchanged', async () => {
-    fetchMock.mockResolvedValue(await jsonResponse(200, []));
+    withGrantedConsent(() => jsonResponse(200, []));
     choosePhotoMock.mockResolvedValue(null);
 
     await render(<MyModelScreen />);
@@ -174,7 +200,7 @@ describe('MyModelScreen', () => {
   });
 
   test('null pick shows a user-visible notice instead of a silent no-op', async () => {
-    fetchMock.mockResolvedValue(await jsonResponse(200, []));
+    withGrantedConsent(() => jsonResponse(200, []));
     takePhotoMock.mockResolvedValue(null);
 
     await render(<MyModelScreen />);
@@ -192,7 +218,7 @@ describe('MyModelScreen', () => {
   });
 
   test('ready state shows the private preview', async () => {
-    fetchMock.mockResolvedValue(await jsonResponse(200, [AVATAR]));
+    withGrantedConsent(() => jsonResponse(200, [AVATAR]));
 
     await render(<MyModelScreen />);
 
@@ -204,8 +230,7 @@ describe('MyModelScreen', () => {
   });
 
   test('delete returns to empty', async () => {
-    fetchMock.mockImplementation((input, init) => {
-      const url = requestUrl(input);
+    withGrantedConsent((url, init) => {
       const method = (init?.method ?? 'GET').toUpperCase();
       if (url.endsWith('/avatars') && method === 'GET') {
         return jsonResponse(200, [AVATAR]);
@@ -252,8 +277,7 @@ describe('MyModelScreen', () => {
     'semantic 422 code %s displays clearer photo copy with polite live region and no sensitive leaks',
     async code => {
       takePhotoMock.mockResolvedValue({ uri: 'file:///photo.jpg' });
-      fetchMock.mockImplementation((input, init) => {
-        const url = requestUrl(input);
+      withGrantedConsent((url, init) => {
         const method = (init?.method ?? 'GET').toUpperCase();
         if (url.endsWith('/avatars') && method === 'GET') {
           return jsonResponse(200, []);
@@ -303,8 +327,7 @@ describe('MyModelScreen', () => {
 
   test('avatar preflight unavailable 503 retains generic error notice', async () => {
     takePhotoMock.mockResolvedValue({ uri: 'file:///photo.jpg' });
-    fetchMock.mockImplementation((input, init) => {
-      const url = requestUrl(input);
+    withGrantedConsent((url, init) => {
       const method = (init?.method ?? 'GET').toUpperCase();
       if (url.endsWith('/avatars') && method === 'GET') {
         return jsonResponse(200, []);
@@ -356,8 +379,7 @@ describe('MyModelScreen', () => {
   });
 
   test('privacy choices are reachable from My Model in every load state', async () => {
-    fetchMock.mockImplementation((input: RequestInfo | URL) => {
-      const url = typeof input === 'string' ? input : String(input);
+    withGrantedConsent(url => {
       if (url.endsWith('/me/consents')) {
         return jsonResponse(200, { consents: [] });
       }
@@ -374,9 +396,54 @@ describe('MyModelScreen', () => {
     expect(screen.getByText('Privacy choices')).toBeTruthy();
     await waitFor(() =>
       expect(
-        screen.getByRole('button', { name: 'Grant: Process my body photo' }),
+        screen.getByRole('button', { name: 'Withdraw: Process my body photo' }),
       ).toBeTruthy(),
     );
     expect(screen.getByText(/Policy version/)).toBeTruthy();
+  });
+
+  test('a photo cannot be submitted while body-image consent is not granted', async () => {
+    takePhotoMock.mockResolvedValue({ uri: 'file:///photo.jpg' });
+    fetchMock.mockImplementation((input, init) => {
+      const url = requestUrl(input as RequestInfo | URL);
+      if (url.endsWith('/me/consents')) {
+        return jsonResponse(200, { consents: [] });
+      }
+      if (url.endsWith('/avatars')) {
+        return jsonResponse(200, []);
+      }
+      throw new Error(`unexpected fetch ${url} ${init?.method ?? 'GET'}`);
+    });
+
+    await render(<MyModelScreen />);
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: 'Grant: Process my body photo' }),
+      ).toBeTruthy(),
+    );
+
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Take photo' }));
+    });
+
+    expect(
+      await screen.findByText(
+        'Grant "Process my body photo" below before adding a My Model photo.',
+      ),
+    ).toBeTruthy();
+    // The picker must not even open, and no avatar write may be attempted.
+    expect(takePhotoMock).not.toHaveBeenCalled();
+    expect(
+      fetchMock.mock.calls.some(([input]) =>
+        requestUrl(input as RequestInfo | URL).endsWith('/avatars'),
+      ),
+    ).toBe(true); // only the initial list read
+    expect(
+      fetchMock.mock.calls.some(
+        ([input, init]) =>
+          requestUrl(input as RequestInfo | URL).endsWith('/avatars') &&
+          (init?.method ?? 'GET').toUpperCase() === 'POST',
+      ),
+    ).toBe(false);
   });
 });

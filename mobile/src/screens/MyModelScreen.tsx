@@ -14,6 +14,7 @@ import {
 } from '../features/generation/failureContract';
 import { ApiProblemError } from '../features/my-model/http';
 import ConsentSection from '../features/my-model/ConsentSection';
+import { consentApi, consentState } from '../features/my-model/consentApi';
 import { avatarApi } from '../features/my-model/avatarApi';
 import {
   choosePhoto,
@@ -27,10 +28,15 @@ const CAMERA_NOTICE =
 
 const NO_PHOTO_NOTICE =
   'No photo was selected. Photo selection may be unavailable. Try again.';
+const CONSENT_REQUIRED_NOTICE =
+  'Grant "Process my body photo" below before adding a My Model photo.';
 const STALE_REVISION_CODE = 'AVATAR_STALE_REVISION';
 const MAX_REFRESH_DELAY_MS = 2_147_483_647;
 
 type LoadState = 'loading' | 'ready' | 'failed';
+// 'unknown' is deliberately distinct from 'blocked': a consent lookup that failed
+// must never be treated as a grant, so it blocks the same way and says why.
+type ConsentGate = 'granted' | 'blocked' | 'unknown';
 
 export default function MyModelScreen({
   onCreateLook,
@@ -44,9 +50,35 @@ export default function MyModelScreen({
   const [avatar, setAvatar] = useState<AvatarResource | null>(null);
   const [imageFailed, setImageFailed] = useState(false);
   const [refreshNeeded, setRefreshNeeded] = useState(false);
+  const [consentGate, setConsentGate] = useState<ConsentGate>('unknown');
   const pickerLock = useRef(false);
   const mutationLock = useRef(false);
   const deletePromptOpen = useRef(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setConsentGate('unknown');
+    consentApi
+      .list()
+      .then(records => {
+        if (!cancelled) {
+          setConsentGate(
+            consentState(records, 'body_image_processing') === 'granted'
+              ? 'granted'
+              : 'blocked',
+          );
+        }
+      })
+      .catch(() => {
+        // A failed consent lookup is never a grant.
+        if (!cancelled) {
+          setConsentGate('unknown');
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [attempt]);
 
   useEffect(() => {
     let cancelled = false;
@@ -155,6 +187,13 @@ export default function MyModelScreen({
     if (mutationLock.current) {
       return;
     }
+    // Consent for body-image processing is checked before the upload is submitted.
+    // This is a client-side guard; the authoritative enforcement belongs on the
+    // server before any provider transfer.
+    if (consentGate !== 'granted') {
+      setNotice(CONSENT_REQUIRED_NOTICE);
+      return;
+    }
     mutationLock.current = true;
     setBusy(true);
     setNotice(null);
@@ -197,6 +236,10 @@ export default function MyModelScreen({
       busy ||
       loadState === 'loading'
     ) {
+      return;
+    }
+    if (consentGate !== 'granted') {
+      setNotice(CONSENT_REQUIRED_NOTICE);
       return;
     }
     pickerLock.current = true;
