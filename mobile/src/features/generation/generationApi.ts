@@ -1,3 +1,4 @@
+import { AppState } from 'react-native';
 import type {
   CoarseGenerationPhase,
   GenerationApi,
@@ -175,6 +176,65 @@ export function createIdempotencyKey(): string {
 export const POLL_DEADLINE_MS = 1_860_000;
 export const POLL_MAX_ATTEMPTS = 930;
 
+/**
+ * Whether the app is in the foreground, as an injectable seam.
+ *
+ * C14 requires foreground polling to pause appropriately. Polling a job every
+ * couple of seconds while the app is backgrounded burns the radio and battery
+ * for a screen nobody is looking at, so the poll loop parks until the app is
+ * active again. The DEADLINE is deliberately NOT extended by the pause: the
+ * bound is the server's own orchestration budget, and a client that kept
+ * waiting past it would report success after the server had already given up.
+ */
+export type ForegroundMonitor = {
+  isForeground: () => boolean;
+  subscribe: (listener: (foreground: boolean) => void) => () => void;
+};
+
+export function createAppStateForegroundMonitor(): ForegroundMonitor {
+  return {
+    // Only a state that says the app is NOT visible parks the poll loop. An
+    // unknown state (RN's AppState starts as null before the first native
+    // callback, and a headless/test runtime never receives one) must not stall
+    // a legitimate poll — "I cannot tell" is not "the user left".
+    isForeground: () =>
+      AppState.currentState !== 'background' &&
+      AppState.currentState !== 'inactive',
+    subscribe: listener => {
+      const subscription = AppState.addEventListener('change', state =>
+        listener(state !== 'background' && state !== 'inactive'),
+      );
+      return () => subscription.remove();
+    },
+  };
+}
+
+/** Resolves on the next foreground transition; rejects when aborted. */
+function waitForForeground(
+  monitor: ForegroundMonitor,
+  signal?: AbortSignal,
+): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    let unsubscribe: (() => void) | null = null;
+    const onAbort = () => {
+      unsubscribe?.();
+      reject(new Error('Aborted'));
+    };
+    unsubscribe = monitor.subscribe(foreground => {
+      if (!foreground) {
+        return;
+      }
+      unsubscribe?.();
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    });
+    signal?.addEventListener('abort', onAbort, {once: true});
+    if (signal?.aborted) {
+      onAbort();
+    }
+  });
+}
+
 export async function pollGeneration(options: {
   get: (id: string) => Promise<GenerationResource>;
   id: string;
@@ -185,6 +245,8 @@ export async function pollGeneration(options: {
   signal?: AbortSignal;
   deadlineMs?: number;
   maxAttempts?: number;
+  /** When supplied, polling parks while the app is backgrounded. */
+  foreground?: ForegroundMonitor;
 }): Promise<GenerationResource> {
   if (options.signal?.aborted) {
     throw new Error('Aborted');
@@ -224,6 +286,12 @@ export async function pollGeneration(options: {
     }
     if (attempts >= (options.maxAttempts ?? POLL_MAX_ATTEMPTS)) {
       throw new Error('Generation polling maximum attempts exceeded');
+    }
+    if (options.foreground && !options.foreground.isForeground()) {
+      // Park until the app is active again. The deadline above is re-checked on
+      // the next iteration, so a long background stay cannot extend the bound.
+      await waitForForeground(options.foreground, options.signal);
+      continue;
     }
     attempts += 1;
     const generation = await options.get(options.id);

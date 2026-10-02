@@ -236,6 +236,60 @@ test('an expired garment preview refreshes once, then falls back to the name', a
   expect(screen.getByRole('button', { name: 'Remove Silk top' })).toBeTruthy();
 });
 
+test('a consumed Vault selection is reported once and not re-applied after removal', async () => {
+  jest.mocked(studioApi.get).mockResolvedValue({ sessionId: 'session-1', updatedAt: '2026-10-03T00:00:00Z', itemIds: [] });
+  jest.mocked(vaultApi.list).mockResolvedValue([{ id: 'item-top', category: 'TOP', name: 'Silk top' }] as never);
+  jest.mocked(studioApi.addItem).mockResolvedValue({ sessionId: 'session-1', updatedAt: '2026-10-03T00:01:00Z', itemIds: ['item-top'] });
+  const onConsumed = jest.fn();
+
+  const { rerender } = await render(
+    <StudioScreen studioSessionId="session-1" selectedVaultItemId="item-top" onAddFromVault={noop} onAvatar={noop} onOpenLook={noop} onProfile={noop} onConsumed={onConsumed} />,
+  );
+
+  await waitFor(() => expect(onConsumed).toHaveBeenCalledTimes(1));
+
+  // The navigator clears the param once consumed; a re-render must not re-apply it.
+  rerender(
+    <StudioScreen studioSessionId="session-1" onAddFromVault={noop} onAvatar={noop} onOpenLook={noop} onProfile={noop} onConsumed={onConsumed} />,
+  );
+  await waitFor(() => expect(screen.getByTestId('item-item-top')).toBeTruthy());
+  expect(onConsumed).toHaveBeenCalledTimes(1);
+  expect(studioApi.addItem).toHaveBeenCalledTimes(1);
+});
+
+test('a consumed source Look is reported once so re-entering Studio does not clone it again', async () => {
+  jest.mocked(studioApi.createFromLook).mockResolvedValue({
+    sessionId: 'cloned-1',
+    updatedAt: '2026-10-03T00:00:00Z',
+    itemIds: [],
+    unresolved: [],
+    avatarUnavailable: false,
+  });
+  const onConsumed = jest.fn();
+
+  const { rerender } = await render(
+    <StudioScreen sourceLookId="look-1" onAddFromVault={noop} onAvatar={noop} onOpenLook={noop} onProfile={noop} onConsumed={onConsumed} />,
+  );
+
+  await waitFor(() => expect(onConsumed).toHaveBeenCalledTimes(1));
+  rerender(
+    <StudioScreen onAddFromVault={noop} onAvatar={noop} onOpenLook={noop} onProfile={noop} onConsumed={onConsumed} />,
+  );
+  await waitFor(() => expect(studioApi.activeDraft).toHaveBeenCalled());
+  expect(studioApi.createFromLook).toHaveBeenCalledTimes(1);
+});
+
+test('a source Look that cannot be loaded still reports the spent param', async () => {
+  jest.mocked(studioApi.createFromLook).mockRejectedValue(new Error('404'));
+  const onConsumed = jest.fn();
+
+  await render(
+    <StudioScreen sourceLookId="foreign-look" onAddFromVault={noop} onAvatar={noop} onOpenLook={noop} onProfile={noop} onConsumed={onConsumed} />,
+  );
+
+  await waitFor(() => expect(onConsumed).toHaveBeenCalledTimes(1));
+});
+
 test('Generate freezes the owned session item order and opens the completed Look', async () => {
   jest.mocked(studioApi.get).mockResolvedValue({ sessionId: 'session-1', updatedAt: '2026-10-03T00:00:00Z', itemIds: ['item-top', 'item-bottom', 'item-footwear'] });
   jest.mocked(vaultApi.list).mockResolvedValue([
