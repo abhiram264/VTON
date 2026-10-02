@@ -3,9 +3,24 @@ import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { looksApi } from '../features/looks/looksApi';
 import { generationApi, pollGeneration } from '../features/generation/generationApi';
+import { recoverActiveGeneration } from '../features/generation/generationLifecycle';
 import type { GenerationResource, LookResource } from '../features/generation/types';
+import { lookLabel } from './HomeScreen';
 
 type Props = { onModify: (lookId: string) => void; onOpenLook: (lookId: string) => void; onProfile: () => void; pollDelay?: (ms: number) => Promise<void> };
+
+// Two Looks created on the same day would otherwise share a name, which a
+// screen reader cannot tell apart; disambiguate duplicates in order. The raw
+// Look id is deliberately never rendered (C23: no debug-like identifiers).
+function labeledLooks(looks: LookResource[]): { look: LookResource; label: string }[] {
+  const seen = new Map<string, number>();
+  return looks.map(look => {
+    const base = lookLabel(look.createdAt);
+    const count = (seen.get(base) ?? 0) + 1;
+    seen.set(base, count);
+    return { look, label: count === 1 ? base : `${base} (${count})` };
+  });
+}
 
 export default function LooksScreen({ onModify, onOpenLook, onProfile, pollDelay }: Props) {
   const [looks, setLooks] = useState<LookResource[]>([]);
@@ -14,9 +29,15 @@ export default function LooksScreen({ onModify, onOpenLook, onProfile, pollDelay
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [recentGeneration, setRecentGeneration] = useState<{ sourceLookId: string; generation: GenerationResource } | null>(null);
+  const [recovered, setRecovered] = useState<GenerationResource | null>(null);
   const [brokenImages, setBrokenImages] = useState<ReadonlySet<string>>(() => new Set());
   const selectedRef = useRef<string | null>(null);
   const acceptedGenerations = useRef(new Map<string, string>());
+  // A regeneration accepted by the server is charged whether or not this
+  // process survives to poll it. `acceptedGenerations` only lives for the
+  // process, so on every focus the server's owner-scoped list is consulted for
+  // an in-flight job; if one exists it is RESUMED instead of re-POSTed.
+  const recoveredRef = useRef<GenerationResource | null>(null);
   const recentGenerationRef = useRef<{ sourceLookId: string; generation: GenerationResource } | null>(null);
   const operationLocked = useRef(false);
   const selectionVersion = useRef(0);
@@ -37,6 +58,8 @@ export default function LooksScreen({ onModify, onOpenLook, onProfile, pollDelay
     selectedRef.current = null;
     setSelected(null);
     setActionError(null);
+    recoveredRef.current = null;
+    setRecovered(null);
     void looksApi.list().then(value => {
       if (!active) return;
       setLooks(value);
@@ -48,6 +71,14 @@ export default function LooksScreen({ onModify, onOpenLook, onProfile, pollDelay
         setActionError(null);
       }
     }, () => { if (active) { setLooks([]); setStatus('failed'); } });
+    // Recovery is best-effort and independent of the Look list: an `unavailable`
+    // answer (the lookup failed) is NOT "nothing in flight", so it leaves the
+    // ordinary regenerate path alone rather than inventing an empty state.
+    void recoverActiveGeneration({ list: generationApi.list }).then(recovery => {
+      if (!active || recovery.kind !== 'active') return;
+      recoveredRef.current = recovery.generation;
+      if (mounted.current) setRecovered(recovery.generation);
+    });
     return () => {
       active = false;
       screenActive.current = false;
@@ -77,7 +108,16 @@ export default function LooksScreen({ onModify, onOpenLook, onProfile, pollDelay
     const version = selectionVersion.current;
     const isCurrent = () => screenActive.current && selectionVersion.current === version && selectedRef.current === sourceLookId;
     try {
+      const inFlight = recoveredRef.current;
       let generationId = acceptedGenerations.current.get(sourceLookId);
+      if (!generationId && inFlight) {
+        // Already accepted (and charged) by the server before this process
+        // could poll it: resume that job instead of starting another.
+        generationId = inFlight.id;
+        rememberGeneration(sourceLookId, inFlight);
+      }
+      recoveredRef.current = null;
+      if (mounted.current) setRecovered(null);
       if (!generationId) {
         const generation = await looksApi.regenerate(sourceLookId);
         generationId = generation.id;
@@ -108,16 +148,18 @@ export default function LooksScreen({ onModify, onOpenLook, onProfile, pollDelay
 
   const disabled = !selected || busy;
   const resumeSelected = selected ? acceptedGenerations.current.has(selected) : false;
+  const labeled = labeledLooks(looks);
   return <View style={styles.page}>
     <View style={styles.headingRow}><Text accessibilityRole="header" style={styles.title}>Looks</Text><Action label="Profile and settings" onPress={onProfile} /></View>
     {actionError ? <Text accessibilityLiveRegion="polite">{actionError}</Text> : null}
+    {recovered ? <Text accessibilityLiveRegion="polite">A regeneration is already in progress. Press Regenerate to resume it without starting another.</Text> : null}
     <Text accessibilityRole="header" style={styles.heading}>Saved Looks</Text>
     {status === 'loading' ? <Text accessibilityLiveRegion="polite">Loading Looks…</Text> : null}
     {status === 'failed' ? <Text accessibilityLiveRegion="polite">Could not load Looks. You can keep using navigation.</Text> : null}
     {status === 'ready' && looks.length === 0 ? <Text>No saved Looks yet.</Text> : null}
-    {looks.map(look => <View key={look.id} style={styles.cell}>{brokenImages.has(look.id) ? <Text accessibilityLiveRegion="polite" style={styles.imageNotice}>Preview unavailable for {look.id}.</Text> : <Image accessible accessibilityRole="image" accessibilityLabel={`Look image ${look.id}`} onError={() => setBrokenImages(current => new Set(current).add(look.id))} source={{ uri: look.image.url }} style={styles.thumbnail} />}<Pressable accessibilityRole="button" accessibilityLabel={`Look ${look.id}`} accessibilityHint="Selects this Look. Use Open Look for details." accessibilityState={{ selected: selected === look.id }} onPress={() => selectLook(look.id)} onLongPress={() => onOpenLook(look.id)} style={styles.button}><Text style={styles.buttonLabel}>Look created {look.createdAt}</Text></Pressable><Action label={`Open Look ${look.id}`} onPress={() => onOpenLook(look.id)} /></View>)}
+    {labeled.map(({ look, label }) => <View key={look.id} style={styles.cell}>{brokenImages.has(look.id) ? <Text accessibilityLiveRegion="polite" style={styles.imageNotice}>Preview unavailable for {label}.</Text> : <Image accessible accessibilityRole="image" accessibilityLabel={`${label} preview`} onError={() => setBrokenImages(current => new Set(current).add(look.id))} source={{ uri: look.image.url }} style={styles.thumbnail} />}<Pressable accessibilityRole="button" accessibilityLabel={label} accessibilityHint="Selects this Look. Use Open Look for details." accessibilityState={{ selected: selected === look.id }} onPress={() => selectLook(look.id)} onLongPress={() => onOpenLook(look.id)} style={styles.button}><Text style={styles.buttonLabel}>{label}</Text></Pressable></View>)}
     <Text accessibilityRole="header" style={styles.heading}>Recent generations</Text>
-    {recentGeneration ? <View accessibilityLiveRegion="polite"><Text accessibilityLabel={`Generation ${recentGeneration.generation.id}, ${recentGeneration.generation.status}${recentGeneration.generation.failureCode ? `, ${recentGeneration.generation.failureCode}` : ''}`}>Generation {recentGeneration.generation.id}: {recentGeneration.generation.status}{recentGeneration.generation.failureCode ? ` (${recentGeneration.generation.failureCode})` : ''}</Text>{recentGeneration.generation.lookId ? <Action label="Open generated Look" onPress={() => onOpenLook(recentGeneration.generation.lookId!)} /> : null}</View> : <Text>No recent generations yet.</Text>}
+    {recentGeneration ? <View accessibilityLiveRegion="polite"><Text>{`Last regeneration: ${recentGeneration.generation.status}${recentGeneration.generation.failureCode ? ` (${recentGeneration.generation.failureCode})` : ''}`}</Text>{recentGeneration.generation.lookId ? <Action label="Open generated Look" onPress={() => onOpenLook(recentGeneration.generation.lookId!)} /> : null}</View> : <Text>No recent generations yet.</Text>}
     <Action label={resumeSelected ? 'Resume regeneration' : 'Regenerate'} onPress={regenerate} disabled={disabled} busy={busy} />
     <Action label="Modify" onPress={() => selected && onModify(selected)} disabled={disabled} />
     {!selected ? <Text>Select a Look to regenerate or modify it.</Text> : null}
