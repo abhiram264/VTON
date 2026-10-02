@@ -9,6 +9,7 @@ import { collectionApi } from '../src/features/vault/collectionApi';
 import { looksApi } from '../src/features/looks/looksApi';
 import { studioApi } from '../src/features/studio/studioApi';
 import { generationApi } from '../src/features/generation/generationApi';
+import * as featureFlags from '../src/config/featureFlags';
 
 jest.mock('../src/features/vault/vaultApi', () => ({ vaultApi: { list: jest.fn() } }));
 jest.mock('../src/features/vault/collectionApi', () => ({ collectionApi: { list: jest.fn() } }));
@@ -139,12 +140,22 @@ test('regenerate handles response loss during polling and resumes without mintin
 });
 
 test('Apply command calls the Studio client with trimmed text', async () => {
-  jest.mocked(studioApi.command).mockResolvedValue({ sessionId: 'session-1', itemIds: [] });
-  await render(<StudioScreen studioSessionId="session-1" onAddFromVault={noop} onAvatar={noop} onGenerate={noop} onProfile={noop} />);
-  await fireEvent.changeText(screen.getByLabelText('Natural-language command'), '  remove the hat  ');
-  await fireEvent.press(screen.getByRole('button', { name: 'Apply command' }));
-  await waitFor(() => expect(studioApi.command).toHaveBeenCalledWith('session-1', 'remove the hat'));
-  expect(screen.getByLabelText('Natural-language command').props.value).toBe('');
+  // C22 defaults NATURAL_LANGUAGE_STUDIO off; this test exercises the NL
+  // command input, so enable just that capability here rather than changing
+  // the shipped default.
+  const flagSpy = jest
+    .spyOn(featureFlags, 'isFeatureEnabled')
+    .mockImplementation(name => name === 'NATURAL_LANGUAGE_STUDIO');
+  try {
+    jest.mocked(studioApi.command).mockResolvedValue({ sessionId: 'session-1', itemIds: [] });
+    await render(<StudioScreen studioSessionId="session-1" onAddFromVault={noop} onAvatar={noop} onGenerate={noop} onProfile={noop} />);
+    await fireEvent.changeText(screen.getByLabelText('Natural-language command'), '  remove the hat  ');
+    await fireEvent.press(screen.getByRole('button', { name: 'Apply command' }));
+    await waitFor(() => expect(studioApi.command).toHaveBeenCalledWith('session-1', 'remove the hat'));
+    expect(screen.getByLabelText('Natural-language command').props.value).toBe('');
+  } finally {
+    flagSpy.mockRestore();
+  }
 });
 
 test('Home loads recent Looks and opens the selected Look', async () => {
