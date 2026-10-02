@@ -72,6 +72,11 @@ public class LooksController {
 	private final AppIntegrityBoundary integrity;
 	private final GenerationApiProperties properties;
 	private final boolean providerAvailable;
+	/**
+	 * Best-effort C22 lifecycle seam. A deployment without the bean records nothing;
+	 * a metrics failure never affects the read (see {@link #recordLookViewed}).
+	 */
+	private final com.aifashionvault.analytics.ProductMetrics productMetrics;
 
 	public LooksController(
 		ObjectProvider<JdbcLookStore> lookStores,
@@ -106,10 +111,11 @@ public class LooksController {
 		ObjectProvider<Clock> clocks,
 		AppIntegrityVerifier verifier,
 		GenerationApiProperties properties,
-		VaultEnvironmentProperties vaultProperties
+		VaultEnvironmentProperties vaultProperties,
+		ObjectProvider<com.aifashionvault.analytics.ProductMetrics> productMetrics
 	) {
 		this(lookStores, objectStores, generationStores, clocks, verifier, properties,
-			FashnConfig.anyProviderConfigured(vaultProperties));
+			FashnConfig.anyProviderConfigured(vaultProperties), first(productMetrics));
 	}
 
 	LooksController(
@@ -121,6 +127,19 @@ public class LooksController {
 		GenerationApiProperties properties,
 		boolean providerAvailable
 	) {
+		this(lookStores, objectStores, generationStores, clocks, verifier, properties, providerAvailable, null);
+	}
+
+	LooksController(
+		ObjectProvider<JdbcLookStore> lookStores,
+		ObjectProvider<ObjectStore> objectStores,
+		ObjectProvider<GenerationStore> generationStores,
+		ObjectProvider<Clock> clocks,
+		AppIntegrityVerifier verifier,
+		GenerationApiProperties properties,
+		boolean providerAvailable,
+		com.aifashionvault.analytics.ProductMetrics productMetrics
+	) {
 		this.looks = first(lookStores);
 		this.objects = first(objectStores);
 		this.generations = first(generationStores);
@@ -128,6 +147,7 @@ public class LooksController {
 		this.clock = configured == null ? Clock.systemUTC() : configured;
 		this.properties = properties == null ? new GenerationApiProperties() : properties;
 		this.providerAvailable = providerAvailable;
+		this.productMetrics = productMetrics;
 		// Regeneration enqueues the same provider-cost generation job as POST /generations,
 		// so it carries the same attestation gate under the same generation flag. The
 		// boundary is a no-op while the flag is false and fail-closed once it is true; see
@@ -143,7 +163,12 @@ public class LooksController {
 
 	@GetMapping("/{id}")
 	public LookResource get(@AuthenticationPrincipal UserId ownerId, @PathVariable String id) {
-		return toResource(owned(ownerId, id));
+		LookResource resource = toResource(owned(ownerId, id));
+		// C22 lifecycle: a Look was reopened. Recorded only after the owner-scoped read
+		// succeeded, so a foreign/unknown id records nothing, and the payload is the coarse
+		// context only — never the image, a signed URL, or any source detail.
+		recordLookViewed();
+		return resource;
 	}
 
 	@PostMapping("/{id}/share-link")
@@ -366,6 +391,27 @@ public class LooksController {
 			.body(new GenerationProblemResponse(code));
 	}
 
+	/**
+	 * C22 "Look reopened" lifecycle event, best-effort: a deployment without the metrics
+	 * bean records nothing, and a metrics failure must never fail a read. The context is the
+	 * coarse, non-identifying shape {@link com.aifashionvault.analytics.ProductMetricContext}
+	 * defines — no image bytes, prompts, tokens or signed URLs.
+	 */
+	private void recordLookViewed() {
+		if (productMetrics == null) {
+			return;
+		}
+		try {
+			productMetrics.record(
+				com.aifashionvault.analytics.AnalyticsEventName.LOOK_VIEWED,
+				new com.aifashionvault.analytics.ProductMetricContext(
+					clock.instant(), null, null, null, null, null, null, null, null));
+		}
+		catch (RuntimeException ignored) {
+			// Observability is deliberately off the product critical path.
+		}
+	}
+
 	private static <T> T first(ObjectProvider<T> provider) {
 		try {
 			return provider.getIfAvailable();
@@ -374,7 +420,6 @@ public class LooksController {
 			return provider.orderedStream().findFirst().orElse(null);
 		}
 	}
-
 	private static final class NotFound extends RuntimeException {}
 	private static final class NotRegeneratable extends RuntimeException {}
 	private static final class MissingKey extends RuntimeException {}
