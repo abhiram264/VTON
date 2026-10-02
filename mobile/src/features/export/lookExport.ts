@@ -29,7 +29,11 @@ export interface LookExportStager {
   /** Downloads `url` into a bounded private temp file; resolves a local uri. */
   stageFromUrl(url: string, maxBytes: number): Promise<string>;
   /** Attaches the staged image to the OS share sheet. Optional on iOS. */
-  shareStaged?(uri: string): Promise<'shared' | 'dismissed' | 'failed'>;
+  shareStaged?(
+    uri: string,
+    mimeType?: string,
+    title?: string,
+  ): Promise<{action?: string}>;
   /** Copies a staged file into the photo library with minimal permission. */
   saveToPhotos?(uri: string): Promise<'saved' | 'denied' | 'failed'>;
   /** Removes one staged file. Must be safe to call on an absent file. */
@@ -137,12 +141,15 @@ export function createLookExporter(overrides: Partial<LookExportDeps> = {}) {
   ): Promise<LookExportOutcome> {
     // Prefer the native image share: React Native's Android Share is
     // text-only and would drop the image. Only platforms whose bridge omits
-    // shareStaged (iOS) fall back to React Native's file-URL share.
+    // shareStaged (iOS) fall back to React Native's file-URL share. The native
+    // bridge resolves React Native's vocabulary ({action:'sharedAction'} /
+    // 'dismissedAction'); Android has no delivery callback for a chooser, so a
+    // non-dismissed result honestly means "the sheet was shown".
     if (typeof stager.shareStaged === 'function') {
-      const result = await stager.shareStaged(uri);
-      if (result === 'shared') return {status: 'SHARED'};
-      if (result === 'dismissed') return {status: 'CANCELLED'};
-      return {status: 'SHARE_FAILED'};
+      const result = await stager.shareStaged(uri, 'image/jpeg', fileName);
+      return result?.action === 'dismissedAction'
+        ? {status: 'CANCELLED'}
+        : {status: 'SHARED'};
     }
     const fallback = await deps.rnShare({
       url: uri,

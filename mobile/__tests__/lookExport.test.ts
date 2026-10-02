@@ -23,7 +23,7 @@ function makeStager(overrides: Partial<LookExportStager> = {}) {
     },
     shareStaged: async uri => {
       sharedNatively.push(uri);
-      return 'shared';
+      return {action: 'sharedAction'};
     },
     saveToPhotos: async uri => {
       saved.push(uri);
@@ -92,7 +92,9 @@ describe('look export (C16)', () => {
   });
 
   test('maps a native share dismissal to a harmless cancel and still cleans staging', async () => {
-    const {stager, removed} = makeStager({shareStaged: async () => 'dismissed'});
+    const {stager, removed} = makeStager({
+      shareStaged: async () => ({action: 'dismissedAction'}),
+    });
     const exporter = exporterWith(stager);
 
     const outcome = await exporter.exportLook(
@@ -104,8 +106,12 @@ describe('look export (C16)', () => {
     expect(removed).toEqual([STAGED_URI]);
   });
 
-  test('maps a native share failure to SHARE_FAILED', async () => {
-    const {stager} = makeStager({shareStaged: async () => 'failed'});
+  test('maps a native share rejection to SHARE_FAILED and still cleans staging', async () => {
+    const {stager, removed} = makeStager({
+      shareStaged: async () => {
+        throw Object.assign(new Error('no app'), {code: 'E_EXPORT_NO_APP'});
+      },
+    });
     const exporter = exporterWith(stager);
 
     const outcome = await exporter.exportLook(
@@ -114,6 +120,7 @@ describe('look export (C16)', () => {
     );
 
     expect(outcome).toEqual({status: 'SHARE_FAILED'});
+    expect(removed).toEqual([STAGED_URI]);
   });
 
   test('falls back to React Native Share when the bridge omits shareStaged (iOS)', async () => {
