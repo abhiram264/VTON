@@ -1,9 +1,10 @@
 import { createBottomTabNavigator, type BottomTabBarButtonProps, type BottomTabScreenProps } from '@react-navigation/bottom-tabs';
 import { useFocusEffect, type CompositeScreenProps } from '@react-navigation/native';
 import { createNativeStackNavigator, type NativeStackScreenProps } from '@react-navigation/native-stack';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
 import { useEffect, useState, type ReactNode } from 'react';
 import { subscribeToAuthSession, type AuthSession } from '../config/firebase';
+import { trackAccountIsolation } from '../features/auth/accountSession';
 import SignInScreen from '../screens/SignInScreen';
 import GenerateScreen from '../screens/GenerateScreen';
 import HomeScreen from '../screens/HomeScreen';
@@ -11,6 +12,7 @@ import LookScreen from '../screens/LookScreen';
 import LooksScreen from '../screens/LooksScreen';
 import MyModelScreen from '../screens/MyModelScreen';
 import ShareImportScreen from '../screens/ShareImportScreen';
+import SettingsScreen from '../screens/SettingsScreen';
 import StudioScreen from '../screens/StudioScreen';
 import VaultScreen from '../screens/VaultScreen';
 import type { SharePayload } from '../features/share/types';
@@ -74,15 +76,46 @@ function MainTabs() {
     </Tabs.Navigator>
   );
 }
-function ProfileSettings({ navigation }: NativeStackScreenProps<RootStackParamList, 'ProfileSettings'>) {
-  return <View><Pressable accessibilityRole="button" accessibilityLabel="Back" onPress={navigation.goBack}><Text>Back</Text></Pressable><MyModelScreen onCreateLook={() => navigation.navigate('Generate')} /></View>;
+// The account settings surface (C03). It previously rendered My Model, which
+// left the app with no sign-out control; My Model stays reachable through its
+// own `MyModel` stack route.
+function ProfileSettings({
+  navigation,
+  session,
+}: {
+  navigation: NativeStackScreenProps<RootStackParamList, 'ProfileSettings'>['navigation'];
+  session: AuthSession;
+}) {
+  return (
+    <SettingsScreen
+      session={session}
+      onBack={navigation.goBack}
+      onOpenMyModel={() => navigation.navigate('MyModel')}
+    />
+  );
 }
 
 // Leading `loading` is the no-flash contract: a restored session never shows
 // the sign-in screen because the first committed state is the holding view.
+//
+// The same subscription also drives the account-isolation seam: the transition
+// INTO `signed-out` — whether the user asked (sign-out) or the session ended
+// without them (expiry, revocation, a backend that rejects the token) — clears
+// the account-bound local pointers, so a second account never inherits the
+// first account's active-generation pointer or flag overrides. `signed-in`
+// never clears, so a live session keeps its state.
 function useAuthSession(): AuthSession {
   const [session, setSession] = useState<AuthSession>({ status: 'loading' });
-  useEffect(() => subscribeToAuthSession(setSession), []);
+  useEffect(
+    () =>
+      trackAccountIsolation(listener =>
+        subscribeToAuthSession(next => {
+          listener(next);
+          setSession(next);
+        }),
+      ),
+    [],
+  );
   return session;
 }
 
@@ -119,7 +152,9 @@ export default function RootNavigator({ session: injectedSession }: { session?: 
       <Stack.Screen name="MainTabs" options={{ headerShown: false }}>
         {() => <SessionGate session={session} signedIn={<MainTabs />} />}
       </Stack.Screen>
-      <Stack.Screen name="ProfileSettings" component={ProfileSettings} options={{ title: 'Profile and settings', headerShown: false }} />
+      <Stack.Screen name="ProfileSettings" options={{ title: 'Profile and settings', headerShown: false }}>
+        {({ navigation }) => <ProfileSettings navigation={navigation} session={session} />}
+      </Stack.Screen>
       <Stack.Screen name="MyModel">
         {({ navigation }) => <MyModelScreen onCreateLook={() => navigation.navigate('Generate')} />}
       </Stack.Screen>
