@@ -106,3 +106,4 @@ $RECYCLE.BIN/
 .scratch/
 __pycache__/
 .opencode/
+swarm/
