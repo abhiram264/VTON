@@ -2,6 +2,8 @@ package com.aifashionvault.platform.web;
 
 import java.time.Clock;
 import java.time.Instant;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -15,6 +17,7 @@ import com.aifashionvault.generation.FrozenSingleItemIntent;
 import com.aifashionvault.generation.GenerationJob;
 import com.aifashionvault.generation.GenerationStore;
 import com.aifashionvault.generation.RetryPolicySnapshot;
+import com.aifashionvault.generation.vton.VtonMode;
 import com.aifashionvault.platform.objectstore.ClaimResult;
 import com.aifashionvault.platform.objectstore.GenerationMediaStore;
 import com.aifashionvault.platform.objectstore.ObjectStoreExceptions;
@@ -23,8 +26,10 @@ import com.aifashionvault.shared.AvatarImageId;
 import com.aifashionvault.shared.ClientRequestId;
 import com.aifashionvault.shared.GenerationJobId;
 import com.aifashionvault.shared.MediaAssetId;
+import com.aifashionvault.shared.StudioSessionId;
 import com.aifashionvault.shared.UploadId;
 import com.aifashionvault.shared.UserId;
+import com.aifashionvault.shared.VaultItemId;
 
 public class GenerationCreationService {
 
@@ -38,6 +43,26 @@ public class GenerationCreationService {
 	static final String PRODUCT_UPLOAD_ALREADY_CLAIMED = "PRODUCT_UPLOAD_ALREADY_CLAIMED";
 	static final String GENERATION_NOT_CANCELLABLE = "GENERATION_NOT_CANCELLABLE";
 	static final String ADMISSION_PAUSED = "ADMISSION_PAUSED";
+	static final String CREATE_OUTCOME_UNKNOWN = "CREATE_OUTCOME_UNKNOWN";
+	static final String GENERATION_MEDIA_UNAVAILABLE = "GENERATION_MEDIA_UNAVAILABLE";
+	static final String GENERATION_PROVIDER_UNAVAILABLE = "GENERATION_PROVIDER_UNAVAILABLE";
+	/** Studio multi-item create is capability-gated off by default (vault.generation.multi-item-enabled). */
+	static final String MULTI_ITEM_DISABLED = "MULTI_ITEM_DISABLED";
+	static final String MULTI_ITEM_INVALID = "MULTI_ITEM_INVALID";
+	/**
+	 * Request-shape guard only. The authoritative product-count ceiling is the
+	 * admission policy applied inside {@code createAccepted} (PRODUCT_LIMIT); this
+	 * bounds the validation work a single malformed request can force.
+	 */
+	static final int MAX_MULTI_ITEMS = 64;
+	static final String DEFAULT_MULTI_MODE = "standard";
+
+	/**
+	 * Upper bound on the recovery list. The bound is a response-size guard, not a
+	 * quota: it keeps one owner's history from growing a single response without
+	 * limit. Recovery only needs the most recent window.
+	 */
+	static final int MAX_RECENT_GENERATIONS = 50;
 
     private final GenerationStore store;
     private final JdbcTemplate jdbc;
@@ -46,6 +71,12 @@ public class GenerationCreationService {
     private final GenerationMediaStore mediaStore;
     private final com.aifashionvault.admission.GenerationRateLimiter rateLimiter;
     private final com.aifashionvault.platform.generation.GenerationMetrics metrics;
+    private final boolean providerAvailable;
+    /**
+     * Best-effort C22 lifecycle seam. A deployment without the bean records nothing; a
+     * metrics failure never affects the create (see {@link #recordGenerationAdmitted}).
+     */
+    private final com.aifashionvault.analytics.ProductMetrics productMetrics;
 
     public GenerationCreationService(GenerationStore store, JdbcTemplate jdbc, GenerationApiProperties properties, Clock clock,
         GenerationMediaStore mediaStore) {
@@ -60,6 +91,19 @@ public class GenerationCreationService {
     public GenerationCreationService(GenerationStore store, JdbcTemplate jdbc, GenerationApiProperties properties, Clock clock,
         GenerationMediaStore mediaStore, com.aifashionvault.admission.GenerationRateLimiter rateLimiter,
         com.aifashionvault.platform.generation.GenerationMetrics metrics) {
+        this(store, jdbc, properties, clock, mediaStore, rateLimiter, metrics, true);
+    }
+
+    public GenerationCreationService(GenerationStore store, JdbcTemplate jdbc, GenerationApiProperties properties, Clock clock,
+        GenerationMediaStore mediaStore, com.aifashionvault.admission.GenerationRateLimiter rateLimiter,
+        com.aifashionvault.platform.generation.GenerationMetrics metrics, boolean providerAvailable) {
+        this(store, jdbc, properties, clock, mediaStore, rateLimiter, metrics, providerAvailable, null);
+    }
+
+    public GenerationCreationService(GenerationStore store, JdbcTemplate jdbc, GenerationApiProperties properties, Clock clock,
+        GenerationMediaStore mediaStore, com.aifashionvault.admission.GenerationRateLimiter rateLimiter,
+        com.aifashionvault.platform.generation.GenerationMetrics metrics, boolean providerAvailable,
+        com.aifashionvault.analytics.ProductMetrics productMetrics) {
         this.store = store;
         this.jdbc = jdbc;
         this.properties = properties;
@@ -67,6 +111,8 @@ public class GenerationCreationService {
         this.mediaStore = mediaStore;
         this.rateLimiter = rateLimiter;
         this.metrics = metrics;
+        this.providerAvailable = providerAvailable;
+        this.productMetrics = productMetrics;
     }
 
     public GenerationResponse create(UserId userId, String idempotencyKey, GenerationRequest request) {
@@ -78,6 +124,7 @@ public class GenerationCreationService {
         if (idempotencyKey.strip().length() > 255) throw problem(HttpStatus.BAD_REQUEST, MISSING_IDEMPOTENCY_KEY);
         if (request == null || request.productUploadId() == null) throw problem(HttpStatus.BAD_REQUEST, PRODUCT_UPLOAD_MISSING);
         if (properties.isAdmissionPaused()) throw problem(HttpStatus.SERVICE_UNAVAILABLE, ADMISSION_PAUSED);
+        if (!providerAvailable) throw problem(HttpStatus.SERVICE_UNAVAILABLE, GENERATION_PROVIDER_UNAVAILABLE);
         ResolvedAvatar avatar = resolveCurrentAvatar(userId);
         String key = idempotencyKey.strip();
         String fingerprint = fingerprint(userId, avatar.imageId(), request.productUploadId());
@@ -86,6 +133,9 @@ public class GenerationCreationService {
                 if (!fingerprint.equals(existing.requestFingerprint())) throw problem(HttpStatus.CONFLICT, IDEMPOTENCY_KEY_CONFLICT);
                 return toResponse(existing);
             }
+        }
+        if (mediaStore == null) {
+            throw problem(HttpStatus.SERVICE_UNAVAILABLE, GENERATION_MEDIA_UNAVAILABLE);
         }
         Instant now = clock.instant();
         UUID generationId = UUID.randomUUID();
@@ -102,6 +152,7 @@ public class GenerationCreationService {
 			if (!reservation.decision().allowed()) throw problem(HttpStatus.TOO_MANY_REQUESTS, reservation.decision().reason());
 		}
 		boolean claimed = false;
+		boolean accepted = false;
 		try {
 			ClaimResult claim = mediaStore.claimProductInput(claimCommand);
 			if (claim instanceof ClaimResult.Conflict) throw problem(HttpStatus.CONFLICT, PRODUCT_UPLOAD_ALREADY_CLAIMED);
@@ -116,32 +167,266 @@ public class GenerationCreationService {
 			FrozenSingleItemIntent intent = new FrozenSingleItemIntent(job.id(), userId, avatar.imageId(), productMediaId, 1, 1);
 			GenerationResponse response = switch (store.createSingleItem(command, intent, job)) {
 				case GenerationStore.CreateSingleItemResult.Created created -> {
+					if (reservation != null) {
+						rateLimiter.commit(reservation);
+						reservation = null;
+					}
+					claimed = false;
 					if (metrics != null) {
 						metrics.recordGenerationCount();
 					}
+					recordGenerationAdmitted(1);
+					accepted = true;
 					yield toResponse(created.job());
 				}
-				case GenerationStore.CreateSingleItemResult.Replayed replayed -> toResponse(replayed.job());
+				case GenerationStore.CreateSingleItemResult.Replayed replayed -> {
+					RuntimeException cleanup = null;
+					if (claimed && mediaStore != null) {
+						claimed = false;
+						try { mediaStore.releaseProductInput(claimCommand); }
+						catch (RuntimeException compensation) { cleanup = compensation; }
+					}
+					if (reservation != null) {
+						com.aifashionvault.admission.GenerationRateLimiter.Reservation replayReservation = reservation;
+						reservation = null;
+						try { rateLimiter.release(replayReservation); }
+						catch (RuntimeException compensation) {
+							if (cleanup == null) cleanup = compensation;
+							else cleanup.addSuppressed(compensation);
+						}
+					}
+					if (cleanup != null) throw cleanup;
+					yield toResponse(replayed.job());
+				}
 				case GenerationStore.CreateSingleItemResult.FingerprintConflict ignored -> throw problem(HttpStatus.CONFLICT, IDEMPOTENCY_KEY_CONFLICT);
 				case GenerationStore.CreateSingleItemResult.ProductUploadAlreadyClaimed ignored -> throw problem(HttpStatus.CONFLICT, PRODUCT_UPLOAD_ALREADY_CLAIMED);
 			};
-			if (reservation != null) rateLimiter.commit(reservation);
 			return response;
 		}
 		catch (RuntimeException failure) {
+			if (accepted) {
+				throw failure;
+			}
+			boolean durableJobExists;
+			try {
+				durableJobExists = durableJobExists(userId, key, fingerprint);
+			}
+			catch (RuntimeException lookupEx) {
+				Problem unknown = problem(HttpStatus.SERVICE_UNAVAILABLE, CREATE_OUTCOME_UNKNOWN);
+				unknown.addSuppressed(lookupEx);
+				unknown.initCause(failure);
+				throw unknown;
+			}
+			if (durableJobExists) {
+				Problem unknown = problem(HttpStatus.SERVICE_UNAVAILABLE, CREATE_OUTCOME_UNKNOWN);
+				unknown.initCause(failure);
+				throw unknown;
+			}
 			if (claimed) releaseClaim(claimCommand, failure);
 			if (reservation != null) releaseReservation(reservation, failure);
 			throw failure;
 		}
  	}
 
+	/**
+	 * Studio-based multi-item create (C12). Freezes the avatar revision, the ordered
+	 * owned Vault items, the mode and the request identity into ONE durable accepted
+	 * intent through the same pipeline the manual path uses: {@code createAccepted}
+	 * builds a one-product-per-step render plan in submitted order, applies the
+	 * admission policy (product count, rolling and active caps), reserves quota and
+	 * enqueues exactly one work-outbox row, and replays by client request id.
+	 *
+	 * <p>Every rejection below happens BEFORE any job, quota reservation or outbox
+	 * row is written, so a rejected request cannot reserve spend or leak foreign
+	 * item existence (a foreign/unknown item and an unknown item are both 404).</p>
+	 */
+	public GenerationResponse createMulti(UserId userId, String idempotencyKey, GenerationMultiRequest request,
+			String deviceId, String ipAddress) {
+		if (idempotencyKey == null || idempotencyKey.isBlank() || idempotencyKey.strip().length() > 255) {
+			throw problem(HttpStatus.BAD_REQUEST, MISSING_IDEMPOTENCY_KEY);
+		}
+		if (!properties.isMultiItemEnabled()) {
+			throw problem(HttpStatus.SERVICE_UNAVAILABLE, MULTI_ITEM_DISABLED);
+		}
+		if (request == null || request.productVaultItemIds() == null || request.productVaultItemIds().isEmpty()
+				|| request.productVaultItemIds().size() > MAX_MULTI_ITEMS) {
+			throw problem(HttpStatus.BAD_REQUEST, MULTI_ITEM_INVALID);
+		}
+		List<VaultItemId> items = new java.util.ArrayList<>(request.productVaultItemIds().size());
+		for (UUID raw : request.productVaultItemIds()) {
+			if (raw == null) {
+				throw problem(HttpStatus.BAD_REQUEST, MULTI_ITEM_INVALID);
+			}
+			items.add(new VaultItemId(raw));
+		}
+		if (new HashSet<>(items).size() != items.size()) {
+			throw problem(HttpStatus.BAD_REQUEST, MULTI_ITEM_INVALID);
+		}
+		String mode = normalizeMultiMode(request.mode());
+		if (properties.isAdmissionPaused()) {
+			throw problem(HttpStatus.SERVICE_UNAVAILABLE, ADMISSION_PAUSED);
+		}
+		if (!providerAvailable) {
+			throw problem(HttpStatus.SERVICE_UNAVAILABLE, GENERATION_PROVIDER_UNAVAILABLE);
+		}
+		ResolvedAvatar avatar = resolveCurrentAvatar(userId);
+		// One owner-scoped existence check for the whole ordered set: a mismatch means
+		// at least one item is foreign or absent, reported as the same non-disclosing 404.
+		String placeholders = String.join(",", Collections.nCopies(items.size(), "?"));
+		Object[] args = new Object[items.size() + 1];
+		args[0] = userId.value();
+		for (int i = 0; i < items.size(); i++) {
+			args[i + 1] = items.get(i).value();
+		}
+		Integer owned = jdbc.queryForObject(
+			"SELECT COUNT(*) FROM vault_item WHERE user_id = ? AND id IN (" + placeholders + ")",
+			Integer.class, args);
+		if (owned == null || owned != items.size()) {
+			throw problem(HttpStatus.NOT_FOUND, NOT_FOUND);
+		}
+		StudioSessionId studioSessionId = null;
+		if (request.studioSessionId() != null) {
+			Integer ownedSession = jdbc.queryForObject(
+				"SELECT COUNT(*) FROM studio_session WHERE id = ? AND user_id = ?",
+				Integer.class, request.studioSessionId(), userId.value());
+			if (ownedSession == null || ownedSession != 1) {
+				throw problem(HttpStatus.NOT_FOUND, NOT_FOUND);
+			}
+			studioSessionId = new StudioSessionId(request.studioSessionId());
+		}
+		String key = idempotencyKey.strip();
+		String fingerprint = multiFingerprint(userId, avatar.imageId(), mode, items);
+		for (GenerationJob existing : store.listJobsByUser(userId)) {
+			if (existing.clientRequestId() != null && key.equals(existing.clientRequestId().value())) {
+				if (!fingerprint.equals(existing.requestFingerprint())) {
+					throw problem(HttpStatus.CONFLICT, IDEMPOTENCY_KEY_CONFLICT);
+				}
+				return toResponse(existing);
+			}
+		}
+		Instant now = clock.instant();
+		// Same abuse-control admission as the manual path (C19: every generation entry
+		// point shares one admission policy). Reserved only after validation and only
+		// for a genuinely new intent; released on replay or on any failure so a
+		// rejected request cannot burn a slot.
+		com.aifashionvault.admission.GenerationRateLimiter.Reservation reservation = null;
+		if (rateLimiter != null) {
+			String safeDevice = deviceId == null || deviceId.isBlank() ? "http-session" : deviceId;
+			String safeIp = ipAddress == null || ipAddress.isBlank() ? "unknown" : ipAddress;
+			reservation = rateLimiter.reserve(new com.aifashionvault.admission.GenerationAdmissionRequest(
+				userId, safeDevice, safeIp, com.aifashionvault.admission.GenerationRiskTier.ORDINARY, now));
+			if (!reservation.decision().allowed()) {
+				throw problem(HttpStatus.TOO_MANY_REQUESTS, reservation.decision().reason());
+			}
+		}
+		GenerationJob job = new GenerationJob(
+			new GenerationJobId(UUID.randomUUID()), userId, studioSessionId, GenerationJob.QUEUED, mode,
+			new ClientRequestId(key), now, null, avatar.imageId(), List.copyOf(items), null, null,
+			fingerprint, avatar.revision(), 0, now, null, 1, items.size(), 1,
+			now.plus(GenerationJob.ORCHESTRATION_DEADLINE), null,
+			RetryPolicySnapshot.forStepCountV2(items.size()), Optional.empty());
+		GenerationStore.CreateAcceptedResult outcome;
+		try {
+			outcome = store.createAccepted(job);
+		}
+		catch (RuntimeException failure) {
+			if (reservation != null) {
+				releaseReservation(reservation, failure);
+			}
+			throw failure;
+		}
+		return switch (outcome) {
+			case GenerationStore.CreateAcceptedResult.Created created -> {
+				if (reservation != null) {
+					rateLimiter.commit(reservation);
+				}
+				if (metrics != null) {
+					metrics.recordGenerationCount();
+				}
+				recordGenerationAdmitted(items.size());
+				yield toResponse(created.job());
+			}
+			case GenerationStore.CreateAcceptedResult.Replayed replayed -> {
+				if (reservation != null) {
+					rateLimiter.release(reservation);
+				}
+				yield toResponse(replayed.job());
+			}
+			case GenerationStore.CreateAcceptedResult.FingerprintConflict ignored -> {
+				if (reservation != null) {
+					rateLimiter.release(reservation);
+				}
+				throw problem(HttpStatus.CONFLICT, IDEMPOTENCY_KEY_CONFLICT);
+			}
+			case GenerationStore.CreateAcceptedResult.QuotaRejected rejected -> {
+				if (reservation != null) {
+					rateLimiter.release(reservation);
+				}
+				throw problem(HttpStatus.TOO_MANY_REQUESTS, rejected.reason());
+			}
+		};
+	}
+
+	/**
+	 * C22 "generation admitted" lifecycle event, best-effort: recorded only when the store
+	 * actually CREATED the intent (a replay/conflict/quota rejection admits nothing), and the
+	 * payload is the coarse, non-identifying context — never a photo, prompt, token or signed
+	 * URL. A missing bean or a metrics failure never affects the create.
+	 */
+	private void recordGenerationAdmitted(int itemCount) {
+		if (productMetrics == null) {
+			return;
+		}
+		try {
+			productMetrics.record(
+				com.aifashionvault.analytics.AnalyticsEventName.GENERATION_REQUESTED,
+				new com.aifashionvault.analytics.ProductMetricContext(
+					clock.instant(), null, null, null, null, null, null, (long) itemCount, null));
+		}
+		catch (RuntimeException ignored) {
+			// Observability is deliberately off the product critical path.
+		}
+	}
+
+    /** Normalizes the requested mode through the same value object the worker uses. */
+    private static String normalizeMultiMode(String mode) {
+		if (mode == null || mode.isBlank()) {
+			return DEFAULT_MULTI_MODE;
+		}
+		try {
+			return new VtonMode(mode).value();
+		}
+		catch (IllegalArgumentException ex) {
+			throw problem(HttpStatus.BAD_REQUEST, MULTI_ITEM_INVALID);
+		}
+	}
+
+	/**
+	 * Order-sensitive identity of the frozen multi-item intent: the same key with the
+	 * same avatar revision, mode and item ORDER replays; any difference conflicts.
+	 */
+	private static String multiFingerprint(UserId userId, AvatarImageId avatar, String mode, List<VaultItemId> items) {
+		StringBuilder builder = new StringBuilder()
+			.append(userId.value()).append('|')
+			.append(avatar.value()).append('|')
+			.append(mode);
+		for (VaultItemId item : items) {
+			builder.append('|').append(item.value());
+		}
+		return builder.toString();
+	}
+
 	private void preflight(ProductInputClaimCommand command) {
+		if (mediaStore == null) {
+			throw problem(HttpStatus.SERVICE_UNAVAILABLE, GENERATION_MEDIA_UNAVAILABLE);
+		}
 		try { mediaStore.preflightProductInput(command); }
 		catch (ObjectStoreExceptions.StagedObjectMissingException ex) { throw problem(HttpStatus.UNPROCESSABLE_ENTITY, PRODUCT_UPLOAD_MISSING); }
 		catch (ObjectStoreExceptions.ImageValidationException | IllegalArgumentException ex) { throw problem(HttpStatus.UNPROCESSABLE_ENTITY, MALFORMED_REQUEST); }
 	}
 
 	private void releaseClaim(ProductInputClaimCommand command, RuntimeException failure) {
+		if (mediaStore == null) return;
 		try { mediaStore.releaseProductInput(command); }
 		catch (RuntimeException compensation) { failure.addSuppressed(compensation); }
 	}
@@ -151,7 +436,40 @@ public class GenerationCreationService {
 		catch (RuntimeException compensation) { failure.addSuppressed(compensation); }
 	}
 
+	private boolean durableJobExists(UserId userId, String key, String fingerprint) {
+		for (GenerationJob existing : store.listJobsByUser(userId)) {
+			if (existing.clientRequestId() != null
+					&& key.equals(existing.clientRequestId().value())
+					&& fingerprint.equals(existing.requestFingerprint())) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	public GenerationResponse get(UserId userId, String generationId) { return toResponse(requireOwnedJob(userId, generationId)); }
+
+	/**
+	 * Recent generations for one owner, newest first and bounded.
+	 *
+	 * <p>This is the server-backed recovery surface the client needs: after a
+	 * process restart the app must rebuild its in-flight/recent state from the
+	 * server, not from a process-local variable that died with the process.
+	 * Owner scoping comes from the store query, so a caller can only ever see
+	 * its own rows.</p>
+	 */
+	public List<GenerationResponse> list(UserId userId) {
+		if (userId == null) {
+			throw problem(HttpStatus.UNAUTHORIZED, NOT_FOUND);
+		}
+		List<GenerationJob> jobs = store.listJobsByUser(userId);
+		int from = Math.max(0, jobs.size() - MAX_RECENT_GENERATIONS);
+		List<GenerationResponse> recent = new java.util.ArrayList<>(jobs.size() - from);
+		for (int index = jobs.size() - 1; index >= from; index--) {
+			recent.add(toResponse(jobs.get(index)));
+		}
+		return List.copyOf(recent);
+	}
 
 	public GenerationResponse cancel(UserId userId, String generationId) {
 		GenerationJob job = requireOwnedJob(userId, generationId);

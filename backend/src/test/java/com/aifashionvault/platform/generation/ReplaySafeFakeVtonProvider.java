@@ -57,7 +57,7 @@ public final class ReplaySafeFakeVtonProvider implements VtonProvider {
 			Map.of(
 				new VtonMode("try-on"),
 				new ModeCapabilities(
-					Set.of(new ItemCategory("garment")),
+					Set.of(new ItemCategory("garment"), new ItemCategory("clothing")),
 					4,
 					false,
 					InputSizeLimit.unknown())),

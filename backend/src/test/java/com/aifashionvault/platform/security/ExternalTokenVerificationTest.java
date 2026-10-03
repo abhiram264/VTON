@@ -275,6 +275,7 @@ class ExternalTokenVerificationTest {
 			null,
 			null,
 			null,
+			null,
 			new VaultEnvironmentProperties.Firebase("demo-ai-fashion-vault"),
 			null);
 	}

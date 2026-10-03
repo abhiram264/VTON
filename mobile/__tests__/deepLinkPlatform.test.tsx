@@ -1,9 +1,57 @@
 import { act, render, screen } from '@testing-library/react-native';
 import App from '../App';
 import { Linking, NativeModules, Platform } from 'react-native';
+import fs from 'fs';
+import path from 'path';
 import * as featureFlags from '../src/config/featureFlags';
-import { generationApi } from '../src/features/generation/generationApi';
+import { looksApi } from '../src/features/looks/looksApi';
 import type { SharePayload } from '../src/features/share/types';
+
+// Native deep-link registration. The handlers above only ever see a URL the
+// OS already routed to this app, so a link whose scheme is not registered
+// natively is a dead end that no JS assertion can observe: the injected
+// Linking events would still navigate. These read the real shipped platform
+// configuration on BOTH platforms and prove the frozen links are routable.
+const ANDROID_MANIFEST = path.join(
+  __dirname,
+  '..',
+  'android',
+  'app',
+  'src',
+  'main',
+  'AndroidManifest.xml',
+);
+const IOS_INFO_PLIST = path.join(
+  __dirname,
+  '..',
+  'ios',
+  'AIFashionVault',
+  'Info.plist',
+);
+
+// Every `<data android:scheme="s" android:host="h" />` pair, as `s://h`.
+function androidRegisteredUriHosts(): Set<string> {
+  const manifest = fs.readFileSync(ANDROID_MANIFEST, 'utf8');
+  return new Set(
+    Array.from(
+      manifest.matchAll(/android:scheme="([^"]+)"\s+android:host="([^"]+)"/g),
+      (match: RegExpMatchArray) => `${match[1]}://${match[2]}`,
+    ),
+  );
+}
+
+// Every scheme in each CFBundleURLTypes -> CFBundleURLSchemes array entry.
+function iosRegisteredSchemes(): Set<string> {
+  const plist = fs.readFileSync(IOS_INFO_PLIST, 'utf8');
+  return new Set(
+    Array.from(
+      plist.matchAll(
+        /CFBundleURLSchemes<\/key>\s*<array>\s*<string>([^<]+)<\/string>/g,
+      ),
+      (match: RegExpMatchArray) => match[1],
+    ),
+  );
+}
 
 // Mock Platform.OS as android in this file only per frozen decisions.
 Platform.OS = 'android';
@@ -61,15 +109,15 @@ async function flush() {
 
 function spyGetLook(): jest.Mock {
   return jest
-    .spyOn(generationApi, 'getLook')
+    .spyOn(looksApi, 'get')
     .mockReturnValue(
       new Promise<never>(() => undefined),
     ) as unknown as jest.Mock;
 }
 
 beforeEach(() => {
-  // Keep any in-flight import request pending forever so routing tests stay
-  // on the "Preparing shared item" surface instead of rejecting into a failure view.
+  // Routing tests use the mounted fail-closed API config; assert the honest
+  // unavailable state instead of fabricating configured auth.
   globalThis.fetch = (() => new Promise<Response>(() => {})) as typeof fetch;
   linkHandlerListeners.length = 0;
   addEventListenerMock.mockImplementation(
@@ -162,7 +210,7 @@ describe('Android share-import flag-on consumption and navigation', () => {
 
     expect(consumeShareMock()).toHaveBeenCalledTimes(1);
     expect(consumeShareMock()).toHaveBeenCalledWith(shareId);
-    expect(await screen.findByText('Preparing shared item')).toBeTruthy();
+    expect(await screen.findByText('Could not prepare the shared item')).toBeTruthy();
   });
 
   test('cold-start initial URL with SHARE_IMPORT_ANDROID on consumes and navigates identically', async () => {
@@ -183,7 +231,7 @@ describe('Android share-import flag-on consumption and navigation', () => {
 
     expect(consumeShareMock()).toHaveBeenCalledTimes(1);
     expect(consumeShareMock()).toHaveBeenCalledWith(shareId);
-    expect(await screen.findByText('Preparing shared item')).toBeTruthy();
+    expect(await screen.findByText('Could not prepare the shared item')).toBeTruthy();
   });
 
   test('concurrent duplicate delivery and later replay of the same share id consumes at most once', async () => {
@@ -214,7 +262,7 @@ describe('Android share-import flag-on consumption and navigation', () => {
 
     expect(consumeShareMock()).toHaveBeenCalledTimes(1);
     expect(consumeShareMock()).toHaveBeenCalledWith(shareId);
-    expect(await screen.findByText('Preparing shared item')).toBeTruthy();
+    expect(await screen.findByText('Could not prepare the shared item')).toBeTruthy();
   });
 
   test('typed consume failure codes never navigate and mark the id final (no replay)', async () => {
@@ -449,5 +497,46 @@ describe('Android handling privacy (ADR-015)', () => {
     infoSpy.mockRestore();
     warnSpy.mockRestore();
     errorSpy.mockRestore();
+  });
+});
+
+// A link is only reachable if the OS hands it to the app. These assertions
+// read the real shipped native configuration, so they fail when a scheme the
+// JS handlers accept is registered on one platform but not the other — the
+// dead end no Linking mock can reproduce.
+describe('Native deep-link registration (both platforms)', () => {
+  test('the share handoff URI the JS handler accepts is registered on Android', () => {
+    // linkHandler.ts -> extractShareId requires aifashionvault://share-import/{id}
+    expect(androidRegisteredUriHosts().has('aifashionvault://share-import')).toBe(true);
+  });
+
+  test('the share handoff scheme is registered on iOS', () => {
+    // types.ts:47-48 requires the aifashionvault scheme.
+    expect(iosRegisteredSchemes().has('aifashionvault')).toBe(true);
+  });
+
+  test('the frozen look deep link fashionvault://looks/{id} is registered on Android', () => {
+    // PRD docs/VTON-PRD.md:241 freezes fashionvault://looks/<UUID>; without
+    // this intent filter a notification tap opens nothing on Android.
+    expect(androidRegisteredUriHosts().has('fashionvault://looks')).toBe(true);
+  });
+
+  test('the frozen look deep link scheme is registered on iOS', () => {
+    expect(iosRegisteredSchemes().has('fashionvault')).toBe(true);
+  });
+
+  test('every scheme the JS link handlers accept is registered natively on both platforms', () => {
+    // Nothing in the JS handlers may accept a URI the OS will not route:
+    // a look link that works on iOS and is a dead end on Android is exactly
+    // the cross-platform drift these assertions exist to catch.
+    const androidHosts = androidRegisteredUriHosts();
+    const iosSchemes = iosRegisteredSchemes();
+
+    // fashionvault://looks/{id}
+    expect(androidHosts.has('fashionvault://looks')).toBe(true);
+    expect(iosSchemes.has('fashionvault')).toBe(true);
+    // aifashionvault://share-import/{id}
+    expect(androidHosts.has('aifashionvault://share-import')).toBe(true);
+    expect(iosSchemes.has('aifashionvault')).toBe(true);
   });
 });

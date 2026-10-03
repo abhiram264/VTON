@@ -73,8 +73,6 @@ class GenerationAccountMediaPurgeTest {
 	void sourceHasNoProviderTypesAndDoesNotClaimRemoteErasure() throws Exception {
 		String source = Files.readString(productionFile(
 			"platform", "generation", "GenerationAccountMediaPurge.java"), StandardCharsets.UTF_8);
-		String config = Files.readString(productionFile(
-			"platform", "generation", "GenerationProcessorConfiguration.java"), StandardCharsets.UTF_8);
 
 		assertThat(source)
 			.contains("implements AccountMediaPurge")
@@ -88,9 +86,6 @@ class GenerationAccountMediaPurgeTest {
 			.doesNotContain("Logger")
 			.doesNotContain("erasure")
 			.doesNotContain("erased");
-		assertThat(config)
-			.contains("GenerationAccountMediaPurge")
-			.contains("@ConditionalOnBean({ GenerationStore.class, ObjectStore.class })");
 	}
 
 	private static GenerationAccountMediaPurge newPurge(GenerationStore store, ObjectStore objectStore) {

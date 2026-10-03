@@ -10,8 +10,8 @@ public record StorageKey(String value) {
 		}
 		String stripped = value.strip();
 		String lower = stripped.toLowerCase(Locale.ROOT);
-		if (lower.startsWith("http://") || lower.startsWith("https://")) {
-			throw new IllegalArgumentException("storage key must not be a URL");
+		if (stripped.contains("://")) {
+			throw new IllegalArgumentException("storage key must not be a URI");
 		}
 		if (lower.startsWith("data:")) {
 			throw new IllegalArgumentException("storage key must not be a data URI");

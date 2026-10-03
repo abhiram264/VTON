@@ -98,7 +98,9 @@ class ObjectStoreTypesTest {
 	@Test
 	void listingDefaultsAreEmptyAndExposeOnlyStableMetadata() {
 		ObjectStore objectStore = defaultMethodsOnly(ObjectStore.class);
-		assertThat(objectStore.list(StorageDomain.AVATAR, "users/")).isEmpty();
+		assertThatThrownBy(() -> objectStore.list(StorageDomain.AVATAR, "users/"))
+			.isInstanceOf(UnsupportedOperationException.class)
+			.hasMessageContaining("cannot list AVATAR");
 
 		AvatarMediaAccess avatarMediaAccess = defaultMethodsOnly(AvatarMediaAccess.class);
 		assertThat(avatarMediaAccess.listPersistentAvatars()).isEmpty();

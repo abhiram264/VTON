@@ -2,6 +2,7 @@ package com.aifashionvault.platform.generation;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.OptionalLong;
 
 import javax.sql.DataSource;
@@ -24,7 +25,7 @@ import com.aifashionvault.shared.VaultItemId;
 
 public final class AuthorizedGenerationMediaResolver {
 
-	private static final String DEFAULT_CATEGORY = "garment";
+	private static final String DEFAULT_CATEGORY = "clothing";
 
 	private static final String AUTHORIZED_AVATAR_SQL =
 		"SELECT i.storage_key FROM avatar_image i "
@@ -76,30 +77,32 @@ public final class AuthorizedGenerationMediaResolver {
 			throw unauthorized();
 		}
 		PrivateMediaRef avatar = privateRef(avatarKeys.getFirst());
+		Optional<FrozenSingleItemIntent> frozen;
 		try {
-			var frozen = generationStore.findFrozenSingleItemIntent(job.id());
-			if (frozen.isPresent()) {
-				FrozenSingleItemIntent intent = frozen.get();
-				if (!intent.ownerId().equals(job.userId()) || !intent.avatarImageId().equals(job.avatarImageId())) {
-					throw unauthorized();
-				}
-				StorageKey key = StorageKeys.generationInputKey(
-					intent.ownerId(), intent.generationId().value(), intent.productMediaId().value());
-				try {
-					objectStore.head(new ObjectRef(StorageDomain.TEMP, key.value()));
-				}
-				catch (ObjectStoreExceptions.StagedObjectMissingException ex) {
-					throw new GenerationInputMissingException("generation input is absent", ex);
-				}
-				catch (ObjectStoreExceptions.ObjectStoreUnavailableException ex) {
-					throw new GenerationInputUnavailableException("generation input storage unavailable", ex);
-				}
-				PrivateMediaRef product = privateRef(key.value());
-				return new ResolvedMedia(avatar, List.of(new VtonProductAsset(product, new ItemCategory(DEFAULT_CATEGORY))));
-			}
+			frozen = generationStore.findFrozenSingleItemIntent(job.id());
 		}
 		catch (UnsupportedOperationException ignored) {
-			// Legacy callers retain the Vault-backed resolver path.
+			// Legacy stores retain the Vault-backed resolver path.
+			frozen = Optional.empty();
+		}
+		if (frozen.isPresent()) {
+			FrozenSingleItemIntent intent = frozen.get();
+			if (!intent.ownerId().equals(job.userId()) || !intent.avatarImageId().equals(job.avatarImageId())) {
+				throw unauthorized();
+			}
+			StorageKey key = StorageKeys.generationInputKey(
+				intent.ownerId(), intent.generationId().value(), intent.productMediaId().value());
+			try {
+				objectStore.head(new ObjectRef(StorageDomain.TEMP, key.value()));
+			}
+			catch (ObjectStoreExceptions.StagedObjectMissingException ex) {
+				throw new GenerationInputMissingException("generation input is absent", ex);
+			}
+			catch (ObjectStoreExceptions.ObjectStoreUnavailableException ex) {
+				throw new GenerationInputUnavailableException("generation input storage unavailable", ex);
+			}
+			PrivateMediaRef product = privateRef(key.value());
+			return new ResolvedMedia(avatar, List.of(new VtonProductAsset(product, new ItemCategory(DEFAULT_CATEGORY))));
 		}
 		List<VtonProductAsset> products = new ArrayList<>();
 		for (VaultItemId productId : job.productVaultItemIds()) {

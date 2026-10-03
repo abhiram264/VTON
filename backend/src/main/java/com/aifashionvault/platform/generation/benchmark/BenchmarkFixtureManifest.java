@@ -400,8 +400,13 @@ public final class BenchmarkFixtureManifest {
 	}
 
 	private static int pngDimension(byte[] bytes, int offset) {
-		if (bytes.length < 24
-			|| (bytes[0] & 0xFF) != 0x89 || bytes[1] != 'P' || bytes[2] != 'N' || bytes[3] != 'G') {
+		if (bytes.length < 29
+			|| (bytes[0] & 0xFF) != 0x89 || bytes[1] != 'P' || bytes[2] != 'N' || bytes[3] != 'G'
+			|| (bytes[4] & 0xFF) != 0x0D || bytes[5] != 0x0A
+			|| (bytes[6] & 0xFF) != 0x1A || bytes[7] != 0x0A
+			|| (bytes[8] & 0xFF) != 0x00 || (bytes[9] & 0xFF) != 0x00
+			|| (bytes[10] & 0xFF) != 0x00 || (bytes[11] & 0xFF) != 0x0D
+			|| bytes[12] != 'I' || bytes[13] != 'H' || bytes[14] != 'D' || bytes[15] != 'R') {
 			return -1;
 		}
 		return (bytes[offset] & 0xFF) << 24 | (bytes[offset + 1] & 0xFF) << 16

@@ -56,25 +56,26 @@ resource "aws_cloudwatch_metric_alarm" "api_live_tasks" {
   tags = local.tags
 }
 
-# 3. API down (error storm) — ALB 5XX count ≥ threshold for 2 out of 3 periods
+# 3. API down (error storm) — target/application 5XX count ≥ threshold for 2 out of 3 periods
 resource "aws_cloudwatch_metric_alarm" "alb_5xx" {
   alarm_name          = "${local.alarm_prefix}-p0-alb-5xx"
   comparison_operator = "GreaterThanOrEqualToThreshold"
   evaluation_periods  = 3
   datapoints_to_alarm = 2
   threshold           = var.p0_alb_5xx_count
-  alarm_description   = "Plan §68 P0: API down — ALB HTTPCode_ELB_5XX_Count >= threshold for 2 of 3 300s periods."
+  alarm_description   = "Plan §68 P0: API down — ALB HTTPCode_Target_5XX_Count >= threshold for 2 of 3 300s periods."
   treat_missing_data  = "notBreaching"
   alarm_actions       = [aws_sns_topic.p0.arn]
   ok_actions          = [aws_sns_topic.p0.arn]
 
-  metric_name = "HTTPCode_ELB_5XX_Count"
+  metric_name = "HTTPCode_Target_5XX_Count"
   namespace   = "AWS/ApplicationELB"
   period      = 300
   statistic   = "Sum"
 
   dimensions = {
     LoadBalancer = var.alb_arn_suffix
+    TargetGroup  = var.alb_target_group_arn_suffix
   }
 
   tags = local.tags
@@ -119,20 +120,53 @@ resource "aws_cloudwatch_metric_alarm" "auth_failure_ratio" {
 
   metric_query {
     id          = "e1"
-    expression  = "IF(m1+m2>0, m1/(m1+m2), 0)"
+    expression  = "IF(m1_missing+m1_malformed+m1_rejected+m2>0, (m1_missing+m1_malformed+m1_rejected)/(m1_missing+m1_malformed+m1_rejected+m2), 0)"
     label       = "Auth Failure Ratio"
     return_data = true
   }
 
   metric_query {
-    id          = "m1"
+    id          = "m1_missing"
     return_data = false
 
     metric {
-      metric_name = "auth.failure.count"
+      metric_name = "auth.failure"
       namespace   = var.metric_namespace
       period      = 300
       stat        = "Sum"
+      dimensions = {
+        reason = "MISSING"
+      }
+    }
+  }
+
+  metric_query {
+    id          = "m1_malformed"
+    return_data = false
+
+    metric {
+      metric_name = "auth.failure"
+      namespace   = var.metric_namespace
+      period      = 300
+      stat        = "Sum"
+      dimensions = {
+        reason = "MALFORMED"
+      }
+    }
+  }
+
+  metric_query {
+    id          = "m1_rejected"
+    return_data = false
+
+    metric {
+      metric_name = "auth.failure"
+      namespace   = var.metric_namespace
+      period      = 300
+      stat        = "Sum"
+      dimensions = {
+        reason = "REJECTED"
+      }
     }
   }
 
@@ -141,7 +175,7 @@ resource "aws_cloudwatch_metric_alarm" "auth_failure_ratio" {
     return_data = false
 
     metric {
-      metric_name = "auth.success.count"
+      metric_name = "auth.success"
       namespace   = var.metric_namespace
       period      = 300
       stat        = "Sum"
@@ -176,7 +210,7 @@ resource "aws_cloudwatch_metric_alarm" "generation_failure_ratio" {
     return_data = false
 
     metric {
-      metric_name = "generation.terminal.count"
+      metric_name = "generation.terminal"
       namespace   = var.metric_namespace
       period      = 300
       stat        = "Sum"
@@ -192,7 +226,7 @@ resource "aws_cloudwatch_metric_alarm" "generation_failure_ratio" {
     return_data = false
 
     metric {
-      metric_name = "generation.terminal.count"
+      metric_name = "generation.terminal"
       namespace   = var.metric_namespace
       period      = 300
       stat        = "Sum"
@@ -208,7 +242,7 @@ resource "aws_cloudwatch_metric_alarm" "generation_failure_ratio" {
     return_data = false
 
     metric {
-      metric_name = "generation.terminal.count"
+      metric_name = "generation.terminal"
       namespace   = var.metric_namespace
       period      = 300
       stat        = "Sum"
@@ -224,7 +258,7 @@ resource "aws_cloudwatch_metric_alarm" "generation_failure_ratio" {
     return_data = false
 
     metric {
-      metric_name = "generation.terminal.count"
+      metric_name = "generation.terminal"
       namespace   = var.metric_namespace
       period      = 300
       stat        = "Sum"
@@ -240,7 +274,7 @@ resource "aws_cloudwatch_metric_alarm" "generation_failure_ratio" {
     return_data = false
 
     metric {
-      metric_name = "generation.terminal.count"
+      metric_name = "generation.terminal"
       namespace   = var.metric_namespace
       period      = 300
       stat        = "Sum"

@@ -50,7 +50,7 @@ public final class NotificationMetrics {
 				.register(registry)
 				.record(duration.isNegative() ? Duration.ZERO : duration);
 		}
-		catch (RuntimeException ignored) {
+		catch (RuntimeException | Error ignored) {
 			// Delivery must not depend on observability availability.
 		}
 	}

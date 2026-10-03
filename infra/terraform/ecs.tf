@@ -30,19 +30,21 @@ resource "aws_ecs_task_definition" "api" {
       environment = [
         { name = "APP_ENV", value = "production" },
         { name = "DB_URL", value = local.db_url },
-        { name = "DB_USERNAME", valueFrom = "${aws_db_instance.vault.master_user_secret[0].secret_arn}:username::" },
-        { name = "DB_PASSWORD", valueFrom = "${aws_db_instance.vault.master_user_secret[0].secret_arn}:password::" },
         { name = "AWS_REGION", value = var.aws_region },
         { name = "SQS_GENERATION_QUEUE_URL", value = aws_sqs_queue.generation_work.id },
         { name = "S3_AVATAR_BUCKET", value = aws_s3_bucket.avatar.id },
         { name = "S3_VAULT_BUCKET", value = aws_s3_bucket.vault_assets.id },
         { name = "S3_LOOK_BUCKET", value = aws_s3_bucket.look.id },
         { name = "S3_TEMP_BUCKET", value = aws_s3_bucket.temp.id },
-        { name = "FASHN_API_KEY", valueFrom = "${aws_secretsmanager_secret.fashn_api_key.arn}:FASHN_API_KEY::" },
         { name = "FIREBASE_PROJECT_ID", value = var.firebase_project_id },
         { name = "OTEL_SERVICE_NAME", value = local.api_otel_service_name },
         { name = "OTEL_RESOURCE_ATTRIBUTES", value = "service.name=ai-fashion-vault-api,deployment.environment=${var.environment}" },
         { name = "OTEL_EXPORTER_OTLP_ENDPOINT", value = "http://127.0.0.1:4317" }
+      ]
+      secrets = [
+        { name = "DB_USERNAME", valueFrom = "${aws_db_instance.vault.master_user_secret[0].secret_arn}:username::" },
+        { name = "DB_PASSWORD", valueFrom = "${aws_db_instance.vault.master_user_secret[0].secret_arn}:password::" },
+        { name = "FASHN_API_KEY", valueFrom = "${aws_secretsmanager_secret.fashn_api_key.arn}:FASHN_API_KEY::" }
       ]
       logConfiguration = {
         logDriver = "awslogs"
@@ -97,21 +99,23 @@ resource "aws_ecs_task_definition" "worker" {
       environment = [
         { name = "APP_ENV", value = "production" },
         { name = "DB_URL", value = local.db_url },
-        { name = "DB_USERNAME", valueFrom = "${aws_db_instance.vault.master_user_secret[0].secret_arn}:username::" },
-        { name = "DB_PASSWORD", valueFrom = "${aws_db_instance.vault.master_user_secret[0].secret_arn}:password::" },
         { name = "AWS_REGION", value = var.aws_region },
         { name = "SQS_GENERATION_QUEUE_URL", value = aws_sqs_queue.generation_work.id },
         { name = "S3_AVATAR_BUCKET", value = aws_s3_bucket.avatar.id },
         { name = "S3_VAULT_BUCKET", value = aws_s3_bucket.vault_assets.id },
         { name = "S3_LOOK_BUCKET", value = aws_s3_bucket.look.id },
         { name = "S3_TEMP_BUCKET", value = aws_s3_bucket.temp.id },
-        { name = "FASHN_API_KEY", valueFrom = "${aws_secretsmanager_secret.fashn_api_key.arn}:FASHN_API_KEY::" },
         { name = "FIREBASE_PROJECT_ID", value = var.firebase_project_id },
         { name = "OTEL_SERVICE_NAME", value = local.worker_otel_service_name },
         { name = "OTEL_RESOURCE_ATTRIBUTES", value = "service.name=ai-fashion-vault-worker,deployment.environment=${var.environment}" },
         { name = "OTEL_EXPORTER_OTLP_ENDPOINT", value = "http://127.0.0.1:4317" },
-        { name = "VAULT_GENERATION_QUEUE_RELAYENABLED", value = "true" },
+        { name = "VAULT_GENERATION_QUEUE_RELAY_ENABLED", value = "true" },
         { name = "VAULT_GENERATION_RECOVERY_ENABLED", value = "true" }
+      ]
+      secrets = [
+        { name = "DB_USERNAME", valueFrom = "${aws_db_instance.vault.master_user_secret[0].secret_arn}:username::" },
+        { name = "DB_PASSWORD", valueFrom = "${aws_db_instance.vault.master_user_secret[0].secret_arn}:password::" },
+        { name = "FASHN_API_KEY", valueFrom = "${aws_secretsmanager_secret.fashn_api_key.arn}:FASHN_API_KEY::" }
       ]
       logConfiguration = {
         logDriver = "awslogs"

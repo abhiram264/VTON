@@ -1,6 +1,7 @@
 package com.aifashionvault.app.share
 
 import java.io.File
+import java.util.UUID
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -18,13 +19,12 @@ class PendingShareStoreTest {
 
   private var now = 1_000_000L
 
-  private fun store() = PendingShareStore(tmp.newFolder(), clock = { now })
+  private fun staging(): File = File(tmp.root, "files/share-staging").apply { mkdirs() }
 
-  private fun stagedTmpFile(): File {
-    val f = tmp.newFile()
-    f.writeBytes(ByteArray(8))
-    return f
-  }
+  private fun store() = PendingShareStore(tmp.newFolder(), staging(), clock = { now })
+
+  private fun stagedTmpFile(stagingDir: File = staging()): File =
+      File(stagingDir, UUID.randomUUID().toString()).apply { writeBytes(ByteArray(8)) }
 
   @Test
   fun `put stores and consume returns payload exactly once`() {
@@ -73,7 +73,7 @@ class PendingShareStoreTest {
   @Test
   fun `ninth unexpired entry is rejected rather than evicting an earlier entry`() {
     val metaDir = tmp.newFolder()
-    val store = PendingShareStore(metaDir, clock = { now })
+    val store = PendingShareStore(metaDir, staging(), clock = { now })
     repeat(ShareLimits.MAX_PENDING_SHARES) {
       assertTrue(store.put(SharePayload.Url("https://example.com/$it")) is PendingShareStore.PutResult.Stored)
     }
@@ -88,9 +88,9 @@ class PendingShareStoreTest {
   @Test
   fun `expired entries are purged on put and staged files deleted`() {
     val metaDir = tmp.newFolder()
-    val store = PendingShareStore(metaDir, clock = { now })
-    val staged = File(tmp.root, "staged-old.bin")
-    staged.writeBytes(ByteArray(4))
+    val stagingDir = staging()
+    val store = PendingShareStore(metaDir, stagingDir, clock = { now })
+    val staged = File(stagingDir, UUID.randomUUID().toString()).apply { writeBytes(ByteArray(4)) }
     val put =
         store.put(
             SharePayload.Image(staged.toURI().toString())) as PendingShareStore.PutResult.Stored
@@ -148,6 +148,61 @@ class PendingShareStoreTest {
     assertTrue(store.put(SharePayload.ImageUrl("https://a.com/1", "https://b.com/2")) is PendingShareStore.PutResult.InvalidPayload)
   }
 
+
+  @Test
+  fun `image payloads require a canonical regular UUID file directly under staging`() {
+    val stagingDir = staging()
+    val store = PendingShareStore(tmp.newFolder(), stagingDir, clock = { now })
+    val missingId = UUID.randomUUID().toString()
+    val missing = File(stagingDir, missingId).toURI().toString()
+    val directoryId = UUID.randomUUID().toString()
+    val directory = File(stagingDir, directoryId).apply { mkdirs() }
+    val nonUuid = File(stagingDir, "not-a-uuid").apply { writeText("x") }
+    val uppercase = File(stagingDir, UUID.randomUUID().toString().uppercase()).apply { writeText("x") }
+    val foreign = File(tmp.root, "foreign-${UUID.randomUUID()}").apply { writeText("x") }
+    val alias = "${stagingDir.toURI().toString().trimEnd('/')}/../${stagingDir.name}/$missingId"
+    assertTrue(store.put(SharePayload.Image(missing)) is PendingShareStore.PutResult.InvalidPayload)
+    File(stagingDir, missingId).writeText("x")
+    assertTrue(store.put(SharePayload.Image(File(stagingDir, missingId).toURI().toString())) is PendingShareStore.PutResult.Stored)
+    assertTrue(store.put(SharePayload.Image(directory.toURI().toString())) is PendingShareStore.PutResult.InvalidPayload)
+    assertTrue(store.put(SharePayload.Image(nonUuid.toURI().toString())) is PendingShareStore.PutResult.InvalidPayload)
+    assertTrue(store.put(SharePayload.Image(uppercase.toURI().toString())) is PendingShareStore.PutResult.InvalidPayload)
+    assertTrue(store.put(SharePayload.Image(foreign.toURI().toString())) is PendingShareStore.PutResult.InvalidPayload)
+    assertTrue(store.put(SharePayload.Image(alias)) is PendingShareStore.PutResult.InvalidPayload)
+  }
+
+  @Test
+  fun `metadata identity and unreadable records return typed invalid payload`() {
+    val metaDir = tmp.newFolder()
+    val store = PendingShareStore(metaDir, staging(), clock = { now })
+    val requestedId = UUID.randomUUID().toString()
+    val otherId = UUID.randomUUID().toString()
+    File(metaDir, "$requestedId.json")
+        .writeText(PendingShareCodec.encode(PendingShare(otherId, SharePayload.Url("https://example.com/1"), now)))
+    assertTrue(store.consume(requestedId) is PendingShareStore.ConsumeResult.InvalidPayload)
+
+    val unreadableId = UUID.randomUUID().toString()
+    File(metaDir, "$unreadableId.json").mkdirs()
+    assertTrue(store.consume(unreadableId) is PendingShareStore.ConsumeResult.InvalidPayload)
+  }
+
+  @Test
+  fun `future metadata timestamp returns typed invalid payload and is excluded from capacity`() {
+    val metaDir = tmp.newFolder()
+    val store = PendingShareStore(metaDir, staging(), clock = { now })
+    val futureIds = mutableListOf<String>()
+    repeat(ShareLimits.MAX_PENDING_SHARES) {
+      val id = UUID.randomUUID().toString()
+      futureIds += id
+      File(metaDir, "$id.json").writeText(
+          PendingShareCodec.encode(PendingShare(id, SharePayload.Url("https://example.com/$it"), now + 1)))
+    }
+
+    assertTrue(store.consume(futureIds.first()) is PendingShareStore.ConsumeResult.InvalidPayload)
+
+    assertEquals(0, store.size())
+    assertTrue(store.put(SharePayload.Url("https://example.com/fresh")) is PendingShareStore.PutResult.Stored)
+  }
   @Test
   fun `sourcePackage omitted when absent and round-trips when present`() {
     val store = store()
@@ -157,8 +212,9 @@ class PendingShareStoreTest {
     assertEquals(null, consumed.pending.payload.sourcePackage)
     assertEquals(SharePayload.Url("https://example.com/1"), consumed.pending.payload)
 
+    val staged = stagedTmpFile()
     val withSender =
-        store.put(SharePayload.Image("file:///x/y.png", "com.trusted.sender")) as PendingShareStore.PutResult.Stored
+        store.put(SharePayload.Image(staged.toURI().toString(), "com.trusted.sender")) as PendingShareStore.PutResult.Stored
     val consumed2 = store.consume(withSender.pending.shareId) as PendingShareStore.ConsumeResult.Consumed
     assertEquals("com.trusted.sender", consumed2.pending.payload.sourcePackage)
   }
@@ -171,14 +227,14 @@ class PendingShareStoreTest {
     val img =
         PendingShare(
             "01234567-89ab-cdef-0123-456789abcdef",
-            SharePayload.Image("file:///cache/x.png", "com.sender"),
+            SharePayload.Image("file:///files/share-staging/01234567-89ab-cdef-0123-456789abcdef", "com.sender"),
             6L)
     assertEquals(img, PendingShareCodec.decode(PendingShareCodec.encode(img)))
 
     val imgurl =
         PendingShare(
             "01234567-89ab-cdef-0123-456789abcdef",
-            SharePayload.ImageUrl("https://a.com/1", "file:///cache/x.png"),
+            SharePayload.ImageUrl("https://a.com/1", "file:///files/share-staging/01234567-89ab-cdef-0123-456789abcdef"),
             7L)
     assertEquals(imgurl, PendingShareCodec.decode(PendingShareCodec.encode(imgurl)))
 
@@ -196,5 +252,6 @@ class PendingShareStoreTest {
         null,
         PendingShareCodec.decode("shareId=x\ncreatedAtEpochMillis=notanumber\nkind=url\nurl=https://a.com\n"))
     assertEquals(null, PendingShareCodec.decode("kind=url\nurl=https://a.com\n"))
+    assertEquals(null, PendingShareCodec.decode("shareId=01234567-89ab-cdef-0123-456789abcdef\ncreatedAtEpochMillis=-1\nkind=url\nurl=https://a.com\n"))
   }
 }

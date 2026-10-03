@@ -1,7 +1,6 @@
 package com.aifashionvault.generation;
 
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -11,12 +10,38 @@ import com.aifashionvault.shared.VaultItemId;
 
 public record RenderPlan(int version, List<RenderStep> steps) {
 
-	public record PlannedProduct(VaultItemId vaultItemId, String category, String slot) {
+	/**
+	 * A product exactly as the Studio submitted it, carrying the revisions the
+	 * plan was built from so a plan replays the submitted state.
+	 */
+	public record PlannedProduct(
+		VaultItemId vaultItemId,
+		String category,
+		String slot,
+		Integer assetRevision,
+		Integer profileRevision) {
 
 		public PlannedProduct {
 			if (vaultItemId == null) {
 				throw new IllegalArgumentException("vaultItemId is required");
 			}
+		}
+
+		public PlannedProduct(VaultItemId vaultItemId, String category, String slot) {
+			this(vaultItemId, category, slot, null, null);
+		}
+
+		/**
+		 * The submitted revisions in the durable {@code key=value;} form the
+		 * generation snapshot already uses. A product with no revisions yields
+		 * null, so a plan built without them keeps an empty capability snapshot.
+		 */
+		String snapshot() {
+			if (assetRevision == null && profileRevision == null) {
+				return null;
+			}
+			return "PlannedProduct[assetRevision=" + assetRevision
+				+ ";profileRevision=" + profileRevision + "]";
 		}
 	}
 
@@ -40,6 +65,11 @@ public record RenderPlan(int version, List<RenderStep> steps) {
 		}
 	}
 
+	/**
+	 * One step per product, in the order the Studio submitted them. The list
+	 * order is the Studio's explicit order and is carried through as given; a
+	 * plan is never re-sorted.
+	 */
 	public static RenderPlan oneProductPerStep(List<PlannedProduct> products) {
 		if (products == null) {
 			throw new IllegalArgumentException("products is required");
@@ -47,18 +77,13 @@ public record RenderPlan(int version, List<RenderStep> steps) {
 		if (products.isEmpty()) {
 			return new RenderPlan(1, List.of(new RenderStep(UUID.randomUUID(), 1, null, List.of())));
 		}
-		List<PlannedProduct> ordered = products.stream()
-			.sorted(Comparator
-				.comparing(PlannedProduct::category, Comparator.nullsLast(String.CASE_INSENSITIVE_ORDER))
-				.thenComparing(product -> product.vaultItemId().value()))
-			.toList();
-		List<RenderStep> planned = new ArrayList<>(ordered.size());
+		List<RenderStep> planned = new ArrayList<>(products.size());
 		int stepIndex = 1;
-		for (PlannedProduct product : ordered) {
+		for (PlannedProduct product : products) {
 			planned.add(new RenderStep(
 				UUID.randomUUID(),
 				stepIndex++,
-				null,
+				product.snapshot(),
 				List.of(new RenderStep.Item(
 					UUID.randomUUID(),
 					1,

@@ -7,10 +7,43 @@ export const AVATAR_FAILURE_BODY =
 export const EXTRACTION_FAILURE_BODY =
   "We found the product link, but couldn't reliably extract the item image.";
 
+/**
+ * The server's consent-gate terminal reason. The provider-transfer boundary
+ * refuses to read or transfer media without an active third-party AI transfer
+ * consent, and reports it as this terminal reason rather than a generic
+ * failure — so the client must not answer it with "try again", which would
+ * fail identically and, worse, would be a NEW chargeable request.
+ */
+export const CONSENT_REQUIRED_CODE = 'CONSENT_REQUIRED';
+
+/**
+ * Names the remedy and where it lives. The consent controls are on the My
+ * Model surface, so the notice points there instead of at a retry.
+ */
+export const CONSENT_REQUIRED_BODY =
+  'Your consent for third-party AI transfer is not active, so this Look was not created. Turn it on under Consent in My Model, then try again.';
+
 export const ACTION_TRY_AGAIN = 'Try Again';
 export const ACTION_CHOOSE_ANOTHER_PHOTO = 'Choose Another Photo';
 export const ACTION_CHOOSE_SCREENSHOT = 'Choose Screenshot';
 export const ACTION_UPLOAD_IMAGE = 'Upload Image';
+
+/**
+ * C14: "retry choices must explain whether they create a new chargeable
+ * request". Trying again after a terminal failure mints a NEW generation with
+ * a new request identity, so it is a new chargeable request and the user is
+ * told so before tapping. A retry that resumes an already-accepted job must
+ * NOT use this text.
+ */
+export const RETRY_NEW_CHARGE_NOTICE =
+  'Trying again starts a new generation, which counts as a new request against your daily allowance.';
+
+/**
+ * The counterpart for a retry that resumes the generation already accepted:
+ * nothing new is charged because the provider work was already paid for.
+ */
+export const RETRY_RESUMES_ACCEPTED_NOTICE =
+  'This continues the generation that was already started. It does not create a new request.';
 
 export type GenerationFailureClass =
   | 'QUALITY'
@@ -21,11 +54,19 @@ export type GenerationFailureClass =
 
 export const PROVIDER_OUTAGE_TRIGGER_CODES: readonly string[] = [
   'PROVIDER_UNAVAILABLE',
+  'STORAGE_UNAVAILABLE',
   'PROVIDER_RATE_LIMIT_EXHAUSTED',
   'PROVIDER_TIMEOUT_EXHAUSTED',
   'PROVIDER_QUOTA_EXHAUSTED',
   'NO_ELIGIBLE_PROVIDER',
   'RETRY_BUDGET_EXHAUSTED',
+  // Server emits this on create/preflight when the generation media store is
+  // unavailable (GenerationCreationService throws problem(503, ...)).
+  'GENERATION_MEDIA_UNAVAILABLE',
+  // A provider refusal is a distinct failure from a media fault: the media
+  // store being absent and the provider being absent must not collapse into
+  // one code, or a provider outage is misreported as a media fault.
+  'GENERATION_PROVIDER_UNAVAILABLE',
 ];
 
 const PROVIDER_OUTAGE_TRIGGER_SET: ReadonlySet<string> = new Set(
@@ -34,6 +75,7 @@ const PROVIDER_OUTAGE_TRIGGER_SET: ReadonlySet<string> = new Set(
 
 export const OUTAGE_FAILURE_CODES: readonly string[] = [
   'PROVIDER_UNAVAILABLE',
+  'STORAGE_UNAVAILABLE',
   'PROVIDER_EXECUTION_FAILED',
   'PROVIDER_EXECUTION_DEADLINE',
   'PROVIDER_INDETERMINATE',
@@ -43,6 +85,8 @@ export const OUTAGE_FAILURE_CODES: readonly string[] = [
   'PROVIDER_OUTPUT_INVALID',
   'ORCHESTRATION_DEADLINE_EXCEEDED',
   'ADMISSION_PAUSED',
+  'GENERATION_MEDIA_UNAVAILABLE',
+  'GENERATION_PROVIDER_UNAVAILABLE',
 ];
 
 const OUTAGE_SET: ReadonlySet<string> = new Set(OUTAGE_FAILURE_CODES);

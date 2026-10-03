@@ -1,5 +1,12 @@
 import { render, screen, fireEvent, act } from '@testing-library/react-native';
 import GenerateScreen from '../../screens/GenerateScreen';
+
+jest.mock('../../config/apiConfig', () => ({
+  productionApiConfig: {
+    baseUrl: 'https://api.test',
+    getAccessToken: () => 'test-token',
+  },
+}));
 import { createGenerationApi } from './generationApi';
 import { createLook } from './createLook';
 import {
@@ -8,6 +15,7 @@ import {
   ACTION_TRY_AGAIN,
   PROVIDER_OUTAGE_TRIGGER_CODES,
   QUALITY_FAILURE_BODY,
+  classifyGenerationFailure,
   isProviderOutage,
 } from './failureContract';
 import type { LocalPhoto } from '../my-model/types';
@@ -177,6 +185,8 @@ describe('U3: Generation wire contract and Vault fallback', () => {
           createdAt: '2026-09-05T00:00:00Z',
           image: { url: 'https://img.test/1', expiresAt: '2026-09-05T01:00:00Z' },
         }),
+        list: jest.fn().mockResolvedValue([]),
+        cancel: jest.fn(),
       };
 
       const mockUpload = jest.fn().mockResolvedValue('up-1');
@@ -190,6 +200,25 @@ describe('U3: Generation wire contract and Vault fallback', () => {
 
       expect(mockCreate).toHaveBeenCalledWith('up-1', expect.any(String));
       expect(mockCreate.mock.calls[0].length).toBe(2);
+    });
+
+    it('bodyless 401 response throws a stable auth error before JSON parsing', async () => {
+      const fetchMock = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 401,
+        headers: new Headers(),
+        json: () => {
+          throw new SyntaxError('Unexpected end of JSON input');
+        },
+        text: () => Promise.resolve(''),
+      } as unknown as Response);
+      globalThis.fetch = fetchMock;
+
+      const api = createGenerationApi({ baseUrl: 'https://api.test', getAccessToken: () => null });
+      await expect(api.create(UPLOAD_ID, IDEMPOTENCY_KEY)).rejects.toMatchObject({
+        name: 'ApiProblemError',
+        code: 'UNAUTHORIZED',
+      });
     });
   });
 
@@ -205,6 +234,11 @@ describe('U3: Generation wire contract and Vault fallback', () => {
       expect(isProviderOutage(undefined, true)).toBe(true);
       expect(isProviderOutage('ANY_CODE', true)).toBe(true);
       expect(isProviderOutage('ADMISSION_PAUSED', true)).toBe(true);
+    });
+
+    it('returns true and classifies STORAGE_UNAVAILABLE as OUTAGE', () => {
+      expect(isProviderOutage('STORAGE_UNAVAILABLE', false)).toBe(true);
+      expect(classifyGenerationFailure('STORAGE_UNAVAILABLE', false)).toBe('OUTAGE');
     });
 
     test.each([
@@ -281,6 +315,47 @@ describe('U3: Generation wire contract and Vault fallback', () => {
         expect(screen.queryByText(failureCode)).toBeNull();
       },
     );
+
+    it('STORAGE_UNAVAILABLE triggers saveToVaultFallback once and shows saved copy on READY', async () => {
+      const picker = jest.fn().mockResolvedValue(PHOTO_A);
+      const importer: ShareImportResolver = jest.fn().mockResolvedValue({
+        status: 'READY',
+        importId: 'vault-imp-storage',
+      } as ShareImportResponse);
+
+      globalThis.fetch = jest.fn().mockImplementation(
+        mockGenerationFetch({
+          pollResponse: () =>
+            Promise.resolve(
+              jsonResponse(200, {
+                id: 'gen-1',
+                status: 'FAILED',
+                phase: 'FAILED',
+                failureCode: 'STORAGE_UNAVAILABLE',
+                statusVersion: 1,
+                createdAt: '2026-09-05T00:00:00Z',
+                updatedAt: '2026-09-05T00:00:00Z',
+              }),
+            ),
+        }),
+      );
+
+      await render(
+        <GenerateScreen
+          picker={picker}
+          importer={importer}
+        />,
+      );
+
+      await act(async () => {
+        fireEvent.press(screen.getByRole('button', { name: 'Choose product photo' }));
+      });
+
+      expect(importer).toHaveBeenCalledTimes(1);
+      expect(await screen.findByText(OUTAGE_TITLE)).toBeTruthy();
+      expect(screen.getByText(OUTAGE_BODY)).toBeTruthy();
+      expect(screen.queryByText('STORAGE_UNAVAILABLE')).toBeNull();
+    });
 
     it('networkLevel true triggers saveToVaultFallback once and shows saved copy on READY', async () => {
       const picker = jest.fn().mockResolvedValue(PHOTO_A);

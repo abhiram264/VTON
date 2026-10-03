@@ -5,6 +5,8 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 import javax.sql.DataSource;
 
@@ -35,15 +37,28 @@ public class NotificationConfiguration {
 		return factory(dataSources, JdbcNotificationEventStore.class, JdbcNotificationEventStore::new);
 	}
 
+	@Bean
+	FactoryBean<JdbcDeviceRegistrationStore> jdbcDeviceRegistrationStore(ObjectProvider<DataSource> dataSources) {
+		return factory(dataSources, JdbcDeviceRegistrationStore.class, JdbcDeviceRegistrationStore::new);
+	}
+
 	/**
 	 * Default production {@link FcmClient} built from the frozen delivery properties.
 	 * The delivery configuration supplies the default FCM URL when no
-	 * {@code vault.notification.fcm-base-url} override is set; the client resolves to
-	 * nothing only when the delivery configuration itself is absent or carries no
-	 * project id, so slim contexts and unconfigured deployments stay valid.
+	 * {@code vault.notification.fcm-base-url} override is set.
+	 *
+	 * <p>CREDENTIAL LIFECYCLE (C20): the durable path is the service-account credential,
+	 * which mints and refreshes short-lived access tokens on demand. A pasted static token
+	 * is accepted only when {@code vault.notification.allow-static-access-token=true} is
+	 * set explicitly, so a short-lived pasted value can never become the production
+	 * credential by accident. With neither configured there is no {@link FcmClient} bean —
+	 * the honest no-delivery posture — rather than a client that cannot authenticate.
 	 */
 	@Bean
-	FactoryBean<FcmClient> fcmClient(ObjectProvider<NotificationDeliveryConfiguration> configs) {
+	FactoryBean<FcmClient> fcmClient(
+		ObjectProvider<NotificationDeliveryConfiguration> configs,
+		ObjectProvider<Clock> clocks
+	) {
 		return new FactoryBean<>() {
 
 			@Override
@@ -52,10 +67,24 @@ public class NotificationConfiguration {
 				if (config == null || config.getProjectId() == null || config.getProjectId().isBlank()) {
 					return null;
 				}
+				Supplier<String> credentials;
+				if (config.getServiceAccountJson() != null && !config.getServiceAccountJson().isBlank()) {
+					credentials = ServiceAccountFcmAccessTokenProvider.fromServiceAccountJson(
+						config.getServiceAccountJson(),
+						HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(2)).build(),
+						clocks.getIfAvailable(Clock::systemUTC));
+				}
+				else if (config.isAllowStaticAccessToken()
+					&& config.getAccessToken() != null && !config.getAccessToken().isBlank()) {
+					credentials = config::getAccessToken;
+				}
+				else {
+					return null;
+				}
 				return new FcmClient(
 					config.getFcmBaseUrl(),
 					config.getProjectId(),
-					config::getAccessToken,
+					credentials,
 					config.ttl(),
 					HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(2)).build());
 			}
@@ -83,6 +112,7 @@ public class NotificationConfiguration {
 		ObjectProvider<FcmClient> clients,
 		ObjectProvider<NotificationEventStore> stores,
 		ObjectProvider<NotificationDeliveryConfiguration> configs,
+		ObjectProvider<DeviceRegistrationStore> registrationStores,
 		ObjectProvider<MeterRegistry> meterRegistries,
 		ObjectProvider<ObservationRegistry> observationRegistries
 	) {
@@ -96,13 +126,18 @@ public class NotificationConfiguration {
 				if (client == null || store == null || config == null) {
 					return null;
 				}
+				DeviceRegistrationStore registrations = registrationStores.getIfAvailable();
+				Consumer<String> invalidTokenPruner = registrations == null
+					? token -> {}
+					: registrations::prune;
 				return new FcmDeliveryWorker(
 					store,
 					client,
 					config,
 					ThreadLocalRandom.current(),
 					meterRegistries.getIfAvailable(),
-					observationRegistries.getIfAvailable());
+					observationRegistries.getIfAvailable(),
+					invalidTokenPruner);
 			}
 
 			@Override
@@ -174,7 +209,8 @@ public class NotificationConfiguration {
 				return;
 			}
 			try {
-				worker.processNext(Instant.now(clock));
+				Instant now = Instant.now(clock);
+				worker.processNext(Instant.now(clock), () -> Instant.now(clock));
 			}
 			catch (RuntimeException | Error failure) {
 				log.warn("notification delivery tick failed", failure);

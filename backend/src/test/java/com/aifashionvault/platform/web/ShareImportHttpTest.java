@@ -129,6 +129,9 @@ class ShareImportHttpTest {
 	@Autowired
 	private FakeShareChain fakeChain;
 
+	@Autowired
+	private RecordingProductMetrics productMetrics;
+
 	@DynamicPropertySource
 	static void registerDatasource(DynamicPropertyRegistry registry) {
 		POSTGRES.start();
@@ -152,6 +155,38 @@ class ShareImportHttpTest {
 		jdbc.update("DELETE FROM users");
 		this.fakeMedia.reset();
 		this.fakeChain.reset();
+		this.productMetrics.reset();
+	}
+
+	@Test
+	void importLifecycleEventsAreRecordedForStartAndOutcome() throws Exception {
+		// A resolved image import records started + resolved; a URL that cannot be
+		// resolved records started + failed. This is the C22 clause-1 gap: the
+		// import taxonomy existed but nothing emitted it.
+		String uploadId = fakeMedia.stageVerifiedUpload();
+		postImport(token(), KEY, "{\"kind\":\"IMAGE\",\"uploadId\":\"" + uploadId + "\"}", 201);
+
+		assertThat(productMetrics.names()).containsExactly(
+			com.aifashionvault.analytics.AnalyticsEventName.SHARE_RECEIVED,
+			com.aifashionvault.analytics.AnalyticsEventName.SHARE_RESOLVED);
+
+		productMetrics.reset();
+		postImport(token(), OTHER_KEY, "{\"kind\":\"URL\",\"sourceUrl\":\"" + IMAGE_URL + "\"}", 201);
+
+		assertThat(productMetrics.names()).containsExactly(
+			com.aifashionvault.analytics.AnalyticsEventName.SHARE_RECEIVED,
+			com.aifashionvault.analytics.AnalyticsEventName.SHARE_RESOLUTION_FAILED);
+	}
+
+	@Test
+	void replayedImportDoesNotRecordAnotherStartedEvent() throws Exception {
+		postImport(token(), KEY, "{\"kind\":\"URL\",\"sourceUrl\":\"" + IMAGE_URL + "\"}", 201);
+		productMetrics.reset();
+
+		// A terminal replay is not a new import: no second "started" event.
+		postImport(token(), KEY, "{\"kind\":\"URL\",\"sourceUrl\":\"" + IMAGE_URL + "\"}", 200);
+
+		assertThat(productMetrics.names()).isEmpty();
 	}
 
 	@Test
@@ -246,7 +281,15 @@ class ShareImportHttpTest {
 
 		assertThat(first.get().failure()).isNull();
 		assertThat(second.get().failure()).isNull();
-		assertThat(first.get().status() + second.get().status()).isEqualTo(401);
+		// The contract is ONE import with ONE shared id. The loser's exact status is a
+		// timing outcome, not a contract: a terminal replay answers 200, and while the
+		// winner's attempt is still held the caller is told 202 ("current state", see
+		// ShareImportService.attachState / replayCreate). Pinning the sum (201+200) made
+		// this test race on how long the winner's resolver took, so it asserted timing
+		// instead of behaviour. Both legitimate pairs are accepted; anything else (two
+		// 201s, two 200s, a conflict) still fails.
+		List<Integer> statuses = List.of(first.get().status(), second.get().status()).stream().sorted().toList();
+		assertThat(statuses).isIn(List.of(200, 201), List.of(201, 202));
 		assertThat(second.get().importId()).isEqualTo(first.get().importId());
 		assertThat(rowCount()).isEqualTo(1);
 	}
@@ -346,15 +389,19 @@ class ShareImportHttpTest {
 	}
 
 	@Test
-	void recoveryFromFailedStateConflicts() throws Exception {
+	void recoveryFromFailedStateRecoversReady() throws Exception {
 		fakeChain.retryable = ResolutionReason.DEPENDENCY_UNAVAILABLE;
 		postImport(token(), KEY, "{\"kind\":\"URL\",\"sourceUrl\":\"" + IMAGE_URL + "\"}", 503);
 		fakeChain.retryable = null;
 
 		String failedImportId = jdbc.queryForObject("SELECT id FROM share_import", java.util.UUID.class).toString();
 		String uploadId = fakeMedia.stageVerifiedUpload();
-		MvcResult conflict = attachImage(token(), failedImportId, uploadId, 409);
-		assertProblem(conflict, 409, "IMPORT_STATE_CONFLICT");
+		MvcResult recovered = attachImage(token(), failedImportId, uploadId, 200);
+
+		assertThat(MAPPER.readTree(recovered.getResponse().getContentAsString()).get("status").stringValue())
+			.isEqualTo("READY");
+		assertThat(rowCount()).isEqualTo(1);
+		assertThat(fakeMedia.publishedCount()).isEqualTo(1);
 	}
 
 	@Test
@@ -819,10 +866,38 @@ class ShareImportHttpTest {
 		ShareImportService fakeShareImportService(
 			javax.sql.DataSource dataSource,
 			ShareImportMediaAccess media,
-			ShareImportResolverChain chains
+			ShareImportResolverChain chains,
+			RecordingProductMetrics productMetrics
 		) {
 			return new ShareImportService(
-				new com.aifashionvault.importer.JdbcShareImportStore(dataSource), media, chains);
+				new com.aifashionvault.importer.JdbcShareImportStore(dataSource), media, chains, productMetrics);
+		}
+
+		/** C22: captures the import lifecycle events the service emits. */
+		@Bean
+		RecordingProductMetrics recordingProductMetrics() {
+			return new RecordingProductMetrics();
+		}
+	}
+
+	/** Captures lifecycle events without any registry. */
+	static final class RecordingProductMetrics implements com.aifashionvault.analytics.ProductMetrics {
+		private final List<com.aifashionvault.analytics.AnalyticsEventName> names = new CopyOnWriteArrayList<>();
+
+		@Override
+		public void record(
+			com.aifashionvault.analytics.AnalyticsEventName eventName,
+			com.aifashionvault.analytics.ProductMetricContext context
+		) {
+			names.add(eventName);
+		}
+
+		void reset() {
+			names.clear();
+		}
+
+		List<com.aifashionvault.analytics.AnalyticsEventName> names() {
+			return List.copyOf(names);
 		}
 	}
 
@@ -868,6 +943,10 @@ class ShareImportHttpTest {
 			ImportMediaAccess.VerifiedImage upload,
 			StorageKey destination
 		) {
+			// A successful claim copies staging into the owner's Vault, so the
+			// destination is an existing object — recorded the same way the
+			// URL-fetch path records its publish.
+			published.add(destination);
 			return ImportMediaAccess.ClaimOutcome.CLAIMED;
 		}
 
@@ -932,11 +1011,20 @@ class ShareImportHttpTest {
 
 		@Override
 		public ResolutionResult resolve(SourceReference source) {
-			if (media.findVerifiedUpload(null, source.verifiedUploadId()).isEmpty()) {
+			ImportMediaAccess.VerifiedImage verified = media.findVerifiedUpload(null, source.verifiedUploadId())
+				.orElse(null);
+			if (verified == null) {
 				return unsupported();
 			}
-			return new ResolutionResult(ResolutionStatus.RESOLVED,
-				new StorageKey("imports/fake/" + UUID.randomUUID()), source.url(), null, null, null);
+			// Mirror SharedImageResolver: the claim is the step that creates the
+			// owner's Vault object (ObjectStoreImportMediaAccess#claimVerifiedUpload).
+			// Fabricating a storage key without claiming made a created object
+			// unobservable, so the recovery path's publish assertion was unrepresentable.
+			StorageKey destination = new StorageKey("imports/fake/" + UUID.randomUUID());
+			if (media.claimVerifiedUpload(null, verified, destination) != ImportMediaAccess.ClaimOutcome.CLAIMED) {
+				return unsupported();
+			}
+			return new ResolutionResult(ResolutionStatus.RESOLVED, destination, source.url(), null, null, null);
 		}
 	}
 

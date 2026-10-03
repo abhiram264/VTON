@@ -37,19 +37,27 @@ own source file). The only other HTTP surface is actuator `health` and `metrics`
 | `CollectionsController` | `POST /collections` :35 · `GET /collections` :42 · `GET /collections/{id}` :43 · `PATCH /collections/{id}` :45 · `DELETE /collections/{id}` :51 · `POST /collections/{id}/items` :56 · `DELETE /collections/{id}/items/{vaultItemId}` :69 |
 | `AvatarsController` | `POST /avatars` :86 · `GET /avatars` :97 · `GET /avatars/{id}` :102 · `PATCH /avatars/{id}` :113 · `DELETE /avatars/{id}` :127 |
 | `MeController` | `GET /me` :28 · `DELETE /me` :33 |
-| `GenerationsController` | `POST /generations` :66 · `GET /generations/{generationId}` :82 · `POST /generations/{generationId}/cancel` :90 |
-| `GenerationCallbackController` | `POST /generation-callbacks/{token}` :44 |
+| `GenerationsController` | `POST /generations` :67 · `GET /generations/{generationId}` :83 · `POST /generations/{generationId}/cancel` :91 |
+| `GenerationCallbackController` | `POST /generation-callbacks/{token}` :47 |
 | `FeatureFlagController` | `GET /feature-flags` :17 |
 
-Counts: 5 + 3 + 5 + 4 + 7 + 5 + 2 + 3 + 1 + 1 = **36**. `GET /me` returns
+Counts at the pinned baseline 3b6af1f: 5 + 3 + 5 + 4 + 7 + 5 + 2 + 3 + 1 + 1 = **36**
+(10 `@RestController` classes; the tenth, `FeatureFlagController`, sits outside
+`platform/web`, so a `platform/web`-only glob finds nine). `GET /me` returns
 `MeResponse(String id)` — the wire field is `id`, not `userId` (MeResponse.java:3); `GET /feature-flags` is an operational snapshot surface
 with a mobile caller at `mobile/src/config/featureFlags.ts:91`. One mapping is
-conditional on infrastructure rather than on a feature flag:
-`POST /generation-callbacks/{token}` requires a `CallbackInboxStore` bean
-(GenerationCallbackController.java:22). The callback processing beans are
-gated `@ConditionalOnBean({DataSource.class, ObjectStore.class})`
-(GenerationProcessorConfiguration.java:45) — both the database and the object
-store must be present, not the database alone.
+conditional on infrastructure rather than on a feature flag, but on the store
+at request time rather than on bean definition: `POST /generation-callbacks/{token}`
+(GenerationCallbackController.java:47) is mounted unconditionally — the
+controller carries no `@ConditionalOnBean` and resolves the store through an
+`ObjectProvider` constructor (GenerationCallbackController.java:42-45), answering
+503 when the store is absent (GenerationCallbackController.java:52-54). The
+store itself is produced by a late-binding `FactoryBean<CallbackInboxStore>`
+(GenerationProcessorConfiguration.java:163) that resolves to no bean
+(`null`) when the `DataSource` is absent
+(GenerationProcessorConfiguration.java:168-171); the generation processing
+graph is registered the same way, so both the database and the object store
+must be present for processing, not the database alone.
 
 ### 2.1 profile
 
@@ -114,9 +122,11 @@ store must be present, not the database alone.
   table.
 - Mobile callers: `features/share/importClient.ts:185,:207` and
   `screens/share-import/recoveryClient.ts:76`.
-- Current missing connection: replay is arbitrated after staging is required
-  (F05), and `READY` is not a confirmable saved item (F04). Owning tickets:
-  F05 -> PR-07; F04 -> PR-08 and PR-11 (plan:70). The minimal
+- Current missing connection: replay is arbitrated before the staging
+  requirement is checked (F05, closed — `store.arbitrateCreate(command)` at
+  ShareImportService.java:55, re-checked at :68 before resolving at :69), and
+  `READY` is not a confirmable saved item (F04). Owning tickets:
+  F05 -> PR-07 (closed); F04 -> PR-08 and PR-11 (plan:70). The minimal
   import-confirmation endpoint is **PROPOSED** (PR-08).
 
 ### 2.4 item / collection
@@ -288,7 +298,7 @@ is in §7 (F02).
 |---|------|------------------|------------------|---------------|------------------------------|----------------------------|---------------|
 | 1 | profile | `POST/GET/GET{id}/PATCH/DELETE /avatars` (AvatarsController.java:86,:97,:102,:113,:127) → `AvatarResourceResponse` | `avatar_profile` V002 + `avatar_consumed_upload` V011:27 via `avatar/JdbcAvatarStore.java` | `features/my-model/avatarApi.ts:66,:81,:96,:107` (mount at :117 — UNCONFIGURED mount (baseUrl '' + null token, F02)) | `vault.avatar.*` buckets (`S3_AVATAR_BUCKET`, application.yaml:33), `vault.avatar.attestation-required` (:48-49) | null photo source (F01); unavailable scanner (F15) | PR-05; identity PR-03 |
 | 2 | verified upload | `POST /uploads`, `POST /uploads/{id}/complete`, `DELETE /uploads/{id}` (UploadsController.java:42,:60,:75) → `CreateUploadResponse(id, method, url, headers, expiresAt)` | object-store staging; `avatar_consumed_upload` V011:27 (JdbcAvatarStore.java:456-457,:137-138) records avatar-consumed uploads | `features/my-model/http.ts:91,:112` | `vault.s3.temp-bucket` (`S3_TEMP_BUCKET`, application.yaml:36) | completion cannot succeed with the default scanner (F15) | PR-05 |
-| 3 | import | `POST/GET/PUT/DELETE /share/imports…` (SharesController.java:39,:51,:59,:72) → `ShareImportResponse(importId, status, reason, recoveryActions)` | `share_import` V003:1/V019 via `importer/JdbcShareImportStore.java` | `features/share/importClient.ts:185,:207`; `screens/share-import/recoveryClient.ts:76` (via apiConfig.ts:8 — UNCONFIGURED mount (baseUrl '' + null token, F02)) | `vault.s3.vault-bucket` (`S3_VAULT_BUCKET`, application.yaml:34) | replay after staging (F05); no confirm-to-item contract (F04) | F05 -> PR-07; F04 -> PR-08, PR-11 |
+| 3 | import | `POST/GET/PUT/DELETE /share/imports…` (SharesController.java:39,:51,:59,:72) → `ShareImportResponse(importId, status, reason, recoveryActions)` | `share_import` V003:1/V019 via `importer/JdbcShareImportStore.java` | `features/share/importClient.ts:185,:207`; `screens/share-import/recoveryClient.ts:76` (via apiConfig.ts:8 — UNCONFIGURED mount (baseUrl '' + null token, F02)) | `vault.s3.vault-bucket` (`S3_VAULT_BUCKET`, application.yaml:34) | replay arbitrated before the staging check, which it revalidates (F05, closed; ShareImportService.java:55,:68); no confirm-to-item contract (F04) | F05 -> PR-07 (closed); F04 -> PR-08, PR-11 |
 | 4 | item / collection | `/vault/items` ×5 (VaultController.java:24-32); `/collections` ×7 (CollectionsController.java:35,:42,:43,:45,:51,:56,:69) | `vault_item` V004:9 + `source_reference` V004:1 (`vault/JdbcVaultStore.java:56,:68`); `collection` V005:1 (`collection/JdbcCollectionStore.java`) | `features/vault/vaultApi.ts:28,:51` (mount at :23 — UNCONFIGURED mount (baseUrl '' + null token, F02)); `features/vault/collectionApi.ts:21` (same) | `vault.s3.vault-bucket` (`S3_VAULT_BUCKET`, application.yaml:34) | no image read capability in the item response (F06) | PR-06, PR-11 |
 | 5 | studio | **none mounted** (PROPOSED: PR-12/PR-13); mobile targets `/studio/sessions/**` (studioApi.ts:16,:19,:22) | `studio_item` V006:11 exists, read-only in-use guard (`JdbcVaultStore.java:97,:103`), no writer | `features/studio/studioApi.ts:16,:19,:22` (mount at :12 — UNCONFIGURED mount (baseUrl '' + null token, F02)) | none mounted; `vault.env` (`APP_ENV`, application.yaml:17) | no persisted session; readiness from route params (F03) | PR-12, PR-13, PR-16 |
 | 6 | generation | `POST /generations`, `GET /generations/{id}`, `POST /generations/{id}/cancel` (GenerationsController.java:66,:82,:90) + `POST /generation-callbacks/{token}` (GenerationCallbackController.java:44) | `JdbcGenerationStore`, outbox, capacity lease (V013:324), rate limiter (V022:1,:11), callback inbox | `features/generation/generationApi.ts:100,:111` (mount at :126 — UNCONFIGURED mount (baseUrl '' + null token, F02)); `productUpload.ts:83` (same) | `vault.sqs.generation-queue-url` (`SQS_GENERATION_QUEUE_URL`, application.yaml:31), `vault.s3.look-bucket` (:35), `vault.generation.multi-item-enabled`/`admission-paused` | FASHN provider built unconditionally and `FASHN_API_KEY` is a mandatory startup property (FashnConfig.java:41-42,:46-47; VaultEnvironmentValidator.java:25-26) — honest no-provider behavior is not implemented yet | PR-02/PR-14/PR-15/PR-16 |
@@ -394,7 +404,7 @@ All seventeen findings are recorded, with their owning tickets (plan:64-97):
 | F02 | Mounted API clients default to `baseUrl: ''` | PR-04 |
 | F03 | Studio cannot build the requested outfit | PR-12, PR-13, PR-16 |
 | F04 | A resolved share cannot become a saved item | PR-08, PR-11 |
-| F05 | Import replay checks consumed staging before idempotency | PR-07 |
+| F05 | **CLOSED** — import replay revalidates staging before it resolves: `store.arbitrateCreate(command)` runs first (ShareImportService.java:55) and the replay branch re-checks claimability (ShareImportService.java:68) before resolving at :69; the fresh path re-checks at :71 | PR-07 (closed) |
 | F06 | Vault is a text list, not an image library | PR-06, PR-11 |
 | F07 | Publication stores a mode string as render-plan JSON | PR-14 |
 | F08 | Baseline image validation is presented as quality PASS | PR-02, PR-25 |
@@ -410,8 +420,8 @@ All seventeen findings are recorded, with their owning tickets (plan:64-97):
 
 The F02 count is source-verified: eight `baseUrl: ''` mounts exist under
 `mobile/src` (`features/generation/generationApi.ts:126`,
-`features/generation/productUpload.ts:83`, `features/looks/looksApi.ts:13`,
-`features/my-model/avatarApi.ts:117`, `features/studio/studioApi.ts:12`,
+`features/generation/productUpload.ts:83`, `features/looks/looksApi.ts:68`,
+`features/my-model/avatarApi.ts:150`, `features/studio/studioApi.ts:12`,
 `features/vault/collectionApi.ts:21`, `features/vault/vaultApi.ts:23`,
 `screens/share-import/apiConfig.ts:8`).
 
@@ -423,3 +433,186 @@ The F02 count is source-verified: eight `baseUrl: ''` mounts exist under
 - It does not claim native builds pass; they were not executed here.
 - It does not claim provider selection, no-provider generation behavior, or
   share-link removal are done — those are PR-02 and PR-16 work.
+
+## 9. C01 reconciliation — 2026-10-03 (baseline `1f13d34`)
+
+This section is **appended**, not a rewrite. §2 and §4 above are the dated PR-01 baseline
+(commit `8e60d2a`) and are preserved as historical results. Current source differs:
+
+- **Route count:** §2 states 36 mappings; a literal annotation count at `1f13d34` yields
+  **37** (`CollectionsController` 7, `VaultController`/`SharesController`/`LooksController`/
+  `AvatarsController` 5 each, `UploadsController`/`GenerationsController` 3 each,
+  `MeController` 2, `GenerationCallbackController`/`FeatureFlagController` 1 each).
+- **Mobile client construction:** §4's "eight `baseUrl: ''` mounts" is historical. Current
+  mobile resolves through the single `productionApiConfig` seam
+  (`mobile/src/config/apiConfig.ts`), which throws on an unset base URL and on a missing
+  token.
+- **Provider selection / no-provider behavior:** §3's "`FASHN_API_KEY` is a **mandatory
+  startup property**" and "FASHN as the selected provider" are historical. Now implemented:
+  two gated provider beans (`FashnConfig.java:40`, `InferHubConfig.java:52`), selection
+  preferring `inferhub` then `fashn` in `ProviderRegistryComposition.java:70`, both keys
+  optional at boot (`application.yaml:49-55`), and no-provider admission refusal
+  (`VaultEnvironmentValidator.java:25-28`).
+- **Share-link removal:** confirmed done — `POST /looks/{id}/share-link` is mounted but the
+  mobile client does not call it (`features/looks/looksApi.ts:71-76`).
+
+The full current inventory, per-package status, and externally blocked packages are in
+[docs/RELEASE_COMPLETION_LEDGER.md](RELEASE_COMPLETION_LEDGER.md).
+
+### 9.1 C12 multi-item generation (`POST /generations/multi`)
+
+**Status: MOUNTED at integration `daddbcb`** (verified against `GenerationsController.java:110`).
+The contract below was frozen first so backend/mobile work could proceed in parallel
+(guide §5.3); the landed implementation matched it, so the fields are unchanged and only
+the status has moved from "seam" to "mounted".
+
+| Aspect | Contract |
+|---|---|
+| Method/path | `POST /generations/multi` (sibling of the manual single-item `POST /generations`) |
+| Request | `GenerationMultiRequest(studioSessionId: UUID \| null, productVaultItemIds: UUID[] ordered, mode: String \| null, default "standard")` |
+| Required header | `Idempotency-Key` — missing → `400 IDEMPOTENCY_KEY_REQUIRED` |
+| Success | `202` + `Location: /generations/{id}`, body identical to `POST /generations` (`GenerationResponse`) |
+| Feature gate | `vault.generation.multi-item-enabled` (default **false**) → `503 MULTI_ITEM_DISABLED` |
+| Invalid input | empty / >64 / duplicate / null items, bad mode → `400 MULTI_ITEM_INVALID` |
+| Ownership | foreign or unknown vault item, or foreign `studioSessionId` → `404 UNAUTHORIZED_OR_NOT_FOUND` |
+| Idempotency | same key + different fingerprint (avatar revision + mode + item **order**) → `409 IDEMPOTENCY_KEY_REUSED` |
+| Admission | `429` with the admission reason (`PRODUCT_LIMIT`/`ROLLING_LIMIT`/`ACTIVE_LIMIT`) |
+| Global gates | `503 ADMISSION_PAUSED` / `503 GENERATION_PROVIDER_UNAVAILABLE` |
+| Persistence | one accepted job via `GenerationStore.createAccepted`: render plan one step per product in submitted order, one outbox row, quota reservation |
+
+The request discriminant is **not** `productUploadId` (C12 item 1): the manual path keeps
+`GenerationRequest(UUID productUploadId)` unchanged, and multi-item intent carries ordered
+Vault item ids plus an optional Studio session.
+
+### 9.2 Frozen seam — C07 share-import preview (`GET /share/imports/{importId}/preview`)
+
+**Status: FROZEN SEAM, implementation in flight (worker-13).** Additive sibling of the
+existing `GET /share/imports/{importId}` status route; the status body
+(`ShareImportResponse`) is unchanged. Records the contract so the mobile share client
+(worker-04/worker-01) can adopt it without waiting for the merge.
+
+| Aspect | Contract |
+|---|---|
+| Method/path | `GET /share/imports/{importId}/preview` |
+| Success | `200` + `ShareImportPreviewResponse{importId, previewUrl, previewExpiresAt, sourceTitle?, sourceSiteName?}` |
+| `previewUrl` | Short-lived **signed read capability** for the resolved import object (VAULT boundary, 5-minute TTL). Never the object key or a permanent URL; re-issue by calling the route again. |
+| Safe metadata | `sourceTitle`/`sourceSiteName` only — no source query string, object key, or media bytes (ADR-015). |
+| Ownership | foreign or unknown import → `404 IMPORT_NOT_FOUND` (indistinguishable from missing) |
+| State | not `READY` / no resolved object → `409 IMPORT_STATE_CONFLICT` |
+| No capability | media seam cannot mint a signed read → `503 DEPENDENCY_UNAVAILABLE` (never a fabricated preview) |
+
+The route is additive: a client that ignores it keeps the current status-only behavior.
+
+### 9.3 DTO change — vault item read carries `sourceUrl` (C16 item 5)
+
+**Status: MOUNTED at integration `91cbb6b` (worker-06).** Additive, nullable field on the
+existing owner-scoped vault item representation; recorded here because it changes a shared
+DTO that the mobile client parses.
+
+| Aspect | Contract |
+|---|---|
+| Field | `sourceUrl`, type `string \| null`, on `VaultItemResponse` |
+| Where | BOTH `GET /vault/items` (list) and `GET /vault/items/{id}` (detail) — one response mapper serves both |
+| Value | `source_reference.url` verbatim: the retailer product URL captured at import. **Untrusted**; the client must route it through its http/https-only external-navigation helper rather than handing it to the OS directly |
+| Nullability | `null` for a photo-created item that has no source, so the field is null rather than absent |
+| Not exposed | `raw_metadata` stays server-side. `sourceReferenceId` is unchanged (still the opaque id) |
+| Ownership | unchanged: foreign/unknown/malformed id → `404 VAULT_ITEM_NOT_FOUND` (opaque), so no other owner's URL is ever disclosed |
+
+Consumers that ignore the field are unaffected. Two shape oracles were updated deliberately,
+not weakened: `VaultControllerTest`'s strict `containsExactly(...)` property list now includes
+`sourceUrl` and additionally forbids `rawMetadata`/`raw_metadata`/`x-amz-`; `VaultItemTest`'s
+record-component name and type lists include `sourceUrl:String`.
+
+This is what makes the guide's "original product source links with safe external navigation"
+reachable: `source_reference.url` was already persisted by the import confirm path
+(`JdbcShareImportStore`), but the read exposed only the opaque `sourceReferenceId`, so the
+merged mobile `openSourceLink` had no data source.
+
+## 10. C20 device-token contract — 2026-10-03 (frozen, EXECUTED)
+
+Frozen DTO seam for device-token registration and preferences (guide §5.3). All routes are
+under `/me` and require a bearer credential; the owner is the authenticated principal and is
+never taken from the body. Implemented in `DeviceRegistrationController` /
+`JdbcDeviceRegistrationStore` over migration `V025__device_registration.sql`.
+
+| Method | Route | Request | Response | Notes |
+|---|---|---|---|---|
+| POST | `/me/devices` | `{deviceToken: string(1..4096, trimmed), platform: "ANDROID"\|"IOS"}` | `200 {id, deviceToken, platform, createdAt, updatedAt, lastSeenAt}` | Idempotent upsert keyed on `deviceToken` (globally unique). Re-registering the same token from a second account **moves** it to that account. |
+| GET | `/me/devices` | — | `200 [DeviceResponse]` | Caller-scoped only. |
+| DELETE | `/me/devices` | `{deviceToken}` | `204` always | Non-disclosing: deletes only when the caller owns the token; another account's delete is a no-op and indistinguishable. |
+| GET | `/me/notification-preferences` | — | `200 {pushEnabled, updatedAt\|null}` | Absent row means `pushEnabled: true`. |
+| PUT | `/me/notification-preferences` | `{pushEnabled: boolean}` | `200 {pushEnabled, updatedAt}` | Owner-scoped upsert. |
+
+Errors: `400 {"code":"INVALID_DEVICE_REGISTRATION"}` for an unsupported `platform`, a blank
+or oversized `deviceToken`, a non-boolean `pushEnabled`, or an unreadable body. Unauthenticated
+requests are `401` like every other route.
+
+Pruning: `FcmSendResult.unregistered()` reports HTTP 404 from FCM HTTP v1, and
+`FcmDeliveryWorker` invokes the token pruner (`DeviceRegistrationStore::prune`) before marking
+the delivery terminally failed, so a dead token is not retried ten times. Physical push
+delivery is **EXTERNALLY-DEPENDENT** (no FCM credentials/device in this run); the lifecycle
+above is **EXECUTED** by `DeviceRegistrationApiTest` (7 HTTP cases, real Postgres).
+
+Known gap (SOURCE-CONFIRMED): `FcmDeliveryWorker.enqueue` has no production caller, so no
+generation completion currently creates a notification event. Delivery remains unmounted
+until a generation-publication owner wires it.
+
+## 11. C06 consent contract — 2026-10-03 (frozen, EXECUTED)
+
+Frozen DTO seam for the body-image-processing and third-party-AI-transfer consents (guide
+§5.3). Implemented in `platform/web/ConsentsController` over the existing `V006`-era `consent`
+table (migration `V010__create_consents.sql` — no new migration). The mobile client
+(`mobile/src/features/consent/consentApi.ts`) was written against this shape and agrees with
+it field for field.
+
+Every route is authenticated; the owner is the authenticated principal and never appears in a
+body or path, so consent is always scoped to the caller. **Both supported purposes are always
+enumerated**, so a client never has to tell "absent" apart from "not granted".
+
+Purpose literals are the **snake_case stored values**, not the enum names:
+
+| Enum | Wire literal |
+|---|---|
+| `ConsentPurpose.BODY_IMAGE_PROCESSING` | `body_image_processing` |
+| `ConsentPurpose.THIRD_PARTY_AI_TRANSFER` | `third_party_ai_transfer` |
+
+| Method | Route | Request | Response |
+|---|---|---|---|
+| GET | `/consents` | — | `200 {policyVersion, purposes:[ConsentState]}` |
+| POST | `/consents/{purpose}` | no body (the **server** picks the policy version) | `200 ConsentState` |
+| DELETE | `/consents/{purpose}` | — | `200 ConsentState` (idempotent) |
+
+`ConsentState` — every field always present (nulls included), so a client can parse strictly:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `purpose` | string | one of the two literals above |
+| `active` | boolean | whether the owner currently holds this consent |
+| `version` | string \| null | policy version the **active** grant was recorded under; null when `active` is false |
+| `grantedAt` | ISO-8601 UTC \| null | grant time of the active consent; null when `active` is false |
+| `policyVersion` | string | the version the server would record for a **new** grant, so `version != policyVersion` tells the client an active grant predates the current policy |
+
+Semantics:
+
+- `active` is answered by `ConsentService.isActive` — the same primitive the server-side
+  provider-transfer gate consults — so this surface can never report a purpose as granted
+  while the enforcement gate would refuse it.
+- A repeated `POST` for the same purpose is idempotent: one active record, same state.
+- `DELETE` is idempotent: repeating it stays `200` with `active:false`, never `404`. The
+  withdrawn record is kept (evidence), only `revoked_at` is set.
+- The recorded policy version comes from `vault.privacy.consent-policy-version`
+  (default `2026-10-03`), so publishing a new consent text is a visible deployment change
+  rather than a code edit.
+
+Errors: `400 {"code":"CONSENT_PURPOSE_UNKNOWN"}` for a purpose outside the two literals;
+`503 {"code":"CONSENT_UNAVAILABLE"}` when the server has no consent store configured — an
+unanswerable question is **never** answered "granted". Unauthenticated requests are `401`
+like every other route.
+
+Enforcement (EXECUTED): `PrivacyApprovedInputTransfer.prepare(..., owner)` checks the
+owner's active `third_party_ai_transfer` consent **before** the object is read or a signed
+read is minted, so a withdrawal stops the next transfer rather than the next upload. A job
+without consent fails terminally with `TerminalReason.CONSENT_REQUIRED` and publishes no Look.
+`GenerationProcessorConfiguration` builds the transfer component only when **both** an
+`ObjectStore` and a `ConsentService` are present, so a deployment missing the consent service
+builds no generation processor at all (fail closed) instead of transferring unchecked.

@@ -25,6 +25,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Pattern;
 
@@ -82,6 +83,7 @@ import com.aifashionvault.look.LookStore;
 import com.aifashionvault.notification.Notification;
 import com.aifashionvault.notification.NotificationStore;
 import com.aifashionvault.platform.generation.AuthorizedGenerationMediaResolver.ResolvedMedia;
+import com.aifashionvault.platform.generation.AuthorizedGenerationMediaResolver.GenerationInputMissingException;
 import com.aifashionvault.platform.generation.AuthorizedGenerationMediaResolver.UnauthorizedGenerationMediaException;
 import com.aifashionvault.platform.objectstore.ClaimCommand;
 import com.aifashionvault.platform.objectstore.ClaimResult;
@@ -114,6 +116,7 @@ import com.aifashionvault.shared.UserId;
 import com.aifashionvault.shared.VaultItemId;
 
 import io.micrometer.core.instrument.Timer;
+import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -149,6 +152,7 @@ class GenerationOrchestrationTest {
 	private InMemoryLookStore lookStore;
 	private InMemoryNotificationStore notificationStore;
 	private InMemoryQueue queue;
+	private final List<String> operations = new CopyOnWriteArrayList<>();
 	private InMemoryObjects objects;
 	private AuthorizedGenerationMediaResolver resolver;
 	private PrivacyApprovedInputTransfer transfer;
@@ -157,14 +161,16 @@ class GenerationOrchestrationTest {
 	private GenerationWorkProcessor processor;
 	private GenerationWorkLease lease;
 	private TestCostCircuitBreaker costCircuitBreaker;
+	private RecordingCapacityLeaseStore capacityStore;
 	private TestProviderHealthGate providerHealthGate;
+	private RecordingProductMetrics productMetrics;
 
 	@BeforeEach
 	void setUp() {
 		generationStore = new InMemoryGenerationStore();
-		lookStore = new InMemoryLookStore();
-		notificationStore = new InMemoryNotificationStore();
-		queue = new InMemoryQueue();
+		lookStore = new InMemoryLookStore(operations);
+		notificationStore = new InMemoryNotificationStore(operations);
+		queue = new InMemoryQueue(operations);
 		objects = new InMemoryObjects();
 		objects.put(new ObjectRef(StorageDomain.AVATAR, AVATAR_KEY), new byte[] {1, 2, 3});
 		objects.put(new ObjectRef(StorageDomain.VAULT, PRODUCT_KEY), new byte[] {4, 5, 6});
@@ -175,6 +181,7 @@ class GenerationOrchestrationTest {
 		provider = new RecordingVtonProvider();
 		costCircuitBreaker = new TestCostCircuitBreaker();
 		providerHealthGate = new TestProviderHealthGate();
+		productMetrics = new RecordingProductMetrics();
 		processor = processor(provider);
 		lease = new GenerationWorkLease(JOB_ID.value(), "receipt-1");
 	}
@@ -193,21 +200,85 @@ class GenerationOrchestrationTest {
 		assertThat(lookStore.inserted().getFirst().qualityStatus()).isEqualTo(QualityDecision.PASS);
 		assertThat(notificationStore.inserted()).hasSize(1);
 		assertThat(notificationStore.inserted().getFirst().type()).isEqualTo("LOOK_READY");
-		assertThat(notificationStore.lookReadyAfterLook()).isTrue();
+		assertThat(operations).containsSubsequence("LOOK_INSERTED", "LOOK_READY");
 		assertThat(queue.deleted()).containsExactly(lease);
 		assertThat(generationStore.findJob(JOB_ID).orElseThrow().completedAt()).isEqualTo(NOW);
 	}
 
+	/**
+	 * C22: a terminal completion records a product lifecycle event through the
+	 * existing ProductMetrics seam, carrying only coarse context (no bytes, prompts,
+	 * tokens or signed URLs).
+	 */
 	@Test
-	void firstValidTurnMovesQueuedToPreflight() {
+	void terminalCompletionRecordsAProductLifecycleEvent() {
+		generationStore.insertJob(queuedJob());
+
+		processor.process(lease);
+
+		assertThat(productMetrics.names())
+			.containsExactly(com.aifashionvault.analytics.AnalyticsEventName.GENERATION_COMPLETED);
+		com.aifashionvault.analytics.ProductMetricContext context = productMetrics.contexts().getFirst();
+		assertThat(context.occurredAt()).isEqualTo(NOW);
+		assertThat(context.outcome()).isEqualTo("generation_completed");
+		assertThat(context.itemCount()).isEqualTo(1L);
+		assertThat(context.provider()).isEqualTo(provider.providerKey().value());
+		assertThat(context.cost()).isNotNull();
+	}
+
+	/**
+	 * C22: a terminal failure records the failure lifecycle event instead, so event
+	 * counts reflect saved outcomes rather than button taps.
+	 */
+	@Test
+	void terminalFailureRecordsTheFailureLifecycleEvent() {
+		generationStore.insertJob(queuedJob());
+		provider.submitResult(new com.aifashionvault.generation.vton.GenerationSubmission.Rejected(
+			new com.aifashionvault.generation.vton.ProviderFailure(
+				com.aifashionvault.generation.vton.ProviderFailureCategory.INVALID_REQUEST,
+				false,
+				"TEST_TERMINAL_REJECTION")));
+
+		processor.process(lease);
+
+		assertThat(productMetrics.names())
+			.containsExactly(com.aifashionvault.analytics.AnalyticsEventName.GENERATION_FAILED);
+		assertThat(productMetrics.contexts().getFirst().outcome()).isEqualTo("generation_failed");
+	}
+
+	/** Captures the lifecycle events the processor emits, without any registry. */
+	private static final class RecordingProductMetrics implements com.aifashionvault.analytics.ProductMetrics {
+		private final List<com.aifashionvault.analytics.AnalyticsEventName> names = new CopyOnWriteArrayList<>();
+		private final List<com.aifashionvault.analytics.ProductMetricContext> contexts =
+			new CopyOnWriteArrayList<>();
+
+		@Override
+		public void record(
+			com.aifashionvault.analytics.AnalyticsEventName eventName,
+			com.aifashionvault.analytics.ProductMetricContext context
+		) {
+			names.add(eventName);
+			contexts.add(context);
+		}
+
+		List<com.aifashionvault.analytics.AnalyticsEventName> names() {
+			return List.copyOf(names);
+		}
+
+		List<com.aifashionvault.analytics.ProductMetricContext> contexts() {
+			return List.copyOf(contexts);
+		}
+	}
+
+	@Test
+	void queuedProviderTurnMovesJobToSubmitted() {
 		generationStore.insertJob(queuedJob());
 		provider.statusResult(new StatusQueryResult.Observed(new GenerationStatus.Queued()));
 
 		processor.process(lease);
 
 		GenerationJob loaded = generationStore.findJob(JOB_ID).orElseThrow();
-		assertThat(loaded.status()).isNotEqualTo(GenerationJob.QUEUED);
-		assertThat(loaded.status()).isIn(GenerationJob.PREFLIGHT, GenerationJob.SUBMITTED);
+		assertThat(loaded.status()).isEqualTo(GenerationJob.SUBMITTED);
 		assertThat(loaded.completedAt()).isNull();
 	}
 
@@ -226,7 +297,7 @@ class GenerationOrchestrationTest {
 
 	@Test
 	void successorOutboxIsCommittedBeforeNonterminalAck() {
-		RecordingWorkOutbox outbox = new RecordingWorkOutbox();
+		RecordingWorkOutbox outbox = new RecordingWorkOutbox(operations);
 		processor = processor(provider, null, outbox);
 		generationStore.insertJob(queuedJob());
 		provider.statusResult(new StatusQueryResult.Observed(new GenerationStatus.Queued()));
@@ -237,6 +308,7 @@ class GenerationOrchestrationTest {
 		assertThat(outbox.successors().getFirst().generationJobId()).isEqualTo(JOB_ID.value());
 		assertThat(outbox.successors().getFirst().notBefore()).isEqualTo(NOW.plusSeconds(3));
 		assertThat(queue.deleted()).containsExactly(lease);
+		assertThat(operations).containsSubsequence("SUCCESSOR_COMMITTED", "LEASE_ACK");
 		assertThat(generationStore.findJob(JOB_ID).orElseThrow().completedAt()).isNull();
 	}
 
@@ -328,10 +400,12 @@ class GenerationOrchestrationTest {
 		CountDownLatch start = new CountDownLatch(1);
 		CountDownLatch done = new CountDownLatch(2);
 		try {
-			pool.submit(() -> runProcess(start, done, new GenerationWorkLease(JOB_ID.value(), "r-a")));
-			pool.submit(() -> runProcess(start, done, new GenerationWorkLease(JOB_ID.value(), "r-b")));
+			Future<?> first = pool.submit(() -> runProcess(start, done, new GenerationWorkLease(JOB_ID.value(), "r-a")));
+			Future<?> second = pool.submit(() -> runProcess(start, done, new GenerationWorkLease(JOB_ID.value(), "r-b")));
 			start.countDown();
 			assertThat(done.await(5, TimeUnit.SECONDS)).isTrue();
+			first.get(5, TimeUnit.SECONDS);
+			second.get(5, TimeUnit.SECONDS);
 		}
 		finally {
 			pool.shutdownNow();
@@ -462,6 +536,30 @@ class GenerationOrchestrationTest {
 			.tag("category", GenerationMetrics.TERMINAL_FAILED)
 			.counter())
 			.isNotNull();
+	}
+
+	@Test
+	void missingInputMetricIsFailedNotSubjectDeleted() {
+		SimpleMeterRegistry registry = new SimpleMeterRegistry();
+		processor = processor(provider, null, null, null, new GenerationMetrics(registry));
+		generationStore.insertJob(queuedJob());
+		when(resolver.resolve(any())).thenThrow(new GenerationInputMissingException(
+			"generation input is absent", new IllegalStateException("missing")));
+
+		processor.process(lease);
+
+		GenerationJob failed = generationStore.findJob(JOB_ID).orElseThrow();
+		assertThat(failed.status()).isEqualTo(GenerationJob.FAILED);
+		assertThat(failed.terminalReason()).isEqualTo("INPUT_MEDIA_MISSING");
+		Counter failedMetric = registry.find(GenerationMetrics.TERMINAL)
+			.tag("category", GenerationMetrics.TERMINAL_FAILED)
+			.counter();
+		assertThat(failedMetric).isNotNull();
+		assertThat(failedMetric.count()).isEqualTo(1.0);
+		assertThat(registry.find(GenerationMetrics.TERMINAL)
+			.tag("category", GenerationMetrics.TERMINAL_SUBJECT_DELETED)
+			.counter())
+			.isNull();
 	}
 
 	@Test
@@ -834,7 +932,7 @@ class GenerationOrchestrationTest {
 
 	@Test
 	void t12_indeterminateUnsafeDoesNotResubmit() {
-		RecordingWorkOutbox outbox = new RecordingWorkOutbox();
+		RecordingWorkOutbox outbox = new RecordingWorkOutbox(operations);
 		processor = processor(provider, outbox, CLOCK);
 		generationStore.insertJob(queuedJob());
 		provider.submitResult(new GenerationSubmission.Indeterminate(RecordingVtonProvider.indeterminateFailure()));
@@ -865,7 +963,7 @@ class GenerationOrchestrationTest {
 
 	@Test
 	void coincidentDeadlinesTerminateIndeterminateAttemptWithRecoveryReason() {
-		RecordingWorkOutbox outbox = new RecordingWorkOutbox();
+		RecordingWorkOutbox outbox = new RecordingWorkOutbox(operations);
 		processor = processor(provider, outbox, CLOCK);
 		Instant coincidentDeadline = NOW.plus(Duration.ofMinutes(4));
 		generationStore.insertJob(queuedJobWithDeadline(coincidentDeadline));
@@ -1105,7 +1203,7 @@ class GenerationOrchestrationTest {
 		RenderPlan plan = twoStepPlan();
 		generationStore.renderPlan(JOB_ID, plan);
 		generationStore.insertJob(jobForPlan(plan));
-		RecordingWorkOutbox outbox = new RecordingWorkOutbox();
+		RecordingWorkOutbox outbox = new RecordingWorkOutbox(operations);
 		processor = processor(provider, null, outbox);
 		generationStore.failAfterAttemptCompleteOnce();
 
@@ -1290,7 +1388,7 @@ class GenerationOrchestrationTest {
 	}
 	@Test
 	void qualityRetryAfterSubjectDeletionWithRemainingBudgetRetainsAcceptedUsageWithoutSuccessor() {
-		RecordingWorkOutbox outbox = new RecordingWorkOutbox();
+		RecordingWorkOutbox outbox = new RecordingWorkOutbox(operations);
 		processor = processor(provider, null, outbox);
 		generationStore.insertJob(queuedJob());
 		qualityGate.decision = QualityDecision.RETRY;
@@ -1339,7 +1437,7 @@ class GenerationOrchestrationTest {
 	}
 	@Test
 	void qualityRetryDeletionBetweenPrecheckAndRetryPersistenceDoesNotCreateSuccessor() {
-		RecordingWorkOutbox outbox = new RecordingWorkOutbox();
+		RecordingWorkOutbox outbox = new RecordingWorkOutbox(operations);
 		processor = processor(provider, null, outbox);
 		generationStore.insertJob(queuedJob());
 		generationStore.insertAttempt(openAttempt(1, false, null));
@@ -1613,7 +1711,7 @@ class GenerationOrchestrationTest {
 	@Test
 	void ownedWithoutProviderJobIdTerminalizesUnknownOutcome() {
 		Instant recoveryDeadlineAt = NOW.plus(Duration.ofMinutes(5));
-		RecordingWorkOutbox outbox = new RecordingWorkOutbox();
+		RecordingWorkOutbox outbox = new RecordingWorkOutbox(operations);
 		processor = processor(provider, outbox, CLOCK);
 		generationStore.insertJob(queuedJob());
 		generationStore.insertAttempt(openIndeterminateRecoveryAttempt(recoveryDeadlineAt, false));
@@ -1661,7 +1759,7 @@ class GenerationOrchestrationTest {
 	@Test
 	void blockedUnsafeReplayWaitsForRecoveryDeadlineThenTerminatesIndeterminate() {
 		Instant recoveryDeadlineAt = NOW.plus(Duration.ofMinutes(5));
-		RecordingWorkOutbox outbox = new RecordingWorkOutbox();
+		RecordingWorkOutbox outbox = new RecordingWorkOutbox(operations);
 		processor = processor(provider, outbox, CLOCK);
 		generationStore.insertJob(queuedJob());
 		generationStore.insertAttempt(openIndeterminateRecoveryAttempt(recoveryDeadlineAt, true));
@@ -1797,6 +1895,48 @@ class GenerationOrchestrationTest {
 		assertThat(notificationStore.inserted()).noneMatch(notification -> "LOOK_READY".equals(notification.type()));
 		assertThat(objects.deletedKeys().stream().anyMatch(key -> key.contains("/looks/"))).isTrue();
 		assertThat(queue.deleted()).containsExactly(lease);
+	}
+
+	@Test
+	void cancellationAfterQualityBeforePublishDoesNotReportUserDeleted() {
+		SimpleMeterRegistry registry = new SimpleMeterRegistry();
+		capacityStore = new RecordingCapacityLeaseStore();
+		processor = processor(provider, null, null, null, new GenerationMetrics(registry));
+		generationStore.insertJob(queuedJob());
+		generationStore.afterSaveQualityResult = () -> generationStore.cancelIfActive(JOB_ID, NOW);
+		Logger logger = (Logger) LoggerFactory.getLogger(GenerationWorkProcessor.class);
+		ListAppender<ILoggingEvent> appender = new ListAppender<>();
+		appender.start();
+		logger.addAppender(appender);
+
+		try {
+			processor.process(lease);
+		}
+		finally {
+			logger.detachAppender(appender);
+		}
+
+		GenerationJob cancelled = generationStore.findJob(JOB_ID).orElseThrow();
+		assertThat(cancelled.status()).isEqualTo(GenerationJob.FAILED);
+		assertThat(cancelled.terminalReason()).isEqualTo(GenerationJob.CANCELLED_BY_USER);
+		GenerationAttempt attempt = generationStore.listAttempts(JOB_ID).getFirst();
+		assertThat(attempt.completedAt()).isNull();
+		assertThat(attempt.failureCode()).isNull();
+		assertThat(appender.list).noneMatch(event -> event.getFormattedMessage().contains(TerminalReason.USER_DELETED.name()));
+		assertThat(registry.find(GenerationMetrics.TERMINAL)
+			.tag("category", GenerationMetrics.TERMINAL_SUBJECT_DELETED)
+			.counter())
+			.isNull();
+		assertThat(capacityStore.released).containsExactly(attempt.id());
+		assertThat(lookStore.inserted()).isEmpty();
+		assertThat(notificationStore.inserted()).isEmpty();
+		assertThat(queue.deleted()).containsExactly(lease);
+
+		GenerationWorkLease redelivery = new GenerationWorkLease(JOB_ID.value(), "receipt-2");
+		processor.process(redelivery);
+
+		assertThat(capacityStore.released).containsExactly(attempt.id());
+		assertThat(queue.deleted()).containsExactly(lease, redelivery);
 	}
 
 	@Test
@@ -2405,7 +2545,8 @@ class GenerationOrchestrationTest {
 			null,
 			() -> 0.0,
 			costCircuitBreaker,
-			providerHealthGate);
+			providerHealthGate,
+			productMetrics);
 	}
 
 	private GenerationWorkProcessor processor(
@@ -2467,7 +2608,7 @@ class GenerationOrchestrationTest {
 			workOutboxStore,
 			callbackInboxStore,
 			metrics,
-			null,
+			capacityStore,
 			null,
 			() -> 0.0,
 			costCircuitBreaker,
@@ -3137,6 +3278,8 @@ class GenerationOrchestrationTest {
 		};
 		private volatile Runnable beforeQualityCheckCas = () -> {
 		};
+		private volatile Runnable afterSaveQualityResult = () -> {
+		};
 		private volatile String persistedRetryPolicyOverride;
 
 		private void failMarkJobCompletedOnce() {
@@ -3299,6 +3442,7 @@ class GenerationOrchestrationTest {
 		@Override
 		public synchronized void saveQualityResult(QualityResult qualityResult) {
 			qualityResults.put(qualityResult.generationAttemptId(), qualityResult);
+			afterSaveQualityResult.run();
 		}
 
 		@Override
@@ -3939,6 +4083,11 @@ class GenerationOrchestrationTest {
 
 	private static final class InMemoryLookStore implements LookStore {
 		private final List<Look> inserted = new CopyOnWriteArrayList<>();
+		private final List<String> operations;
+
+		private InMemoryLookStore(List<String> operations) {
+			this.operations = operations;
+		}
 		private boolean throwOnInsert;
 		private volatile InMemoryGenerationStore generationStore;
 
@@ -3952,6 +4101,7 @@ class GenerationOrchestrationTest {
 				throw new RuntimeException("look insert failed");
 			}
 			inserted.add(look);
+			operations.add("LOOK_INSERTED");
 			return look;
 		}
 
@@ -3976,6 +4126,7 @@ class GenerationOrchestrationTest {
 				return existing;
 			}
 			inserted.add(look);
+			operations.add("LOOK_INSERTED");
 			return Optional.of(look);
 		}
 
@@ -3996,12 +4147,16 @@ class GenerationOrchestrationTest {
 
 	private static final class InMemoryNotificationStore implements NotificationStore {
 		private final List<Notification> inserted = new CopyOnWriteArrayList<>();
-		private final List<String> order = new CopyOnWriteArrayList<>();
+		private final List<String> operations;
+
+		private InMemoryNotificationStore(List<String> operations) {
+			this.operations = operations;
+		}
 
 		@Override
 		public void insert(Notification notification) {
 			inserted.add(notification);
-			order.add(notification.type());
+			operations.add(notification.type());
 		}
 
 		@Override
@@ -4014,12 +4169,17 @@ class GenerationOrchestrationTest {
 		}
 
 		private boolean lookReadyAfterLook() {
-			return order.contains("LOOK_READY");
+			return operations.indexOf("LOOK_READY") > operations.indexOf("LOOK_INSERTED");
 		}
 	}
 
 	private static final class InMemoryQueue implements GenerationWorkQueue {
 		private final List<GenerationWorkLease> deleted = new CopyOnWriteArrayList<>();
+		private final List<String> operations;
+
+		private InMemoryQueue(List<String> operations) {
+			this.operations = operations;
+		}
 		private boolean throwOnExtend;
 
 		@Override
@@ -4041,6 +4201,7 @@ class GenerationOrchestrationTest {
 		@Override
 		public void delete(GenerationWorkLease lease) {
 			deleted.add(lease);
+			operations.add("LEASE_ACK");
 		}
 
 		private List<GenerationWorkLease> deleted() {
@@ -4210,6 +4371,11 @@ class GenerationOrchestrationTest {
 
 	private static final class RecordingWorkOutbox implements WorkOutboxStore {
 		private final List<Successor> successors = new CopyOnWriteArrayList<>();
+		private final List<String> operations;
+
+		private RecordingWorkOutbox(List<String> operations) {
+			this.operations = operations;
+		}
 		private volatile InMemoryGenerationStore generationStore;
 		private void attach(InMemoryGenerationStore store) {
 			this.generationStore = store;
@@ -4231,6 +4397,7 @@ class GenerationOrchestrationTest {
 		@Override
 		public void insertSuccessor(UUID generationJobId, Instant notBefore) {
 			successors.add(new Successor(generationJobId, notBefore));
+			operations.add("SUCCESSOR_COMMITTED");
 		}
 		@Override
 		public boolean insertSuccessorIfActive(UUID generationJobId, Instant notBefore) {
@@ -4251,6 +4418,7 @@ class GenerationOrchestrationTest {
 					return false;
 				}
 				successors.add(new Successor(generationJobId, notBefore));
+				operations.add("SUCCESSOR_COMMITTED");
 				return true;
 			}
 		}
@@ -4260,6 +4428,18 @@ class GenerationOrchestrationTest {
 		}
 
 		private record Successor(UUID generationJobId, Instant notBefore) {
+		}
+	}
+
+	private static final class RecordingCapacityLeaseStore implements GenerationCapacityLeaseStore {
+		private final List<GenerationAttemptId> released = new CopyOnWriteArrayList<>();
+
+		@Override public boolean tryAcquire(String providerKey, GenerationAttemptId attemptId, Instant now, Instant leaseExpiresAt, int maxSlots) {
+			return true;
+		}
+
+		@Override public void release(GenerationAttemptId attemptId, Instant releasedAt) {
+			released.add(attemptId);
 		}
 	}
 

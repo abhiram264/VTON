@@ -56,6 +56,14 @@ public class SharesController {
 		return service().get(userId, importId);
 	}
 
+	@GetMapping("/{importId}/preview")
+	public ShareImportPreviewResponse preview(
+		@AuthenticationPrincipal UserId userId,
+		@PathVariable String importId
+	) {
+		return service().preview(userId, importId);
+	}
+
 	@PutMapping("/{importId}/image")
 	public ResponseEntity<ShareImportResponse> attach(
 		@AuthenticationPrincipal UserId userId,
@@ -76,6 +84,18 @@ public class SharesController {
 			throw ShareImportProblem.notFound();
 		}
 	}
+
+	@PostMapping("/{importId}/confirm")
+	public ResponseEntity<VaultItemResponse> confirm(
+		@AuthenticationPrincipal UserId userId,
+		@PathVariable String importId,
+		@RequestBody(required = false) ConfirmShareImportRequest request
+	) {
+		return ResponseEntity.status(HttpStatus.CREATED)
+			.contentType(MediaType.APPLICATION_JSON)
+			.body(service().confirm(userId, importId, request));
+	}
+
 
 	@ExceptionHandler(ShareImportProblem.class)
 	ResponseEntity<ShareImportProblemResponse> problem(ShareImportProblem ex) {

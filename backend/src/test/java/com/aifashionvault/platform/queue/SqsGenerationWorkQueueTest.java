@@ -257,6 +257,7 @@ class SqsGenerationWorkQueueTest {
 			null,
 			null,
 			null,
+			null,
 			null);
 	}
 }

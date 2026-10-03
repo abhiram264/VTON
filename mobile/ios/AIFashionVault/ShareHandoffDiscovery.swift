@@ -27,6 +27,10 @@ enum ShareHandoffDiscovery {
 	private static let replayInterval: TimeInterval = 0.5
 	private static let replayAttemptsMax = 20
 
+	private static let stagingDirectoryName = "ShareStaging"
+	private static let orphanStagingGracePeriod: TimeInterval = 15 * 60
+
+
 	private static var pendingShareIds: [String] = []
 	private static var replayAttempts = 0
 	private static var started = false
@@ -56,6 +60,7 @@ enum ShareHandoffDiscovery {
 		else { return }
 
 		var liveIds: [String] = []
+		var referencedStagedFiles = Set<String>()
 		let now = Date().timeIntervalSince1970
 		for key in defaults.dictionaryRepresentation().keys {
 			guard key.hasPrefix(ShareHandoff.recordKeyPrefix) else { continue }
@@ -63,21 +68,38 @@ enum ShareHandoffDiscovery {
 			guard ShareHandoffContract.isCanonicalUUID(shareId) else { continue }
 			guard let data = defaults.data(forKey: key) else { continue }
 
-			// Expired: remove the record and its staged file, publish nothing.
-			if let record = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-				let expiresAt = record["expiresAt"] as? Int,
+			guard let record = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+				ShareHandoff.isValidRecord(record, shareId: shareId, now: Int(now))
+			else {
+				defaults.removeObject(forKey: key)
+				ShareHandoff.cleanup(shareId: shareId)
+				continue
+			}
+			if let stagedFile = record["stagedFile"] as? String {
+				referencedStagedFiles.insert(stagedFile)
+			}
+
+			// Expired: remove the record and its canonical staged file, publish nothing.
+			if let expiresAt = record["expiresAt"] as? Int,
 				now >= Double(expiresAt)
 			{
 				defaults.removeObject(forKey: key)
-				ShareHandoff.releaseStagedFile(record["stagedFile"] as? String)
+				ShareHandoff.cleanup(shareId: shareId)
 				continue
 			}
-			// Live (or unparseable — the one-time JS consume claims and
-			// cleans those): publish the frozen URI.
+			// Live: publish the frozen URI.
 			liveIds.append(shareId)
 		}
 
-		guard !liveIds.isEmpty else { return }
+		cleanupOrphanedStagedFiles(referencedFiles: referencedStagedFiles, now: now)
+
+		guard !liveIds.isEmpty else {
+			DispatchQueue.main.async {
+				ShareHandoffDiscovery.pendingShareIds = []
+				ShareHandoffDiscovery.replayAttempts = 0
+			}
+			return
+		}
 		DispatchQueue.main.async {
 			ShareHandoffDiscovery.pendingShareIds = liveIds
 			ShareHandoffDiscovery.replayAttempts = 0
@@ -85,14 +107,19 @@ enum ShareHandoffDiscovery {
 		}
 	}
 
-	/// Posts the open-url notification for each pending id and keeps
-	/// replaying while the cold-start window lasts (mirrors
-	/// LookNotificationRouter.replayTick). JS dedupe by shareId makes the
-	/// repeated posts harmless; the loop stops after replayAttemptsMax.
+
+	/// Posts the open-url notification for each pending id and refreshes the
+	/// App Group snapshot after each cold-start window, so a live handoff is
+	/// not silently dropped when the JS listener is slow to register.
+
 	private static func replayTick() {
-		guard !pendingShareIds.isEmpty, replayAttempts < replayAttemptsMax else {
-			pendingShareIds = []
+		guard !pendingShareIds.isEmpty else {
 			replayAttempts = 0
+			return
+		}
+		if replayAttempts >= replayAttemptsMax {
+			replayAttempts = 0
+			discover()
 			return
 		}
 		replayAttempts += 1
@@ -103,6 +130,34 @@ enum ShareHandoffDiscovery {
 		}
 		DispatchQueue.main.asyncAfter(deadline: .now() + ShareHandoffDiscovery.replayInterval) {
 			ShareHandoffDiscovery.replayTick()
+		}
+	}
+
+	private static func cleanupOrphanedStagedFiles(
+		referencedFiles: Set<String>, now: TimeInterval
+	) {
+		guard let container = FileManager.default.containerURL(
+			forSecurityApplicationGroupIdentifier: ShareHandoff.appGroupID)
+		else { return }
+		let staging = container.appendingPathComponent(stagingDirectoryName, isDirectory: true)
+		guard let files = try? FileManager.default.contentsOfDirectory(
+			at: staging,
+			includingPropertiesForKeys: [.isRegularFileKey, .contentModificationDateKey],
+			options: [.skipsHiddenFiles]
+		) else { return }
+
+		let orphanCutoff = now - orphanStagingGracePeriod
+		for file in files where file.pathExtension == "img" {
+			let name = file.lastPathComponent
+			guard !referencedFiles.contains(name),
+				let values = try? file.resourceValues(
+					forKeys: [.isRegularFileKey, .contentModificationDateKey]
+				),
+				values.isRegularFile == true,
+				let modifiedAt = values.contentModificationDate?.timeIntervalSince1970,
+				modifiedAt <= orphanCutoff
+			else { continue }
+			ShareHandoff.releaseStagedFile(name)
 		}
 	}
 }

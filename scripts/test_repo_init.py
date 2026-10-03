@@ -91,6 +91,12 @@ class IsolatedTempRoot(unittest.TestCase):
         except OSError:
             pass
 
+    def _symlink(self, link: Path, target: Path, *, directory: bool = False) -> None:
+        try:
+            link.symlink_to(target, target_is_directory=directory)
+        except (OSError, NotImplementedError) as exc:
+            self.skipTest(f"symlinks unavailable: {exc}")
+
 
 class TestRepoInitIdempotency(IsolatedTempRoot):
     def test_new_creates_phase_zero_baseline_only(self) -> None:
@@ -148,6 +154,32 @@ class TestRepoInitIdempotency(IsolatedTempRoot):
         self.assertIn("README.md", _collision_paths(second.stdout))
         self.assertEqual(readme.read_bytes(), original + b"\n# local fork\n")
 
+    def test_owned_file_symlink_is_collision(self) -> None:
+        with tempfile.TemporaryDirectory() as outside_name:
+            outside = Path(outside_name) / "ARCHITECTURE.md"
+            original = (SCRIPT_HOME / "docs" / "ARCHITECTURE.md").read_bytes()
+            outside.write_bytes(original)
+            (self.root / "docs").mkdir()
+            self._symlink(self.root / "docs" / "ARCHITECTURE.md", outside)
+            proc = _run_init(self.root)
+            self.assertEqual(proc.returncode, 2, proc.stderr)
+            self.assertEqual(_state_lines(proc.stdout), ["COLLISION"])
+            self.assertIn("docs/ARCHITECTURE.md", _collision_paths(proc.stdout))
+            self.assertEqual(outside.read_bytes(), original)
+            self.assertTrue((self.root / "docs" / "ARCHITECTURE.md").is_symlink())
+            self.assertFalse((self.root / "README.md").exists())
+
+    def test_owned_parent_symlink_is_collision(self) -> None:
+        with tempfile.TemporaryDirectory() as outside_name:
+            outside = Path(outside_name)
+            self._symlink(self.root / "docs", outside, directory=True)
+            proc = _run_init(self.root)
+            self.assertEqual(proc.returncode, 2, proc.stderr)
+            self.assertEqual(_state_lines(proc.stdout), ["COLLISION"])
+            self.assertIn("docs/PRD.md", _collision_paths(proc.stdout))
+            self.assertEqual(list(outside.iterdir()), [])
+            self.assertFalse((self.root / "README.md").exists())
+
     def test_advanced_preserves_later_scaffolds(self) -> None:
         first = _run_init(self.root)
         self.assertEqual(first.returncode, 0, first.stderr)
@@ -165,6 +197,17 @@ class TestRepoInitIdempotency(IsolatedTempRoot):
         self.assertEqual(mobile.read_text(encoding="utf-8"), '{"name":"mobile"}\n')
         self.assertEqual(pom.read_text(encoding="utf-8"), "<project/>\n")
         self.assertEqual(compose.read_text(encoding="utf-8"), "services: {}\n")
+    def test_missing_nested_root_is_rejected_inside_parent_repo(self) -> None:
+        self.assertEqual(_git(self.root, "init").returncode, 0)
+        nested = self.root / "missing" / "child"
+        proc = _run_init(nested)
+        self.assertEqual(proc.returncode, 3, proc.stderr)
+        self.assertEqual(_state_lines(proc.stdout), ["WRONG_ROOT / NESTED_REPO_RISK"])
+        self.assertTrue(nested.is_dir())
+        self.assertFalse((nested / ".git").exists())
+        for rel in REQUIRED:
+            self.assertFalse((nested / rel).exists(), rel)
+
 
     def test_existing_git_root_and_nested_wrong_root(self) -> None:
         init = _git(self.root, "init", "-b", "master")

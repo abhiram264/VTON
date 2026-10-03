@@ -6,9 +6,12 @@ import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Objects;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.UUID;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -19,6 +22,7 @@ import java.util.function.DoubleSupplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
+import tools.jackson.databind.ObjectMapper;
 import com.aifashionvault.platform.logging.LoggingPolicy;
 import com.aifashionvault.admission.GlobalCostCircuitBreaker;
 import com.aifashionvault.admission.ProviderExecutionBudgetRequest;
@@ -72,6 +76,9 @@ import com.aifashionvault.notification.Notification;
 import com.aifashionvault.notification.NotificationStore;
 import com.aifashionvault.notification.NotificationEvent;
 import com.aifashionvault.notification.NotificationEventStore;
+import com.aifashionvault.notification.DeviceRegistration;
+import com.aifashionvault.notification.DeviceRegistrationStore;
+import com.aifashionvault.notification.NotificationPreference;
 import com.aifashionvault.platform.generation.AuthorizedGenerationMediaResolver.GenerationInputMissingException;
 import com.aifashionvault.platform.generation.AuthorizedGenerationMediaResolver.GenerationInputUnavailableException;
 import com.aifashionvault.platform.generation.AuthorizedGenerationMediaResolver.ResolvedMedia;
@@ -103,7 +110,7 @@ import com.aifashionvault.shared.UserId;
 public final class GenerationWorkProcessor {
 
 	private static final Logger log = LoggerFactory.getLogger(GenerationWorkProcessor.class);
-	private static final Duration VISIBILITY_EXTENSION = Duration.ofSeconds(90);
+	static final Duration VISIBILITY_EXTENSION = Duration.ofSeconds(90);
 	private static final Duration HEARTBEAT_INTERVAL =
 		Duration.ofSeconds(SqsGenerationWorkQueue.HEARTBEAT_INTERVAL_SECONDS);
 	private static final Duration FIRST_POLL_DELAY = AttemptRedeliveryPolicy.FIRST_POLL_DELAY;
@@ -125,6 +132,7 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 	private static final Duration NOTIFICATION_TTL = Duration.ofHours(24);
 	private static final int PROVIDER_CAPACITY_SLOTS = 8;
 	private static final int MAX_LOGICAL_ATTEMPTS_PER_STEP = 3;
+	private static final ObjectMapper RENDER_PLAN_JSON = new ObjectMapper();
 
 
 	private final GenerationStore generationStore;
@@ -142,36 +150,109 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 	private final WorkOutboxStore workOutboxStore;
 	private final CallbackInboxStore callbackInboxStore;
 	private final GenerationMetrics metrics;
+	private final com.aifashionvault.analytics.ProductMetrics productMetrics;
 	private final GenerationCapacityLeaseStore capacityLeaseStore;
 	private final NotificationEventStore notificationEventStore;
 	private final DoubleSupplier randomFraction;
 	private final GlobalCostCircuitBreaker costCircuitBreaker;
+	private final DeviceRegistrationStore deviceRegistrations;
 	private final ProviderHealthGate providerHealthGate;
 	private final RetryDecisionEngine retryDecisionEngine = new RetryDecisionEngine();
 
 
- 	public GenerationWorkProcessor(
- 		GenerationStore generationStore,
- 		LookStore lookStore,
- 		NotificationStore notificationStore,
- 		GenerationWorkQueue queue,
- 		VtonProvider provider,
- 		AuthorizedGenerationMediaResolver mediaResolver,
- 		PrivacyApprovedInputTransfer inputTransfer,
- 		QualityGate qualityGate,
- 		GenerationMediaStore mediaStore,
- 		ObjectStore objectStore,
- 		Clock clock,
- 		ProviderRegistry providerRegistry,
- 		WorkOutboxStore workOutboxStore,
- 		CallbackInboxStore callbackInboxStore,
- 		GenerationMetrics metrics,
- 		GenerationCapacityLeaseStore capacityLeaseStore,
- 		NotificationEventStore notificationEventStore,
- 		DoubleSupplier randomFraction,
- 		GlobalCostCircuitBreaker costCircuitBreaker,
- 		ProviderHealthGate providerHealthGate
- 	) {
+	public GenerationWorkProcessor(
+		GenerationStore generationStore,
+		LookStore lookStore,
+		NotificationStore notificationStore,
+		GenerationWorkQueue queue,
+		VtonProvider provider,
+		AuthorizedGenerationMediaResolver mediaResolver,
+		PrivacyApprovedInputTransfer inputTransfer,
+		QualityGate qualityGate,
+		GenerationMediaStore mediaStore,
+		ObjectStore objectStore,
+		Clock clock,
+		ProviderRegistry providerRegistry,
+		WorkOutboxStore workOutboxStore,
+		CallbackInboxStore callbackInboxStore,
+		GenerationMetrics metrics,
+		GenerationCapacityLeaseStore capacityLeaseStore,
+		NotificationEventStore notificationEventStore,
+		DoubleSupplier randomFraction,
+		GlobalCostCircuitBreaker costCircuitBreaker,
+		ProviderHealthGate providerHealthGate
+	) {
+		this(generationStore, lookStore, notificationStore, queue, provider, mediaResolver, inputTransfer,
+			qualityGate, mediaStore, objectStore, clock, providerRegistry, workOutboxStore, callbackInboxStore,
+			metrics, capacityLeaseStore, notificationEventStore, randomFraction, costCircuitBreaker,
+			providerHealthGate, null);
+	}
+
+	/**
+	 * Product-lifecycle analytics is an ADDITIVE, optional dependency (C22). The
+	 * existing constructor delegates here with {@code null}, so every current caller
+	 * keeps compiling and a deployment without the bean simply records no lifecycle
+	 * events — observability never gates generation.
+	 */
+	public GenerationWorkProcessor(
+		GenerationStore generationStore,
+		LookStore lookStore,
+		NotificationStore notificationStore,
+		GenerationWorkQueue queue,
+		VtonProvider provider,
+		AuthorizedGenerationMediaResolver mediaResolver,
+		PrivacyApprovedInputTransfer inputTransfer,
+		QualityGate qualityGate,
+		GenerationMediaStore mediaStore,
+		ObjectStore objectStore,
+		Clock clock,
+		ProviderRegistry providerRegistry,
+		WorkOutboxStore workOutboxStore,
+		CallbackInboxStore callbackInboxStore,
+		GenerationMetrics metrics,
+		GenerationCapacityLeaseStore capacityLeaseStore,
+		NotificationEventStore notificationEventStore,
+		DoubleSupplier randomFraction,
+		GlobalCostCircuitBreaker costCircuitBreaker,
+		ProviderHealthGate providerHealthGate,
+		com.aifashionvault.analytics.ProductMetrics productMetrics
+	) {
+		this(generationStore, lookStore, notificationStore, queue, provider, mediaResolver, inputTransfer,
+			qualityGate, mediaStore, objectStore, clock, providerRegistry, workOutboxStore, callbackInboxStore,
+			metrics, capacityLeaseStore, notificationEventStore, randomFraction, costCircuitBreaker,
+			providerHealthGate, productMetrics, null);
+	}
+
+	/**
+	 * Push delivery fan-out is an ADDITIVE, optional dependency (C20): the
+	 * existing constructors delegate here with {@code null}, so a deployment with
+	 * no device registry still records the durable notification event but simply
+	 * addresses no device.
+	 */
+	public GenerationWorkProcessor(
+		GenerationStore generationStore,
+		LookStore lookStore,
+		NotificationStore notificationStore,
+		GenerationWorkQueue queue,
+		VtonProvider provider,
+		AuthorizedGenerationMediaResolver mediaResolver,
+		PrivacyApprovedInputTransfer inputTransfer,
+		QualityGate qualityGate,
+		GenerationMediaStore mediaStore,
+		ObjectStore objectStore,
+		Clock clock,
+		ProviderRegistry providerRegistry,
+		WorkOutboxStore workOutboxStore,
+		CallbackInboxStore callbackInboxStore,
+		GenerationMetrics metrics,
+		GenerationCapacityLeaseStore capacityLeaseStore,
+		NotificationEventStore notificationEventStore,
+		DoubleSupplier randomFraction,
+		GlobalCostCircuitBreaker costCircuitBreaker,
+		ProviderHealthGate providerHealthGate,
+		com.aifashionvault.analytics.ProductMetrics productMetrics,
+		DeviceRegistrationStore deviceRegistrations
+	) {
  		this.generationStore = require(generationStore, "generationStore");
  		this.lookStore = require(lookStore, "lookStore");
  		this.notificationStore = require(notificationStore, "notificationStore");
@@ -187,8 +268,10 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
  		this.workOutboxStore = workOutboxStore;
  		this.callbackInboxStore = callbackInboxStore;
  		this.metrics = metrics;
+		this.productMetrics = productMetrics;
  		this.capacityLeaseStore = capacityLeaseStore;
  		this.notificationEventStore = notificationEventStore;
+		this.deviceRegistrations = deviceRegistrations;
  		this.randomFraction = randomFraction == null
  			? () -> ThreadLocalRandom.current().nextDouble()
  			: randomFraction;
@@ -557,14 +640,14 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 
 		ResolvedMedia media;
 		try {
-			media = mediaResolver.resolve(job);
+			media = stepScopedMedia(job);
 		}
 		catch (GenerationInputMissingException ex) {
-			failTerminal(job, attempt, lease, CODE_PROVIDER_OUTPUT_INVALID, false);
+			failTerminal(job, attempt, lease, TerminalReason.INPUT_MEDIA_MISSING.name(), false);
 			return;
 		}
 		catch (GenerationInputUnavailableException ex) {
-			failTerminal(job, attempt, lease, CODE_PROVIDER_UNAVAILABLE, false);
+			failTerminal(job, attempt, lease, TerminalReason.STORAGE_UNAVAILABLE.name(), false);
 			return;
 		}
 		catch (UnauthorizedGenerationMediaException ex) {
@@ -577,13 +660,23 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 			prepared = inputTransfer.prepare(
 				media.avatar(),
 				active.capabilities().inputTransfers(),
-				PROVIDER_SIGNED_READ_TTL);
+				PROVIDER_SIGNED_READ_TTL,
+				job.userId());
 			for (VtonProductAsset product : media.products()) {
 				inputTransfer.prepare(
 					product.media(),
 					active.capabilities().inputTransfers(),
-					PROVIDER_SIGNED_READ_TTL);
+					PROVIDER_SIGNED_READ_TTL,
+					job.userId());
 			}
+		}
+		catch (ConsentRequiredForTransferException ex) {
+			// The owner has not granted (or has withdrawn) consent for the
+			// body image to reach a third-party provider. Nothing was read and
+			// nothing was signed, so this is a deterministic, non-retryable
+			// refusal rather than an outage.
+			failTerminal(job, attempt, lease, TerminalReason.CONSENT_REQUIRED.name(), false);
+			return;
 		}
 		catch (RuntimeException ex) {
 			failTerminal(job, attempt, lease, TerminalReason.INTERNAL_INVARIANT_FAILURE.name(), false);
@@ -809,9 +902,14 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 			return;
 		}
 		GenerationJob latestForQuality = generationStore.findJob(job.id()).orElse(job);
-		if (unavailable(latestForQuality) || latestForQuality.completedAt() != null) {
+		if (unavailable(latestForQuality) || terminal(latestForQuality)) {
 			outputStore.discard();
-			completeDeleted(latestForQuality, attempt, lease, temp, outputs.getFirst());
+			if (subjectDeleted(latestForQuality)) {
+				completeDeleted(latestForQuality, attempt, lease, temp, outputs.getFirst());
+				return;
+			}
+			releaseCapacity(attempt);
+			queue.delete(lease);
 			return;
 		}
 		Optional<QualityResult> stored = generationStore.findQualityResult(attempt.id());
@@ -841,6 +939,12 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 		}
 		if (!qualityCheck) {
 			outputStore.discard();
+			GenerationJob current = generationStore.findJob(job.id()).orElse(latestJob);
+			if (subjectDeleted(current)) {
+				completeDeleted(current, attempt, lease, temp, outputs.getFirst());
+				return;
+			}
+			releaseCapacity(attempt);
 			queue.delete(lease);
 			return;
 		}
@@ -849,9 +953,16 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 		}
         if (!stillActive(job)) {
             outputStore.discard();
-            completeDeleted(generationStore.findJob(job.id()).orElse(latestJob), attempt, lease, temp, outputs.getFirst());
-            return;
-        }
+			GenerationJob current = generationStore.findJob(job.id()).orElse(latestJob);
+			if (subjectDeleted(current)) {
+				completeDeleted(current, attempt, lease, temp, outputs.getFirst());
+			}
+			else {
+				releaseCapacity(attempt);
+				queue.delete(lease);
+			}
+			return;
+		}
 		QualityEvaluationRequest request = qualityEvaluationRequest(job, attempt, bytes);
 		QualityEvaluationOutcome outcome = qualityGate.evaluate(request);
 		enrichWorkerScope(attempt, resolveProvider(attempt), job);
@@ -868,17 +979,18 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 			case QualityEvaluationOutcome.Completed completed -> {
                 if (!stillActive(job)) {
                     outputStore.discard();
-                    String deletionReason = completed.result().decision() == QualityDecision.PASS
-                        ? TerminalReason.USER_DELETED.name()
-                        : CODE_QUALITY_REJECTED;
-                    completeDeleted(
-                        generationStore.findJob(job.id()).orElse(job),
-                        attempt,
-                        lease,
-                        temp,
-                        outputs.getFirst(),
-                        deletionReason);
-                    return;
+					GenerationJob current = generationStore.findJob(job.id()).orElse(job);
+					if (subjectDeleted(current)) {
+						String deletionReason = completed.result().decision() == QualityDecision.PASS
+							? TerminalReason.USER_DELETED.name()
+							: CODE_QUALITY_REJECTED;
+						completeDeleted(current, attempt, lease, temp, outputs.getFirst(), deletionReason);
+					}
+					else {
+						releaseCapacity(attempt);
+						queue.delete(lease);
+					}
+					return;
                 }
 				QualityResult quality = completed.result();
 				recordQuality(job, attempt, quality);
@@ -916,13 +1028,20 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 		VtonProvider active
 	) {
 		GenerationJob latest = generationStore.findJob(job.id()).orElse(job);
-		if (unavailable(latest) || latest.completedAt() != null) {
+		if (unavailable(latest) || terminal(latest)) {
 			outputStore.discard();
-			completeDeleted(latest, attempt, lease, temp, outputRef);
+			if (subjectDeleted(latest)) {
+				completeDeleted(latest, attempt, lease, temp, outputRef);
+				return;
+			}
+			releaseCapacity(attempt);
+			queue.delete(lease);
 			return;
 		}
 		if (latest.currentStep() < latest.totalSteps()) {
-			outputStore.discard();
+			// Sequential composition: the accepted intermediate stays in TEMP
+			// as the next step's subject input (F07); only the final step's
+			// output is promoted into LOOK.
 			GenerationAttempt finished = finishedAttempt(
 				attempt,
 				"SUCCESS",
@@ -973,6 +1092,7 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 				recordTerminalCategory(GenerationMetrics.TERMINAL_COMPLETED);
 				recordGenerationLatency(job);
 				recordCost(job, finished);
+				recordProductLifecycle(job, finished, com.aifashionvault.analytics.AnalyticsEventName.GENERATION_COMPLETED);
 				releaseCapacity(attempt);
 				notifyReady(job, existing.get());
 			}
@@ -982,14 +1102,15 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 		}
         if (!stillActive(job)) {
             outputStore.discard();
-            GenerationJob current = generationStore.findJob(job.id()).orElse(job);
-            if (unavailable(current)) {
-                completeDeleted(current, attempt, lease, temp, outputRef);
-                return;
-            }
-            queue.delete(lease);
-            return;
-        }
+			GenerationJob current = generationStore.findJob(job.id()).orElse(job);
+			if (subjectDeleted(current)) {
+				completeDeleted(current, attempt, lease, temp, outputRef);
+				return;
+			}
+			releaseCapacity(attempt);
+			queue.delete(lease);
+			return;
+		}
 		ClaimResult claimed = outputStore.promote(metadata.version());
 		if (claimed instanceof ClaimResult.Conflict) {
 			outputStore.discard();
@@ -1002,10 +1123,15 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 			StorageDomain.LOOK,
 			attempt.id().value(),
 			mediaTypeFromTemp(temp.storageKey()));
-		if (unavailable(latest) || latest.completedAt() != null) {
+		if (unavailable(latest) || terminal(latest)) {
 			objectStore.delete(new ObjectRef(StorageDomain.LOOK, lookKey.value()));
 			outputStore.discard();
-			completeDeleted(latest, attempt, lease, temp, outputRef);
+			if (subjectDeleted(latest)) {
+				completeDeleted(latest, attempt, lease, temp, outputRef);
+				return;
+			}
+			releaseCapacity(attempt);
+			queue.delete(lease);
 			return;
 		}
 		LookId lookId = new LookId(UUID.randomUUID());
@@ -1016,7 +1142,7 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 			job.id(),
 			job.studioSessionId(),
 			lookKey,
-			job.requestedMode(),
+			renderPlanJson(job.id()),
 			attempt.provider(),
 			attempt.model(),
 			QualityDecision.PASS,
@@ -1026,7 +1152,13 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 		if (stored.isEmpty()) {
 			objectStore.delete(new ObjectRef(StorageDomain.LOOK, lookKey.value()));
 			outputStore.discard();
-			completeDeleted(generationStore.findJob(job.id()).orElse(latest), attempt, lease, temp, outputRef);
+			GenerationJob current = generationStore.findJob(job.id()).orElse(latest);
+			if (subjectDeleted(current)) {
+				completeDeleted(current, attempt, lease, temp, outputRef);
+				return;
+			}
+			releaseCapacity(attempt);
+			queue.delete(lease);
 			return;
 		}
 		outputStore.discard();
@@ -1035,6 +1167,7 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 		if (won) {
 			recordTerminalCategory(GenerationMetrics.TERMINAL_COMPLETED);
 			recordGenerationLatency(job);
+			recordProductLifecycle(job, finished, com.aifashionvault.analytics.AnalyticsEventName.GENERATION_COMPLETED);
 		}
 		if (!won) {
 			generationStore.completeAttempt(finished);
@@ -1116,6 +1249,7 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 			recordTerminalCategory(GenerationMetrics.TERMINAL_FAILED);
 			recordGenerationLatency(job);
 			recordCost(job, finished);
+			recordProductLifecycle(job, finished, com.aifashionvault.analytics.AnalyticsEventName.GENERATION_QUALITY_REJECTED);
 			releaseCapacity(attempt);
 			notifyFailed(job);
 		}
@@ -1222,7 +1356,7 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 		byte[] subjectBytes = null;
 		byte[] garmentBytes = null;
 		try {
-			ResolvedMedia media = mediaResolver.resolve(job);
+			ResolvedMedia media = stepScopedMedia(job);
 			subjectBytes = loadAuthorizedBytes(media.avatar());
 			int productIndex = Math.min(job.currentStep() - 1, media.products().size() - 1);
 			if (productIndex >= 0) {
@@ -1683,7 +1817,7 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 	private static String terminalCategoryForReason(TerminalReason reason) {
 		return switch (reason) {
 			case CANCELLED_BY_USER -> GenerationMetrics.TERMINAL_CANCELLED;
-			case USER_DELETED, INPUT_MEDIA_DELETED, INPUT_MEDIA_MISSING -> GenerationMetrics.TERMINAL_SUBJECT_DELETED;
+			case USER_DELETED, INPUT_MEDIA_DELETED -> GenerationMetrics.TERMINAL_SUBJECT_DELETED;
 			case SUBMISSION_OUTCOME_INDETERMINATE, PROVIDER_UNKNOWN_FAILURE -> GenerationMetrics.TERMINAL_UNKNOWN;
 			case ORCHESTRATION_DEADLINE_EXCEEDED -> GenerationMetrics.TERMINAL_DEADLINE_EXPIRED;
 			case RETRY_BUDGET_EXHAUSTED, QUALITY_RETRY_EXHAUSTED, QUALITY_EVALUATOR_UNAVAILABLE,
@@ -1804,6 +1938,7 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 					: terminalCategory);
 			recordGenerationLatency(job);
 			recordCost(job, finished);
+			recordProductLifecycle(latest, finished, com.aifashionvault.analytics.AnalyticsEventName.GENERATION_FAILED);
 			releaseCapacity(attempt);
 			notifyFailed(job);
 		}
@@ -1875,14 +2010,14 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
     }
 
 
-	private boolean completeAttemptAfterSubjectDeletion(GenerationJob job, GenerationAttempt finished) {
-		GenerationJob latest = generationStore.findJob(job.id()).orElse(job);
-		if (latest.subjectDeletedAt() == null && !CODE_SUBJECT_DELETED.equals(latest.terminalReason())) {
-			return false;
-		}
-		generationStore.completeAttempt(finished);
-		return true;
-	}
+    private boolean completeAttemptAfterSubjectDeletion(GenerationJob job, GenerationAttempt finished) {
+        GenerationJob latest = generationStore.findJob(job.id()).orElse(job);
+        if (!subjectDeleted(latest)) {
+            return false;
+        }
+        generationStore.completeAttempt(finished);
+        return true;
+    }
 
 	private void continueLater(GenerationJob job, GenerationWorkLease lease, Duration delay) {
 		if (workOutboxStore == null) {
@@ -2631,6 +2766,10 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 		return job.cancelledAt() != null || job.subjectDeletedAt() != null;
 	}
 
+	private static boolean subjectDeleted(GenerationJob job) {
+		return job != null && (job.subjectDeletedAt() != null || CODE_SUBJECT_DELETED.equals(job.terminalReason()));
+	}
+
 	private boolean stillActive(GenerationJob observed) {
 		GenerationJob latest = generationStore.findJob(observed.id()).orElse(observed);
 		return !terminal(latest) && !unavailable(latest);
@@ -2639,6 +2778,62 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 	private static VtonMode mode(GenerationJob job) {
 		String requested = job.requestedMode() == null || job.requestedMode().isBlank() ? "try-on" : job.requestedMode();
 		return new VtonMode(requested);
+	}
+
+	/**
+	 * Serializes the job's persisted render plan as the Look's provenance
+	 * (F06): the renderPlan column must carry the actual plan (version and
+	 * step identities), never the requested mode string. Jobs without a
+	 * persisted plan store NULL rather than fake provenance.
+	 */
+	private String renderPlanJson(GenerationJobId jobId) {
+		return renderPlan(jobId).map(RENDER_PLAN_JSON::writeValueAsString).orElse(null);
+	}
+
+	/**
+	 * Sequential composition (PRD multi-item flow, F07): each render step
+	 * sends only its planned items, and from step 2 on the subject is the
+	 * previous render step's accepted output (its retained TEMP key). Step 1
+	 * renders the original authorized avatar with its own planned items. A
+	 * missing previous accepted output for step > 1 is a broken composition
+	 * invariant and fails as absent input instead of silently re-rendering
+	 * the original avatar.
+	 */
+	private ResolvedMedia stepScopedMedia(GenerationJob job) {
+		ResolvedMedia media = mediaResolver.resolve(job);
+		Optional<RenderPlan> plan = renderPlan(job.id());
+		if (plan.isEmpty() || job.currentStep() < 1 || job.currentStep() > plan.get().steps().size()) {
+			return media;
+		}
+		RenderStep currentStep = plan.get().steps().get(job.currentStep() - 1);
+		PrivateMediaRef subject = media.avatar();
+		if (job.currentStep() > 1) {
+			UUID previousStepId = plan.get().steps().get(job.currentStep() - 2).id();
+			StorageKey previousOutput = generationStore.listAttempts(job.id()).stream()
+				.filter(existing -> "SUCCESS".equals(existing.technicalOutcome()) && existing.failureCode() == null)
+				.filter(existing -> sameRenderStep(existing.renderStepId(), previousStepId))
+				.map(GenerationAttempt::tempStorageKey)
+				.filter(Objects::nonNull)
+				.reduce((first, second) -> second)
+				.orElseThrow(() -> new GenerationInputMissingException(
+					"previous render step has no retained accepted output",
+					null));
+			subject = new PrivateMediaRef(previousOutput, OptionalLong.empty());
+		}
+		List<VtonProductAsset> scoped = new ArrayList<>();
+		List<VaultItemId> jobProductIds = job.productVaultItemIds();
+		for (int i = 0; i < media.products().size() && i < jobProductIds.size(); i++) {
+			int index = i;
+			boolean planned = currentStep.items().stream()
+				.anyMatch(item -> item.vaultItemId().equals(jobProductIds.get(index)));
+			if (planned) {
+				scoped.add(media.products().get(i));
+			}
+		}
+		if (scoped.isEmpty()) {
+			scoped = media.products();
+		}
+		return new ResolvedMedia(subject, scoped);
 	}
 
 
@@ -2780,11 +2975,35 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 		capacityLeaseStore.release(attempt.id(), clock.instant());
 	}
 
-	private void insertNotificationEvent(NotificationEvent event) {
+	void insertNotificationEvent(NotificationEvent event) {
 		if (notificationEventStore == null) {
 			return;
 		}
 		notificationEventStore.insert(event);
+		addressRegisteredDevices(event);
+	}
+
+	/**
+	 * Creates the durable per-device delivery rows that the FCM worker's
+	 * {@code claimDue} joins on (C20). Without this the event row exists but no
+	 * delivery is ever claimable, so push is structurally dead. Runs even when the
+	 * event insert was a replay no-op: {@code ensureDelivery} is idempotent
+	 * (UNIQUE(event_id, device_identity)), and a first pass that crashed between
+	 * the event insert and the fan-out must still be completed.
+	 */
+	private void addressRegisteredDevices(NotificationEvent event) {
+		if (deviceRegistrations == null) {
+			return;
+		}
+		boolean pushEnabled = deviceRegistrations.findPreference(event.userId())
+			.map(NotificationPreference::pushEnabled)
+			.orElse(true);
+		if (!pushEnabled) {
+			return;
+		}
+		for (DeviceRegistration registration : deviceRegistrations.listByUser(event.userId())) {
+			notificationEventStore.ensureDelivery(event.id(), registration.deviceToken());
+		}
 	}
 
 	private void recordTransition(String from, String to) {
@@ -2808,6 +3027,52 @@ private static final String CODE_ORCHESTRATION_DEADLINE = TerminalReason.ORCHEST
 		if (metrics != null) {
 			metrics.recordTerminal(category);
 		}
+	}
+
+	/**
+	 * C22 lifecycle event for a durable terminal transition. Payloads carry only the
+	 * coarse, non-identifying context {@link ProductMetricContext} already defines
+	 * (outcome, mode, provider/model, item count, latency, cost) — never image bytes,
+	 * prompts, tokens or signed URLs. Best-effort: a metrics failure must never affect
+	 * generation, and a deployment without the bean records nothing.
+	 */
+	private void recordProductLifecycle(
+		GenerationJob job,
+		GenerationAttempt attempt,
+		com.aifashionvault.analytics.AnalyticsEventName eventName
+	) {
+		if (productMetrics == null || job == null || eventName == null) {
+			return;
+		}
+		try {
+			Instant now = clock.instant();
+			productMetrics.record(eventName, new com.aifashionvault.analytics.ProductMetricContext(
+				now,
+				eventName.wireName(),
+				job.requestedMode(),
+				null,
+				attempt == null ? null : attempt.provider(),
+				attempt == null ? null : attempt.model(),
+				attempt == null || attempt.latencyMs() == null || attempt.latencyMs() < 0
+					? null
+					: attempt.latencyMs().longValue(),
+				(long) job.productVaultItemIds().size(),
+				attempt == null ? null : attemptCost(attempt)));
+		}
+		catch (RuntimeException ignored) {
+			// Observability is deliberately off the product critical path.
+		}
+	}
+
+	/** The attempt's actual cost when known, else its estimate, else null (never invented). */
+	private static java.math.BigDecimal attemptCost(GenerationAttempt attempt) {
+		if (PricingSnapshot.COST_FINAL.equals(attempt.costStatus())) {
+			return attempt.actualCost();
+		}
+		if (PricingSnapshot.COST_UNKNOWN.equals(attempt.costStatus())) {
+			return null;
+		}
+		return attempt.estimatedCost() != null ? attempt.estimatedCost() : attempt.actualCost();
 	}
 
 	private void recordQueueWait(GenerationJob job) {

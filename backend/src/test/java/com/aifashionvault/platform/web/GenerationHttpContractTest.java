@@ -3,6 +3,9 @@ import java.io.InputStream;
 import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
+import java.util.Optional;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.Set;
 import java.util.TimeZone;
 import java.util.UUID;
@@ -32,6 +35,9 @@ import com.aifashionvault.platform.objectstore.GenerationMediaStore;
 import com.aifashionvault.platform.objectstore.ProductInputClaimCommand;
 import com.aifashionvault.platform.generation.RecordingVtonProvider;
 import com.aifashionvault.platform.generation.GenerationMetrics;
+import com.aifashionvault.platform.generation.GenerationWorkProcessor;
+import com.aifashionvault.platform.queue.GenerationWorkLease;
+import com.aifashionvault.platform.queue.GenerationWorkQueue;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -64,6 +70,9 @@ class GenerationHttpContractTest {
 	@Autowired JdbcTemplate jdbc;
 	@Autowired MeterRegistry meters;
 	@Autowired RecordingVtonProvider provider;
+	@Autowired GenerationWorkProcessor processor;
+	@Autowired RecordingWorkQueue queue;
+	@Autowired RecordingProductMetrics productMetrics;
 
 	@DynamicPropertySource
 	static void datasource(DynamicPropertyRegistry registry) {
@@ -78,17 +87,22 @@ class GenerationHttpContractTest {
 
 	@BeforeEach
 	void clearTables() {
-		jdbc.update("TRUNCATE TABLE generation_admission_counter, look_item, look, quality_result, "
+		jdbc.update("TRUNCATE TABLE generation_admission_counter, generation_admission_reservation, look_item, look, quality_result, "
 			+ "generation_callback_inbox, generation_work_outbox, generation_quota_reservation, "
 			+ "generation_notification_delivery, generation_notification_event, generation_provider_capacity_slot, "
 			+ "generation_attempt, generation_render_step_item, generation_render_step, generation_job_product, "
 			+ "generation_job, vault_item, studio_item, studio_session, avatar_image, avatar_profile, identity_mapping, "
 			+ "users CASCADE");
+		productMetrics.reset();
 	}
 
 	@Test
 	void createReturnsExact202ResourceAndDoesNotCallProvider() throws Exception {
 		Owner owner = seedOwner(true);
+		UUID expectedAvatarImageId = jdbc.queryForObject(
+			"SELECT primary_image_id FROM avatar_profile WHERE id = ?", UUID.class, owner.profileId());
+		int expectedAvatarRevision = jdbc.queryForObject(
+			"SELECT revision FROM avatar_profile WHERE id = ?", Integer.class, owner.profileId());
 		MvcResult result = create(owner, "key-1", owner.uploadId());
 		JsonNode body = MAPPER.readTree(result.getResponse().getContentAsString());
 
@@ -105,6 +119,10 @@ class GenerationHttpContractTest {
 		assertThat(count("generation_work_outbox")).isEqualTo(1);
 		assertThat(count("generation_attempt")).isZero();
 		assertThat(provider.submitCount()).isZero();
+		assertThat(jdbc.queryForObject("SELECT avatar_image_id FROM generation_job WHERE id = ?", UUID.class, id))
+			.isEqualTo(expectedAvatarImageId);
+		assertThat(jdbc.queryForObject("SELECT avatar_revision FROM generation_job WHERE id = ?", Integer.class, id))
+			.isEqualTo(expectedAvatarRevision);
 	}
 
 
@@ -219,6 +237,12 @@ class GenerationHttpContractTest {
 			.andExpect(status().isOk()).andReturn());
 		assertThat(replay).isEqualTo(first);
 		assertThat(count("look")).isZero();
+		GenerationWorkLease lateWork = new GenerationWorkLease(id, "late-work");
+		processor.process(lateWork);
+
+		assertThat(get(owner, id)).isEqualTo(first);
+		assertThat(queue.deleted()).containsExactly(lateWork);
+		assertThat(provider.submitCount()).isZero();
 	}
 
 	@Test
@@ -259,6 +283,83 @@ class GenerationHttpContractTest {
 			.andExpect(status().isBadRequest());
 
 		assertThat(generationCount()).isEqualTo(before);
+	}
+
+	@Test
+	void listReturnsOwnerScopedRecentGenerationsNewestFirst() throws Exception {
+		Owner owner = seedOwner(true);
+		Instant base = Instant.now().minusSeconds(3600);
+		UUID oldest = insertJobAt(owner, "GENERATING", null, base);
+		UUID middle = insertJobAt(owner, "FAILED", "CANCELLED_BY_USER", base.plusSeconds(60));
+		UUID newest = insertJobAt(owner, "COMPLETED", null, base.plusSeconds(120));
+		UUID lookId = UUID.randomUUID();
+		jdbc.update("INSERT INTO look (id, user_id, avatar_profile_id, generation_job_id, storage_key, provider, provider_model, quality_status, created_at) VALUES (?, ?, ?, ?, ?, 'provider-secret', 'model-secret', 'PASS', ?)",
+			lookId, owner.userId().value(), owner.profileId(), newest, "private/secret", Timestamp.from(base.plusSeconds(120)));
+
+		Owner stranger = seedOwnerFor("foreign-list-owner");
+		UUID foreign = insertJobAt(stranger, "QUEUED", null, base.plusSeconds(30));
+
+		JsonNode body = list(owner);
+		List<String> ids = new java.util.ArrayList<>();
+		body.forEach(node -> ids.add(node.get("id").stringValue()));
+		assertThat(ids).containsExactly(newest.toString(), middle.toString(), oldest.toString());
+		assertThat(ids).doesNotContain(foreign.toString());
+		// Conditional fields stay exactly as the single-resource contract defines them.
+		assertThat(body.get(0).get("lookId").stringValue()).isEqualTo(lookId.toString());
+		assertThat(body.get(1).get("failureCode").stringValue()).isEqualTo("CANCELLED_BY_USER");
+		assertThat(body.get(2).propertyNames()).containsExactly(
+			"id", "status", "phase", "statusVersion", "createdAt", "updatedAt");
+
+		// Another account's list never contains this owner's rows.
+		JsonNode strangerBody = list(stranger);
+		assertThat(strangerBody.size()).isEqualTo(1);
+		assertThat(strangerBody.get(0).get("id").stringValue()).isEqualTo(foreign.toString());
+
+		mockMvc.perform(MockMvcRequestBuilders.get("/generations")).andExpect(status().isUnauthorized());
+	}
+
+	@Test
+	void listIsBoundedToTheMostRecentWindow() throws Exception {
+		Owner owner = seedOwner(true);
+		Instant base = Instant.now().minusSeconds(7200);
+		int total = GenerationCreationService.MAX_RECENT_GENERATIONS + 5;
+		UUID newest = null;
+		for (int index = 0; index < total; index++) {
+			UUID id = insertJobAt(owner, "QUEUED", null, base.plusSeconds(index));
+			if (index == total - 1) {
+				newest = id;
+			}
+		}
+		assertThat(count("generation_job")).isEqualTo(total);
+
+		JsonNode body = list(owner);
+		assertThat(body.size()).isEqualTo(GenerationCreationService.MAX_RECENT_GENERATIONS);
+		assertThat(body.get(0).get("id").stringValue()).isEqualTo(newest.toString());
+	}
+
+	private JsonNode list(Owner owner) throws Exception {
+		return json(mockMvc.perform(MockMvcRequestBuilders.get("/generations")
+				.header(HttpHeaders.AUTHORIZATION, bearer(owner.token())))
+			.andExpect(status().isOk()).andReturn());
+	}
+
+	private Owner seedOwnerFor(String subject) throws Exception {
+		String token = InProcessJwtFixture.bearerTokenForSubject(subject);
+		mockMvc.perform(MockMvcRequestBuilders.get("/me").header(HttpHeaders.AUTHORIZATION, bearer(token)))
+			.andExpect(status().isOk());
+		UUID user = jdbc.queryForObject("SELECT user_id FROM identity_mapping WHERE subject = ?", UUID.class, subject);
+		UserId userId = new UserId(user);
+		return new Owner(token, userId, insertProfileWithImage(userId), UUID.randomUUID());
+	}
+
+	private UUID insertJobAt(Owner owner, String status, String reason, Instant createdAt) {
+		UUID id = UUID.randomUUID();
+		UUID image = jdbc.queryForObject("SELECT primary_image_id FROM avatar_profile WHERE id = ?", UUID.class, owner.profileId());
+		Timestamp ts = Timestamp.from(createdAt);
+		jdbc.update("INSERT INTO generation_job (id, user_id, status, requested_mode, client_request_id, created_at, updated_at, completed_at, avatar_image_id, terminal_reason, status_version) VALUES (?, ?, ?, 'STANDARD', ?, ?, ?, ?, ?, ?, 0)",
+			id, owner.userId().value(), status, "request-" + id, ts, ts,
+			Set.of("COMPLETED", "FAILED").contains(status) ? ts : null, image, reason);
+		return id;
 	}
 
 	private double generationCount() {
@@ -318,6 +419,31 @@ class GenerationHttpContractTest {
 		return id;
 	}
 
+	/**
+	 * C22: a genuinely admitted generation intent records the "generation admitted"
+	 * lifecycle event; a rejected request admits nothing and records nothing.
+	 */
+	@Test
+	void admittedGenerationRecordsTheRequestedLifecycleEventAndRejectionRecordsNothing() throws Exception {
+		Owner owner = seedOwner(true);
+
+		create(owner, "lifecycle-admitted", owner.uploadId());
+		assertThat(productMetrics.names())
+			.containsExactly(com.aifashionvault.analytics.AnalyticsEventName.GENERATION_REQUESTED);
+		assertThat(productMetrics.itemCounts()).containsExactly(1L);
+
+		productMetrics.reset();
+		// No Idempotency-Key -> rejected before any admission; nothing was admitted.
+		mockMvc.perform(post("/generations").header(HttpHeaders.AUTHORIZATION, bearer(owner.token()))
+				.contentType(MediaType.APPLICATION_JSON).content(body(owner.uploadId())))
+			.andExpect(status().isBadRequest());
+		assertThat(productMetrics.names()).isEmpty();
+
+		// A replay of an already-accepted key admits nothing new.
+		create(owner, "lifecycle-admitted", owner.uploadId());
+		assertThat(productMetrics.names()).isEmpty();
+	}
+
 	private int count(String table) { return jdbc.queryForObject("SELECT COUNT(*) FROM " + table, Integer.class); }
 	private record Owner(String token, UserId userId, UUID profileId, UUID uploadId) {}
 
@@ -335,7 +461,13 @@ class GenerationHttpContractTest {
         @Bean @Primary GenerationMetrics testGenerationMetrics(SimpleMeterRegistry testGenerationMeterRegistry) {
             return new GenerationMetrics(testGenerationMeterRegistry);
         }
-        @Bean @Primary GenerationMediaStore generationMediaStore() {
+        @Bean @Primary GenerationWorkQueue generationWorkQueue() { return new RecordingWorkQueue(); }
+        @Bean @Primary RecordingProductMetrics recordingProductMetrics() { return new RecordingProductMetrics(); }
+		// RULE: never reuse a production bean name for a test bean. A name collision throws
+		// BeanDefinitionOverrideException at registration and kills the context, and @Primary
+		// does not prevent it. Renamed from generationMediaStore; the product bean is @Primary
+		// and delegates to this stub, so the request path still uses the double.
+        @Bean GenerationMediaStore stubGenerationMediaStore() {
             return new GenerationMediaStore() {
                 @Override public void putBounded(StorageKey dest, InputStream source, long maxBytes, String mediaType) { }
                 @Override public ClaimResult claim(com.aifashionvault.platform.objectstore.GenerationClaimCommand command) {
@@ -347,4 +479,37 @@ class GenerationHttpContractTest {
             };
         }
     }
+
+	static final class RecordingWorkQueue implements GenerationWorkQueue {
+		private final List<GenerationWorkLease> deleted = new CopyOnWriteArrayList<>();
+
+		@Override public void send(UUID generationJobId) { }
+		@Override public Optional<GenerationWorkLease> receive() { return Optional.empty(); }
+		@Override public void extendVisibility(GenerationWorkLease lease, Duration extension) { }
+		@Override public void delete(GenerationWorkLease lease) { deleted.add(lease); }
+		private List<GenerationWorkLease> deleted() { return deleted; }
+	}
+
+	/** Records the C22 lifecycle events this test observes; no meter registry involved. */
+	static final class RecordingProductMetrics implements com.aifashionvault.analytics.ProductMetrics {
+		private final List<com.aifashionvault.analytics.AnalyticsEventName> events = new CopyOnWriteArrayList<>();
+		private final List<Long> itemCounts = new CopyOnWriteArrayList<>();
+
+		@Override
+		public void record(
+			com.aifashionvault.analytics.AnalyticsEventName eventName,
+			com.aifashionvault.analytics.ProductMetricContext context
+		) {
+			events.add(eventName);
+			itemCounts.add(context.itemCount());
+		}
+
+		void reset() {
+			events.clear();
+			itemCounts.clear();
+		}
+
+		List<com.aifashionvault.analytics.AnalyticsEventName> names() { return List.copyOf(events); }
+		List<Long> itemCounts() { return List.copyOf(itemCounts); }
+	}
 }

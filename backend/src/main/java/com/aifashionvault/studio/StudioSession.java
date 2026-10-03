@@ -11,6 +11,7 @@ import com.aifashionvault.shared.StudioItemId;
 import com.aifashionvault.shared.StudioSessionId;
 import com.aifashionvault.shared.StudioSlot;
 import com.aifashionvault.shared.UserId;
+import com.aifashionvault.shared.VaultItemId;
 
 public record StudioSession(
 	StudioSessionId id,
@@ -125,12 +126,16 @@ public record StudioSession(
 
 	private static void validateItems(StudioSessionId sessionId, List<StudioItem> items) {
 		Set<StudioItemId> ids = new HashSet<>();
+		Set<VaultItemId> vaultItemIds = new HashSet<>();
 		for (StudioItem item : items) {
 			if (!sessionId.equals(item.studioSessionId())) {
 				throw new IllegalArgumentException("studioSessionId must match session");
 			}
 			if (!ids.add(item.id())) {
 				throw new IllegalArgumentException("item id must be unique");
+			}
+			if (!vaultItemIds.add(item.vaultItemId())) {
+				throw new IllegalArgumentException("vault item must be unique");
 			}
 		}
 		for (int i = 0; i < items.size(); i++) {

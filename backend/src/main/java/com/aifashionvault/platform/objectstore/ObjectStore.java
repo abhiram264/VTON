@@ -26,8 +26,18 @@ public interface ObjectStore {
 
 	void delete(ObjectRef object);
 
+	/**
+	 * Lists the stored objects under a boundary. Implementations that cannot
+	 * enumerate MUST throw rather than return an empty list.
+	 *
+	 * <p>{@code GenerationOrphanSweeper} decides what to delete from this list: an
+	 * implementation that silently returns nothing would report a healthy
+	 * zero-delete sweep while reaping nothing, so the failure would be invisible.
+	 * Throwing keeps that failure loud.</p>
+	 */
 	default List<StoredObject> list(StorageDomain boundary, String prefix) {
-		return List.of();
+		throw new UnsupportedOperationException(
+			getClass().getName() + " cannot list " + boundary + " (prefix='" + prefix + "')");
 	}
 
 	ClaimResult claim(ClaimCommand command);

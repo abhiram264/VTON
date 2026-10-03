@@ -7,6 +7,7 @@ import java.util.List;
 import java.time.Instant;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.Objects;
 import java.util.UUID;
 
 import javax.sql.DataSource;
@@ -65,6 +66,8 @@ public class JdbcLookStore implements LookStore {
 		requirePassLook(look);
 		try {
 			transactions.execute(status -> {
+				requireGenerationJobOwner(look);
+				requireAssociationOwners(look);
 				insertLook(look);
 				insertItems(look);
 				return null;
@@ -73,7 +76,7 @@ public class JdbcLookStore implements LookStore {
 		}
 		catch (DataAccessException ex) {
 			if (isUniqueViolation(ex)) {
-				return existingLook(look);
+				return existingLook(look, ex);
 			}
 			throw ex;
 		}
@@ -84,9 +87,10 @@ public class JdbcLookStore implements LookStore {
 		requirePassLook(look);
 		try {
 			Optional<Look> inserted = transactions.execute(status -> {
-				if (!lockActiveGenerationJob(look.generationJobId())) {
+				if (!lockActiveGenerationJob(look)) {
 					return Optional.empty();
 				}
+				requireAssociationOwners(look);
 				insertLook(look);
 				insertItems(look);
 				if (!completeActiveJob(look.generationJobId(), look.createdAt())) {
@@ -100,7 +104,7 @@ public class JdbcLookStore implements LookStore {
 		}
 		catch (DataAccessException ex) {
 			if (isUniqueViolation(ex)) {
-				return Optional.of(existingLook(look));
+				return Optional.of(existingLook(look, ex));
 			}
 			throw ex;
 		}
@@ -194,17 +198,63 @@ public class JdbcLookStore implements LookStore {
 		}
 	}
 
-	private boolean lockActiveGenerationJob(GenerationJobId generationJobId) {
-		if (generationJobId == null) {
+	private void requireGenerationJobOwner(Look look) {
+		if (look.generationJobId() == null) {
+			return;
+		}
+		List<UUID> owners = jdbc.query(
+			"SELECT user_id FROM generation_job WHERE id = ?",
+			(rs, rowNum) -> rs.getObject("user_id", UUID.class),
+			look.generationJobId().value());
+		if (owners.isEmpty() || !look.userId().value().equals(owners.getFirst())) {
+			throw new IllegalArgumentException("generation job must belong to look owner");
+		}
+	}
+
+	private void requireAssociationOwners(Look look) {
+		if (look.avatarProfileId() != null) {
+			Boolean owned = jdbc.queryForObject(
+				"SELECT EXISTS (SELECT 1 FROM avatar_profile WHERE id = ? AND user_id = ?)",
+				Boolean.class,
+				look.avatarProfileId().value(),
+				look.userId().value());
+			if (!Boolean.TRUE.equals(owned)) {
+				throw new IllegalArgumentException("avatar profile must belong to look owner");
+			}
+		}
+		if (look.studioSessionId() != null) {
+			Boolean owned = jdbc.queryForObject(
+				"SELECT EXISTS (SELECT 1 FROM studio_session WHERE id = ? AND user_id = ?)",
+				Boolean.class,
+				look.studioSessionId().value(),
+				look.userId().value());
+			if (!Boolean.TRUE.equals(owned)) {
+				throw new IllegalArgumentException("studio session must belong to look owner");
+			}
+		}
+	}
+
+	private boolean lockActiveGenerationJob(Look look) {
+		if (look.generationJobId() == null) {
 			return false;
 		}
-		List<Boolean> active = jdbc.query(
-			"SELECT cancelled_at, subject_deleted_at, completed_at FROM generation_job WHERE id = ? FOR UPDATE",
-			(rs, rowNum) -> rs.getTimestamp("cancelled_at") == null
-				&& rs.getTimestamp("subject_deleted_at") == null
-				&& rs.getTimestamp("completed_at") == null,
-			generationJobId.value());
-		return !active.isEmpty() && Boolean.TRUE.equals(active.getFirst());
+		List<LockedGenerationJob> active = jdbc.query(
+			"SELECT user_id, cancelled_at, subject_deleted_at, completed_at FROM generation_job "
+				+ "WHERE id = ? FOR UPDATE",
+			(rs, rowNum) -> new LockedGenerationJob(
+				rs.getObject("user_id", UUID.class),
+				rs.getTimestamp("cancelled_at") == null
+					&& rs.getTimestamp("subject_deleted_at") == null
+					&& rs.getTimestamp("completed_at") == null),
+			look.generationJobId().value());
+		if (active.isEmpty()) {
+			return false;
+		}
+		LockedGenerationJob job = active.getFirst();
+		if (!look.userId().value().equals(job.ownerId())) {
+			throw new IllegalArgumentException("generation job must belong to look owner");
+		}
+		return job.active();
 	}
 	private boolean completeActiveJob(GenerationJobId generationJobId, Instant completedAt) {
 		if (generationJobId == null || completedAt == null) {
@@ -261,23 +311,62 @@ public class JdbcLookStore implements LookStore {
 
 	private void insertItems(Look look) {
 		for (LookItem item : look.items()) {
-			jdbc.update(
-				"INSERT INTO look_item (look_id, vault_item_id, slot) VALUES (?, ?, ?)",
+			int inserted = jdbc.update(
+				"INSERT INTO look_item (look_id, vault_item_id, slot) "
+					+ "SELECT ?, v.id, ? FROM vault_item v WHERE v.id = ? AND v.user_id = ?",
 				look.id().value(),
+				item.slot() == null ? null : item.slot().name(),
 				item.vaultItemId().value(),
-				item.slot() == null ? null : item.slot().name());
+				look.userId().value());
+			if (inserted != 1) {
+				throw new IllegalArgumentException("look item must belong to look owner");
+			}
 		}
 	}
 
-    private Look existingLook(Look look) {
-        if (look.generationJobId() != null) {
-            Optional<Look> byJob = findByGenerationJobIdForReplay(look.generationJobId());
-            if (byJob.isPresent()) {
-                return byJob.get();
-            }
-        }
-        return findById(look.id()).orElseThrow(() -> new IllegalStateException("look missing after unique conflict"));
-    }
+	private Look existingLook(Look requested, DataAccessException conflict) {
+		Optional<Look> existing = requested.generationJobId() == null
+			? Optional.empty()
+			: findByGenerationJobIdForReplay(requested.generationJobId());
+		if (existing.isEmpty()) {
+			existing = findById(requested.id());
+		}
+		Look stored = existing.orElseThrow(() -> conflict);
+		if (!sameReplayPayload(stored, requested)) {
+			throw conflict;
+		}
+		return stored;
+	}
+
+	private boolean sameReplayPayload(Look existing, Look requested) {
+		return existing.id().equals(requested.id())
+			&& existing.userId().equals(requested.userId())
+			&& Objects.equals(existing.avatarProfileId(), requested.avatarProfileId())
+			&& Objects.equals(existing.generationJobId(), requested.generationJobId())
+			&& Objects.equals(existing.studioSessionId(), requested.studioSessionId())
+			&& existing.storageKey().equals(requested.storageKey())
+			&& sameRenderPlan(existing.renderPlan(), requested.renderPlan())
+			&& Objects.equals(existing.provider(), requested.provider())
+			&& Objects.equals(existing.providerModel(), requested.providerModel())
+			&& existing.qualityStatus().equals(requested.qualityStatus())
+			&& existing.createdAt().equals(requested.createdAt())
+			&& existing.items().equals(requested.items());
+	}
+
+	private boolean sameRenderPlan(String existing, String requested) {
+		if (Objects.equals(existing, requested)) {
+			return true;
+		}
+		if (existing == null || requested == null) {
+			return false;
+		}
+		Boolean equal = jdbc.queryForObject(
+			"SELECT CAST(? AS jsonb) = CAST(? AS jsonb)",
+			Boolean.class,
+			existing,
+			requested);
+		return Boolean.TRUE.equals(equal);
+	}
 
 	private Look withLoadedItems(Look look) {
 		return withItems(look, loadItems(look.id()));
@@ -325,6 +414,8 @@ public class JdbcLookStore implements LookStore {
 			look.createdAt(),
 			items);
 	}
+
+	private record LockedGenerationJob(UUID ownerId, boolean active) {}
 
 	private static AvatarProfileId toAvatarProfileId(UUID value) {
 		return value == null ? null : new AvatarProfileId(value);

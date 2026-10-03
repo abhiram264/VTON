@@ -5,6 +5,7 @@ import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 
 import com.aifashionvault.generation.vton.ProviderKey;
 import com.aifashionvault.generation.vton.ProviderRegistry;
+import com.aifashionvault.generation.vton.ProviderRegistryComposition;
 import com.aifashionvault.generation.vton.UnknownProviderException;
 import com.aifashionvault.platform.environment.AppEnv;
 import com.aifashionvault.platform.environment.VaultEnvironmentProperties;
@@ -14,8 +15,18 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 
 class FashnConfigTest {
+    // RE-PINNED after t205 (candidate 7584f9d), re-adapted after t220: FashnConfig no longer
+    // declares a ProviderRegistry bean — the composed ProviderRegistryComposition collects every
+    // registered VtonProvider and applies the deterministic selection (forced-provider, then
+    // inferhub, then fashn). The four FASHN beans now carry @ConditionalOnNonBlankApiKey
+    // ("vault.fashn.api-key") — present-but-EMPTY no longer matches, so the ${FASHN_API_KEY:}
+    // default in application.yaml cannot half-create the provider. Supplying
+    // VaultEnvironmentProperties with a key was never enough: the condition reads the
+    // Environment, not the bound properties object. This runner now sets the property and
+    // includes ProviderRegistryComposition, the seam that actually owns the registry.
     private final ApplicationContextRunner runner = new ApplicationContextRunner()
-        .withUserConfiguration(FashnConfig.class)
+        .withUserConfiguration(FashnConfig.class, ProviderRegistryComposition.class)
+        .withPropertyValues("vault.fashn.api-key=" + FashnTestSupport.API_KEY)
         .withBean(ObjectStore.class, FashnTestSupport.FakeObjectStore::new)
         .withBean(VaultEnvironmentProperties.class, FashnConfigTest::properties);
 
@@ -58,6 +69,28 @@ class FashnConfigTest {
         });
     }
 
+    /**
+     * The other half of the t205 guarantee, and the one that matters for the owner decision: with
+     * NO api-key property the provider beans must not exist at all, so the default provider is
+     * honestly unavailable rather than silently selected to a vendor nobody approved. This is a
+     * product behaviour, not a test convenience, so it is pinned here rather than assumed.
+     */
+    @Test
+    void withoutAnApiKeyNoProviderIsRegisteredSoTheDefaultIsHonestlyUnavailable() {
+        new ApplicationContextRunner()
+            .withUserConfiguration(FashnConfig.class, ProviderRegistryComposition.class)
+            .withBean(ObjectStore.class, FashnTestSupport.FakeObjectStore::new)
+            .withBean(VaultEnvironmentProperties.class, FashnConfigTest::properties)
+            .run(context -> {
+                assertThat(context).hasNotFailed();
+                // FactoryBean products resolvable by type; a null product is a NullBean.
+                assertThat(context.getBeanProvider(ProviderRegistry.class).getIfAvailable()).isNull();
+                assertThat(context).doesNotHaveBean(FashnVtonProvider.class);
+                // The mapper is NOT gated: it is pure translation logic and safe to construct.
+                assertThat(context).hasSingleBean(FashnMapper.class);
+            });
+    }
+
     private static VaultEnvironmentProperties properties() {
         return new VaultEnvironmentProperties(
             AppEnv.development,
@@ -66,6 +99,7 @@ class FashnConfigTest {
             new VaultEnvironmentProperties.Sqs("http://127.0.0.1:4566/000000000000/q"),
             new VaultEnvironmentProperties.S3("avatar", "vault", "look", "temp"),
             new VaultEnvironmentProperties.Fashn(FashnTestSupport.API_KEY),
+            new VaultEnvironmentProperties.Inferhub(null),
             new VaultEnvironmentProperties.Firebase("demo-ai-fashion-vault"),
             new VaultEnvironmentProperties.Otel("ai-fashion-vault-api", "", "", ""));
     }

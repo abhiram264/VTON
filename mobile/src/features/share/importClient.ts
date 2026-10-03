@@ -1,4 +1,5 @@
 import {
+  ApiProblemError,
   apiRequest,
   rejectDataUri,
   requireOk,
@@ -7,7 +8,13 @@ import {
 import {productContentType} from '../generation/productUpload';
 import {releaseStagedImage} from './shareHandoff';
 import type {AvatarApiConfig} from '../my-model/types';
+import { productionApiConfig } from '../../config/apiConfig';
 import type {
+  ShareImportConfirmCorrections,
+  ShareImportConfirmedItem,
+  ShareImportConfirmer,
+  ShareImportPreview,
+  ShareImportPreviewLoader,
   ShareImportRequest,
   ShareImportResolver,
   ShareImportResponse,
@@ -27,12 +34,18 @@ function toImportRequest(
     case 'url':
       return {kind: 'URL', sourceUrl: payload.url};
     case 'image':
-      return {kind: 'IMAGE', uploadId: uploadId ?? ''};
+      if (uploadId === null) {
+        throw new Error('Upload ID required for image import');
+      }
+      return {kind: 'IMAGE', uploadId};
     case 'image_url':
+      if (uploadId === null) {
+        throw new Error('Upload ID required for image import');
+      }
       return {
         kind: 'IMAGE_URL',
         sourceUrl: payload.url,
-        uploadId: uploadId ?? '',
+        uploadId,
       };
   }
 }
@@ -54,17 +67,18 @@ function createIdempotencyKey(): string {
 
 function sleep(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(resolve, ms);
-    signal.addEventListener(
-      'abort',
-      () => {
-        clearTimeout(timer);
-        reject(new Error('Aborted'));
-      },
-      {once: true},
-    );
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new Error('Aborted'));
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    signal.addEventListener('abort', onAbort, {once: true});
     if (signal.aborted) {
       clearTimeout(timer);
+      signal.removeEventListener('abort', onAbort);
       reject(new Error('Aborted'));
     }
   });
@@ -102,6 +116,25 @@ function isShareImportResponse(value: unknown): value is ShareImportResponse {
   }
 }
 
+function isTerminalUploadError(error: unknown): boolean {
+  if (error instanceof ApiProblemError) {
+    const match = /^HTTP_(\d{3})$/.exec(error.code);
+    if (match) {
+      const status = Number(match[1]);
+      return status >= 400 && status < 500 && status !== 408 && status !== 429;
+    }
+    return error.code === 'UNSUPPORTED_STAGED_IMAGE_TYPE';
+  }
+  if (error instanceof Error) {
+    const message = error.message.toLowerCase();
+    return (
+      message.includes('unsupported staged image type') ||
+      message.includes('data uri')
+    );
+  }
+  return false;
+}
+
 async function readStagedImage(
   localImageUri: string,
   signal: AbortSignal,
@@ -117,13 +150,13 @@ async function readStagedImage(
     response.headers.get('content-type'),
   );
   if (contentType === null) {
-    throw new Error('Unsupported staged image type');
+    throw new ApiProblemError('UNSUPPORTED_STAGED_IMAGE_TYPE');
   }
   return {body, contentType, contentLength: body.byteLength};
 }
 
 export function createShareImportResolver(
-  config: AvatarApiConfig,
+  config: AvatarApiConfig = productionApiConfig,
   deps: ShareImportClientDeps = {},
 ): ShareImportResolver {
   const release =
@@ -150,6 +183,9 @@ export function createShareImportResolver(
     signal: AbortSignal,
   ): Promise<ShareImportResponse> {
     const isImageBearing = payload.kind !== 'url';
+    if (isImageBearing && stagedUri === null) {
+      stagedUri = payload.localImageUri;
+    }
     if (signal.aborted) {
       releaseOnce();
       throw new Error('Aborted');
@@ -157,20 +193,23 @@ export function createShareImportResolver(
 
     let uploadId = retainedUploadId;
     if (isImageBearing && uploadId === null) {
-      stagedUri = payload.localImageUri;
-      // Cancellation or any pre-completion failure must still release the
-      // native staged file exactly once per resolver instance.
+      // Releasing on abort guarantees the staged file never leaks if the user
+      // cancels, unmounts, or navigates away.
       signal.addEventListener('abort', releaseOnce, {once: true});
       try {
         const media = await readStagedImage(payload.localImageUri, signal);
         uploadId = await uploadMedia(config, media);
       } catch (error) {
-        releaseOnce();
+        // Release on abort or terminal failure; preserve staged media on
+        // recoverable failures so UI retry can succeed without losing source.
+        if (signal.aborted || isTerminalUploadError(error)) {
+          releaseOnce();
+        }
         throw error;
       }
       retainedUploadId = uploadId;
       // Verified server-side ownership transfer: release the native staged
-      // file exactly once, even if resolution later fails or needs recovery.
+      // file exactly once upon upload completion.
       releaseOnce();
       if (signal.aborted) {
         throw new Error('Aborted');
@@ -215,5 +254,134 @@ export function createShareImportResolver(
       }
     }
     return latest;
+  };
+}
+
+function isConfirmedItem(value: unknown): value is ShareImportConfirmedItem {
+  if (value === null || typeof value !== 'object') {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.id === 'string' &&
+    record.id.length > 0 &&
+    typeof record.sourceReferenceId === 'string' &&
+    record.sourceReferenceId.length > 0
+  );
+}
+
+/**
+ * Persists a resolved share import into the owner's Vault through the mounted
+ * `POST /share/imports/{importId}/confirm` route. This is the only save path:
+ * replaying resolution (`POST /share/imports`) can never persist an item, so
+ * the caller must never report "saved" from a resolution response.
+ *
+ * The route is idempotent server-side (saved-item identity is derived from
+ * owner + import), so a repeat — including a retry after a lost response —
+ * converges on the same item rather than creating a duplicate.
+ */
+export function createShareImportConfirmer(
+  config: AvatarApiConfig = productionApiConfig,
+): ShareImportConfirmer {
+  return async function confirm(
+    importId: string,
+    signal: AbortSignal,
+    corrections?: ShareImportConfirmCorrections,
+  ): Promise<ShareImportConfirmedItem> {
+    if (signal.aborted) {
+      throw new Error('Aborted');
+    }
+    // Only send the keys the owner actually corrected: an absent body and an
+    // empty body both mean "confirm with the resolved metadata".
+    const body: Record<string, string> = {};
+    if (corrections?.name !== undefined) {
+      body.name = corrections.name;
+    }
+    if (corrections?.category !== undefined) {
+      body.category = corrections.category;
+    }
+    if (corrections?.collectionId !== undefined) {
+      body.collectionId = corrections.collectionId;
+    }
+    const payload = (await requireOk(
+      await apiRequest(
+        config,
+        `${STATUS_PATH}/${encodeURIComponent(importId)}/confirm`,
+        Object.keys(body).length === 0
+          ? {method: 'POST'}
+          : {method: 'POST', body: JSON.stringify(body)},
+      ),
+    )) as unknown;
+    if (!isConfirmedItem(payload)) {
+      throw new Error('Invalid confirm response');
+    }
+    if (signal.aborted) {
+      throw new Error('Aborted');
+    }
+    return {
+      id: payload.id,
+      sourceReferenceId: payload.sourceReferenceId,
+      createdAt:
+        typeof payload.createdAt === 'string' ? payload.createdAt : undefined,
+    };
+  };
+}
+
+function isPreview(value: unknown): value is ShareImportPreview {
+  if (value === null || typeof value !== 'object') {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.importId === 'string' &&
+    typeof record.previewUrl === 'string' &&
+    record.previewUrl.length > 0 &&
+    typeof record.previewExpiresAt === 'string' &&
+    !Number.isNaN(Date.parse(record.previewExpiresAt))
+  );
+}
+
+/**
+ * Owner-scoped preview of a resolved import. `previewUrl` is a short-lived
+ * signed read (re-issue by calling again), never the item's identity.
+ *
+ * The caller treats a preview failure as "no preview", not as a failed import:
+ * this route is presentation-only and must never block saving an item the
+ * server has already resolved.
+ */
+export function createShareImportPreviewLoader(
+  config: AvatarApiConfig = productionApiConfig,
+): ShareImportPreviewLoader {
+  return async function loadPreview(
+    importId: string,
+    signal: AbortSignal,
+  ): Promise<ShareImportPreview> {
+    if (signal.aborted) {
+      throw new Error('Aborted');
+    }
+    const payload = (await requireOk(
+      await apiRequest(
+        config,
+        `${STATUS_PATH}/${encodeURIComponent(importId)}/preview`,
+        {method: 'GET'},
+      ),
+    )) as unknown;
+    if (!isPreview(payload)) {
+      throw new Error('Invalid preview response');
+    }
+    if (signal.aborted) {
+      throw new Error('Aborted');
+    }
+    return {
+      importId: payload.importId,
+      previewUrl: payload.previewUrl,
+      previewExpiresAt: payload.previewExpiresAt,
+      sourceTitle:
+        typeof payload.sourceTitle === 'string' ? payload.sourceTitle : undefined,
+      sourceSiteName:
+        typeof payload.sourceSiteName === 'string'
+          ? payload.sourceSiteName
+          : undefined,
+    };
   };
 }

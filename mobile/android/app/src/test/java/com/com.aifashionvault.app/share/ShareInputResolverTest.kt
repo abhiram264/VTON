@@ -14,7 +14,8 @@ class ShareInputResolverTest {
       text: CharSequence? = null,
       streamUri: String? = null,
       clipUris: List<String> = emptyList(),
-  ) = ShareInputResolver.Inputs(action, text, streamUri, clipUris)
+      clipItemCount: Int = clipUris.size,
+  ) = ShareInputResolver.Inputs(action, text, streamUri, clipUris, clipItemCount)
 
   @Test
   fun `non-send action rejects`() {
@@ -71,6 +72,32 @@ class ShareInputResolverTest {
             inputs(clipUris = listOf("content://a/1", "content://a/2")))
     assertEquals(
         ShareInputResolver.Reason.MULTIPLE_OR_AMBIGUOUS,
+        (result as ShareInputResolver.Resolution.Rejected).reason)
+  }
+
+  @Test
+  fun `clip item count mismatch rejects as ambiguous`() {
+    val result =
+        ShareInputResolver.resolve(
+            inputs(clipUris = listOf("content://a/1"), clipItemCount = 2))
+    assertEquals(
+        ShareInputResolver.Reason.MULTIPLE_OR_AMBIGUOUS,
+        (result as ShareInputResolver.Resolution.Rejected).reason)
+  }
+
+  @Test
+  fun `clip item without uri rejects as no valid content`() {
+    val result = ShareInputResolver.resolve(inputs(clipItemCount = 1))
+    assertEquals(
+        ShareInputResolver.Reason.NO_VALID_CONTENT,
+        (result as ShareInputResolver.Resolution.Rejected).reason)
+  }
+
+  @Test
+  fun `clip uri with non-content scheme rejects`() {
+    val result = ShareInputResolver.resolve(inputs(clipUris = listOf("file:///image.jpg")))
+    assertEquals(
+        ShareInputResolver.Reason.NON_CONTENT_URI,
         (result as ShareInputResolver.Resolution.Rejected).reason)
   }
 

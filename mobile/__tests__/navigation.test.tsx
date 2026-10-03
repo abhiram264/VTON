@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import App from '../App';
+import * as featureFlags from '../src/config/featureFlags';
 
 jest.mock('../src/features/my-model/photoSource', () => ({
   choosePhoto: jest.fn().mockResolvedValue(null),
@@ -8,7 +9,19 @@ jest.mock('../src/features/my-model/photoSource', () => ({
 }));
 
 jest.mock('../src/features/vault/vaultApi', () => ({ vaultApi: { list: jest.fn().mockResolvedValue([]) } }));
-jest.mock('../src/features/vault/collectionApi', () => ({ collectionApi: { list: jest.fn().mockResolvedValue([]) } }));
+jest.mock('../src/features/collections/collectionsApi', () => {
+  const stub = {
+    list: jest.fn().mockResolvedValue([]),
+    create: jest.fn(),
+    rename: jest.fn(),
+    remove: jest.fn(),
+    addItem: jest.fn(),
+    removeItem: jest.fn(),
+  };
+  // ShareImportScreen builds its own client from the same config so its picker
+  // cannot resolve a different API base URL; the factory must exist here too.
+  return { collectionsApi: stub, createCollectionsApi: () => stub };
+});
 jest.mock('../src/features/looks/looksApi', () => ({ looksApi: { list: jest.fn().mockResolvedValue([]) } }));
 test('launches into the four primary tabs in documented order', async () => {
   await render(<App />);
@@ -26,8 +39,14 @@ test('launches into the four primary tabs in documented order', async () => {
 });
 
 test('each workspace exposes its required accessible surface', async () => {
-  await render(<App />);
-  await screen.findByRole('header', { name: 'Home' });
+  // C22 defaults NATURAL_LANGUAGE_STUDIO off; this test documents the Studio
+  // surface with the capability enabled, so enable just that flag here.
+  const flagSpy = jest
+    .spyOn(featureFlags, 'isFeatureEnabled')
+    .mockImplementation(name => name === 'NATURAL_LANGUAGE_STUDIO');
+  try {
+    await render(<App />);
+    await screen.findByRole('header', { name: 'Home' });
   expect(screen.getByRole('button', { name: 'Import Item' })).toBeEnabled();
   expect(screen.getByRole('button', { name: 'Quick Try' })).toBeEnabled();
   expect(screen.getByText('No recent shares yet.')).toBeTruthy();
@@ -39,16 +58,19 @@ test('each workspace exposes its required accessible surface', async () => {
     'All', 'Tops', 'Bottoms', 'One Pieces', 'Ethnic', 'Footwear',
     'Headwear', 'Accessories', 'Collections',
   ]) {
-    expect(screen.getByRole('button', { name: label })).toBeTruthy();
+    expect(screen.getByRole('radio', { name: label })).toBeTruthy();
   }
-  expect(screen.getByRole('button', { name: 'All' }).props.accessibilityState).toMatchObject({ selected: true });
-  fireEvent.press(screen.getByRole('button', { name: 'Tops' }));
-  await waitFor(() => expect(screen.getByRole('button', { name: 'Tops' }).props.accessibilityState).toMatchObject({ selected: true }));
+  expect(screen.getByRole('radio', { name: 'All' }).props.accessibilityState).toMatchObject({ checked: true });
+  fireEvent.press(screen.getByRole('radio', { name: 'Tops' }));
+  await waitFor(() => expect(screen.getByRole('radio', { name: 'Tops' }).props.accessibilityState).toMatchObject({ checked: true }));
+  expect(screen.getByRole('radio', { name: 'All' }).props.accessibilityState).toMatchObject({ checked: false });
 
   fireEvent.press(screen.getByRole('tab', { name: /STUDIO/ }));
   await screen.findByRole('header', { name: 'Studio' });
   expect(screen.getByRole('button', { name: 'Avatar' })).toBeEnabled();
-  expect(screen.getByRole('button', { name: 'Add from Vault' })).toBeDisabled();
+  for (const slot of ['Top', 'Bottom', 'Footwear']) {
+    expect(screen.getByRole('button', { name: `Add ${slot}` })).toBeDisabled();
+  }
   expect(screen.getByRole('button', { name: 'Generate' })).toBeDisabled();
   expect(screen.getByLabelText('Natural-language command')).toBeTruthy();
 
@@ -56,8 +78,14 @@ test('each workspace exposes its required accessible surface', async () => {
   await screen.findByRole('header', { name: 'Looks' });
   expect(await screen.findByText('No saved Looks yet.')).toBeTruthy();
   expect(screen.getByText('No recent generations yet.')).toBeTruthy();
-  for (const action of ['Regenerate', 'Modify', 'Share']) {
+  for (const action of ['Regenerate', 'Modify']) {
     expect(screen.getByRole('button', { name: action })).toBeDisabled();
+  }
+  // The share affordance was removed: sharing minted a bearer-free presigned
+  // read URL for the user's private Look image, so no such control may exist.
+    expect(screen.queryByRole('button', { name: 'Share' })).toBeNull();
+  } finally {
+    flagSpy.mockRestore();
   }
 });
 

@@ -46,7 +46,7 @@ Repository sanity is checked by [`.github/workflows/repo-sanity.yml`](.github/wo
 
 ## Stack
 
-- **Backend** — Spring Boot 4.1.0 on Java 21, Spring MVC with Spring JDBC (no JPA), Flyway migrations `V001`–`V023`, PostgreSQL 18 as the source of truth.
+- **Backend** — Spring Boot 4.1.0 on Java 21, Spring MVC with Spring JDBC (no JPA), Flyway migrations `V001`–`V024`, PostgreSQL 18 as the source of truth.
 - **Queues and storage** — AWS SQS and S3 through the AWS SDK v2. Locally both are emulated by LocalStack (`s3,sqs`).
 - **Mobile** — React Native 0.86.2 / React 19.2.3, npm, Node `^22.13.0 || >=24`.
 
@@ -71,7 +71,7 @@ The generation-temp bucket is a storage-domain boundary with scheduled deletion:
 Clean checkout (do not edit tracked Compose files):
 
 1. Copy `.env.example` to an untracked `.env`.
-2. Set `LOCALSTACK_AUTH_TOKEN` and `POSTGRES_PASSWORD` in `.env`. Do not add `DB_PASSWORD` to `.env.example`. The backend additionally requires `FASHN_API_KEY` and `FIREBASE_PROJECT_ID` at startup (VaultEnvironmentValidator rejects blanks); set real or placeholder values in `.env` for local runs.
+2. Set `LOCALSTACK_AUTH_TOKEN` and `POSTGRES_PASSWORD` in `.env`. Do not add `DB_PASSWORD` to `.env.example`. The backend requires `FIREBASE_PROJECT_ID` at startup (VaultEnvironmentValidator rejects blanks); set a value in `.env` for local runs. Neither image provider key is required at startup: with both provider keys blank or absent no provider is registered, the default provider is honestly unavailable, and a generation POST is refused with `GENERATION_PROVIDER_UNAVAILABLE` before any reservation, image transfer, outbox row or provider call. Set a real key for the provider you want to admit generation. On ECS the key arrives by ARN selector against an empty secret body (infra/terraform/ecs.tf:47, :118; infra/terraform/secrets.tf:3-7), so an empty secret fails at secret resolution upstream of the JVM — an operator must put a non-blank sentinel in the secret out-of-band.
 3. `docker compose up -d`
 4. Verify PostgreSQL and LocalStack readiness.
 5. Launch the host-run backend: `python scripts/run_backend.py`
@@ -79,6 +79,19 @@ Clean checkout (do not edit tracked Compose files):
 The launcher reads only the repository-root `.env` (the same file Compose uses), requires `LOCALSTACK_AUTH_TOKEN` and `POSTGRES_PASSWORD`, and derives the JDBC URL, the S3/SQS endpoints, and the generation queue URL from it (bucket names are fixed local constants, not .env keys) before running the backend's Maven Wrapper `spring-boot:run` goal. `POSTGRES_PORT` and `LOCALSTACK_PORT` overrides apply to both Compose and the derived JDBC/LocalStack endpoints. `LOCALSTACK_AUTH_TOKEN` is infrastructure-only and is not passed to the JVM.
 
 The mobile app runs on host Node from `mobile/`: `npm ci`, then `npm start` (Metro) plus `npm run android` or `npm run ios`.
+
+### Image providers
+
+Two image providers are supported through the one `VtonProvider` seam (ADR-008). Each key is optional and each is independent — a blank or absent value means that provider is unavailable, never that the app fails to boot:
+
+- `VTON_IMAGE_API_KEY` — InferHub key (`https://api.inferhub.dev/v1/chat/completions`, model `cb/gemini-3.1-flash-image`, Bearer auth, PNG returned inline as a base64 data URI).
+- `FASHN_API_KEY` — FASHN key (`https://api.fashn.ai`).
+
+Provider selection uses the existing `vault.generation.routing.forced-provider` property, which pins the active provider by key (`inferhub` or `fashn`). Unset, selection is automatic: the only configured provider is selected, so a local run with just `VTON_IMAGE_API_KEY` set uses InferHub, and local runs default to InferHub.
+
+With both keys unset the app still boots, no `ProviderRegistry` bean exists, and the create path answers `GENERATION_PROVIDER_UNAVAILABLE` (HTTP 503) instead of silently selecting a provider — the fail-closed, honest-degradation posture.
+
+InferHub takes ~170s per generation, so a slow generation is not a hang. The adapter read timeout is at least 300s, and the durable-queue attempt deadline is sized to exceed it, so the provider call is not reaped mid-flight.
 
 ## Validation
 
@@ -90,6 +103,14 @@ backend\mvnw.cmd -f backend\pom.xml verify     # Windows
 ```
 
 186 test classes; roughly 3–7 min on this host (host-pace varies; see docs/BASELINE.md for the recorded runs).
+
+Run the suite with `VTON_IMAGE_API_KEY` UNSET. `InferHubLiveGenerationTest` self-skips
+unless that variable is exported, and when it IS exported the suite stops being offline:
+it makes a real call to the paid InferHub provider (up to 3 attempts at ~170s each) and
+writes through a real LocalStack object store. That class is the live proof that the
+provider path works end to end and is meant to be run deliberately, not as part of the
+default suite. It also means a full-suite test count taken with the key exported differs
+from one taken without, so record which state a measurement was taken in.
 
 Mobile, from `mobile/`:
 

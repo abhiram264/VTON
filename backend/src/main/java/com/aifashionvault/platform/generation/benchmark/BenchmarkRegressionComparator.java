@@ -110,7 +110,9 @@ public final class BenchmarkRegressionComparator {
 	private static Map<String, BenchmarkCaseResult> byCaseId(List<BenchmarkCaseResult> results) {
 		Map<String, BenchmarkCaseResult> byCaseId = new TreeMap<>();
 		for (BenchmarkCaseResult result : results) {
-			byCaseId.put(result.caseId(), result);
+			if (byCaseId.putIfAbsent(result.caseId(), result) != null) {
+				throw new IllegalArgumentException("duplicate caseId: " + result.caseId());
+			}
 		}
 		return byCaseId;
 	}

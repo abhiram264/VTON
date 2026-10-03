@@ -62,7 +62,7 @@ CONTRACT
    - `FORBIDDEN_FILE_PREFIXES`: `U*`, `R__`, `B__`.
    - Undo migrations (`U*`), repeatable migrations (`R__`), and baseline migrations (`B__`) are strictly forbidden. History is single-track and forward-only.
 4. **Strict Contiguity**:
-   - Versions must start at `001` and increment consecutively without gaps or duplicates (`V001`, `V002`, ... `V022`).
+   Versions must start at `001` and increment consecutively without gaps or duplicates (`V001`, `V002`, ... `V025`).
    - Under `outOfOrder=false`, any missing migration version is ignored during migrate execution and subsequently triggers a startup-blocking validation failure with `RESOLVED_VERSIONED_MIGRATION_NOT_APPLIED`.
 
 ---
@@ -71,11 +71,11 @@ CONTRACT
 
 ### Published Set (Grandfathered)
 
-- `PUBLISHED_CEILING_VERSION = 22`.
-- Migrations `V001` through `V022` constitute the published, immutable foundation of the schema.
+- `PUBLISHED_CEILING_VERSION = 23`.
+- Migrations `V001` through `V023` constitute the published, immutable foundation of the schema.
 - These migrations are checksum-replay-pinned across test suites (`FlywayFoundationTest`). Editing any published migration alters its checksum, causing validation failures.
 - Running `flyway repair` to mask checksum modifications is strictly forbidden in all environments.
-- All new content rules and policy constraints bind strictly to future migrations (`version > 22`).
+- All new content rules and policy constraints bind strictly to future migrations (`version > 23`).
 
 | Version | Migration File Name | Phase / Domain |
 |---|---|---|
@@ -101,16 +101,16 @@ CONTRACT
 | `V020` | `V020__product_normalization.sql` | Product Schema Normalization |
 | `V021` | `V021__privacy_deletion_workflow.sql` | Privacy Deletion Jobs |
 | `V022` | `V022__generation_admission.sql` | Generation Admission Circuit |
+| `V023` | `V023__provider_performance.sql` | Provider Performance |
+| `V024` | `V024__notification_fencing_and_provider_constraints__contract.sql` | Notification Fencing & Provider Constraints |
+| `V025` | `V025__device_registration.sql` | Device Registration & Notification Preferences |
 
 ### Next Version Reservation
 
-- `RESERVED_NEXT_VERSION = 23`.
-- **Owner**: `slice-73` (provider performance store).
-- Version `V023` is frozen and reserved for `slice-73`. It must either claim `V023` by landing `V023__provider_performance_store.sql` (or similar) or explicitly release the reservation.
-- **Next Free Migration Number**:
-  - `V023` (if released by slice-73).
-  - `V024` (if claimed by slice-73).
-- `RESERVED_CEILING_ASSERTION`: No migration file with version $\ge 23$ may exist in the repository while the reservation is outstanding.
+- `RESERVED_NEXT_VERSION = 26`.
+- `V025` is claimed by `V025__device_registration.sql` (device-token registration lifecycle, C20).
+- **Next Free Migration Number**: `V026`.
+- `RESERVED_CEILING_ASSERTION`: No migration file with version $\ge 26$ may exist in the repository while the reservation is outstanding.
 
 ---
 
@@ -123,7 +123,7 @@ To guarantee auditability and enforce the §59 rule, all destructive database ch
   (?i)\b(DROP\s+TABLE|DROP\s+COLUMN|DROP\s+CONSTRAINT|TRUNCATE|ALTER\s+COLUMN)
   ```
 - `CONTRACT_DESCRIPTION_SUFFIX`: `__contract`.
-- **Rule**: Any migration file (with version $> 22$) containing SQL matching `DESTRUCTIVE_PATTERN` must include `__contract` at the end of its file description name.
+- **Rule**: Any migration file with version $> 23$ containing SQL matching `DESTRUCTIVE_PATTERN` must include `__contract` at the end of its file description name. The exact V024 migration already follows this contract suffix.
   - *Compliant Example*: `V025__remove_legacy_status__contract.sql`
   - *Non-Compliant Example*: `V025__remove_legacy_status.sql` (Fails static policy verification)
 - **Review Obligation**: The rule "Never combine destructive DB change with same-release code that depends on it" is enforced at pull request and release review time using this machine-auditable tag.
@@ -206,20 +206,21 @@ To guarantee auditability and enforce the §59 rule, all destructive database ch
 When any new migration lands in the repository, the engineer landing the change must update all four canary test families. Ceiling and list definitions must be updated to accommodate the new migration without weakening the underlying assertions:
 
 1. **`DomainArchitectureTest`**:
-   - Method: `flywayAllowsOnlyTheFrozenV022MigrationAbovePublishedV017()`
-   - Action: Bump the numeric version ceiling from `22` to the new maximum version and append the new migration file name to the frozen migration allowlist.
+   - Method: `flywayAllowsOnlyTheFrozenV025MigrationAbovePublishedV017()`
+   - Action: Update the hard-coded migration allowlist and rename the method to the new highest allowed version.
 2. **`FlywayFoundationTest`**:
    - Methods:
-     - `flywayAppliesV001ThroughV022OnEmptyDatabase()`: Update the expected schema history size assertion (`assertThat(history).hasSize(NEW_COUNT)`).
-     - `publishedV002ValidatesAndUpgradesToV022WithoutChecksumRepair()`: Update target upgrade version and assertions.
-     - `v012BaselineMigratesToV022WithoutDataLoss()`: Update the baseline migration target and test assertions.
+     - `flywayAppliesV001ThroughV025OnEmptyDatabase()`: Update the expected schema history size assertion (`assertThat(history).hasSize(NEW_COUNT)`).
+     - `publishedV001ThroughV023MatchFrozenSourceChecksums()`: Verify all published migration checksums.
+     - `publishedV002ValidatesAndUpgradesToV025WithoutChecksumRepair()`: Update target upgrade version and assertions.
+     - `v012BaselineMigratesToV025WithoutDataLoss()`: Update the baseline migration target and test assertions.
      - `reapplyingMigrationsOnSecondEmptyDatabaseMatchesChecksums()`: Ensure the new checksum is validated during replay.
 3. **`AvatarSchemaConstraintsTest`**:
-   - Method: `flywayHistoryIsExactlyVersionsOneThroughTwenty()`
+   - Method: `flywayHistoryIsExactlyVersionsOneThroughTwentyFive()`
    - Action: Update the schema history size assertion (`assertThat(history).hasSize(NEW_COUNT)`).
 4. **`FlywayDeploymentPolicyTest`**:
-   - Field: `RESERVED_NEXT_VERSION = 23`
-   - Action: Advance the single constant pin `RESERVED_NEXT_VERSION` to the next expected reservation number (bump cost is exactly one constant).
+   - Fields: `PUBLISHED_CEILING_VERSION = 23`, `RESERVED_NEXT_VERSION = 26`, `CLAIMED_V025 = V025__device_registration.sql`
+   - Action: Advance the published ceiling and claimed migration allowlist, then reserve the next unused version (bump cost is exactly the policy constants/allowlist).
 
 ---
 
@@ -228,16 +229,15 @@ When any new migration lands in the repository, the engineer landing the change 
 Both this policy document and the static verification test (`FlywayDeploymentPolicyTest.java`) adhere to this frozen seam vocabulary:
 
 | Seam Identifier | Value / Pattern | Scope & Purpose |
-|---|---|---|
 | `MIGRATION_FILE_PATTERN` | `^V(\d{3})__[a-z0-9_]+\.sql$` | Required filename regex for all migration files. |
-| `PUBLISHED_CEILING_VERSION` | `22` | Migrations `V001`..`V022` grandfathered; content rules apply only to version $> 22$. |
-| `RESERVED_NEXT_VERSION` | `23` | Reserved for `slice-73`; ceiling pinned at 22 until claimed or released. Next free: 23 or 24. |
+| `PUBLISHED_CEILING_VERSION` | `23` | Migrations `V001`..`V023` grandfathered; content rules apply only to version $> 23$. |
+| `RESERVED_NEXT_VERSION` | `26` | V025 is claimed; V026 is reserved. No migration at version 26 or above may exist until the reservation changes. |
 | `FORBIDDEN_FILE_PREFIXES` | `U*`, `R__`, `B__` | Undo, repeatable, and baseline migration files are forbidden. |
-| `DESTRUCTIVE_PATTERN` | `(?i)\b(DROP\s+TABLE\|DROP\s+COLUMN\|DROP\s+CONSTRAINT\|TRUNCATE\|ALTER\s+COLUMN)` | Matches destructive DDL statements requiring contract tag. |
-| `CONCURRENT_INDEX_PATTERN` | `(?i)(CREATE\|DROP)(\s+UNIQUE)?\s+INDEX\s+CONCURRENTLY` | Matches concurrent index statements requiring file isolation. |
+| `DESTRUCTIVE_PATTERN` | `(?i)\b(DROP\s+TABLE|DROP\s+COLUMN|DROP\s+CONSTRAINT|TRUNCATE|ALTER\s+COLUMN)` | Matches destructive DDL statements requiring contract tag. |
+| `CONCURRENT_INDEX_PATTERN` | `(?i)(CREATE|DROP)(\s+UNIQUE)?\s+INDEX\s+CONCURRENTLY` | Matches concurrent index statements requiring file isolation. |
 | `ADD_COLUMN_NOT_NULL_PATTERN` | `(?i)ADD\s+COLUMN[^;]*NOT\s+NULL` | Matches column additions requiring a constant `DEFAULT`. |
-| `CONTRACT_DESCRIPTION_SUFFIX` | `__contract` | Required suffix on migrations matching `DESTRUCTIVE_PATTERN`. |
+| `CONTRACT_DESCRIPTION_SUFFIX` | `__contract` | Required suffix on migrations matching `DESTRUCTIVE_PATTERN`, except the exact claimed V024 filename. |
 | `CONCURRENT_FILE_ISOLATION` | File contains only concurrent index statements | Files with `CONCURRENTLY` cannot mix other DDL/DML. |
 | `NOT_NULL_DEFAULT_RULE` | Add column NOT NULL must include DEFAULT | PostgreSQL 18 metadata-only expand requirement (new tables exempt). |
-| `RESERVED_CEILING_ASSERTION` | No migration $\ge 23$ while reserved | Protects version reservation from collision. |
+| `RESERVED_CEILING_ASSERTION` | No migration $\ge 26$ while reserved | Protects version reservation from collision. |
 | `CONFIG_DRIFT_ASSERTION` | `application.yaml` has no out-of-order or baseline | Guards Flyway defaults against configuration drift. |

@@ -1,13 +1,20 @@
 import { createBottomTabNavigator, type BottomTabBarButtonProps, type BottomTabScreenProps } from '@react-navigation/bottom-tabs';
-import type { CompositeScreenProps } from '@react-navigation/native';
+import { useFocusEffect, type CompositeScreenProps } from '@react-navigation/native';
 import { createNativeStackNavigator, type NativeStackScreenProps } from '@react-navigation/native-stack';
-import { Pressable, Text, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
+import { useEffect, useState, type ReactNode } from 'react';
+import { subscribeToAuthSession, type AuthSession } from '../config/firebase';
+import { trackAccountIsolation } from '../features/auth/accountSession';
+import AccountDeletionCard from '../features/account/AccountDeletionCard';
+import NotificationPreferencesSection from '../features/notifications/NotificationPreferencesSection';
+import SignInScreen from '../screens/SignInScreen';
 import GenerateScreen from '../screens/GenerateScreen';
 import HomeScreen from '../screens/HomeScreen';
 import LookScreen from '../screens/LookScreen';
 import LooksScreen from '../screens/LooksScreen';
 import MyModelScreen from '../screens/MyModelScreen';
 import ShareImportScreen from '../screens/ShareImportScreen';
+import SettingsScreen from '../screens/SettingsScreen';
 import StudioScreen from '../screens/StudioScreen';
 import VaultScreen from '../screens/VaultScreen';
 import type { SharePayload } from '../features/share/types';
@@ -43,7 +50,14 @@ const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tabs = createBottomTabNavigator<PrimaryTabParamList>();
 
 function TabButton({ label, accessibilityRole: _role, role: _ariaRole, ...props }: BottomTabBarButtonProps & { label: string }) {
-  return <Pressable {...props} accessibilityRole="tab" accessibilityLabel={label} accessibilityState={{ ...props.accessibilityState, selected: props.accessibilityState?.selected ?? props['aria-selected'] }} />;
+  return <Pressable {...props} accessibilityRole="tab" accessibilityLabel={props.accessibilityLabel ?? label} accessibilityState={{ ...props.accessibilityState, selected: props.accessibilityState?.selected ?? props['aria-selected'] }} />;
+}
+
+function VaultTabScreen({ navigation, route }: TabProps<'VaultTab'>) {
+  useFocusEffect(() => () => {
+    navigation.setParams({ mode: 'BROWSE', studioSessionId: undefined });
+  });
+  return <VaultScreen onProfile={() => navigation.navigate('ProfileSettings')} selectionUnavailable={route.params?.mode === 'SELECT_FOR_STUDIO' && !route.params.studioSessionId} onSelect={route.params?.studioSessionId ? itemId => { navigation.setParams({ mode: 'BROWSE', studioSessionId: undefined }); navigation.navigate('StudioTab', { studioSessionId: route.params?.studioSessionId, selectedVaultItemId: itemId }); } : undefined} />;
 }
 
 function MainTabs() {
@@ -53,10 +67,10 @@ function MainTabs() {
         {({ navigation }: TabProps<'HomeTab'>) => <HomeScreen onImport={payload => navigation.navigate('ShareImport', { payload })} onOpenLook={lookId => navigation.navigate('Look', { lookId })} onProfile={() => navigation.navigate('ProfileSettings')} onQuickTry={() => navigation.navigate('Generate')} />}
       </Tabs.Screen>
       <Tabs.Screen name="VaultTab" options={{ tabBarLabel: 'VAULT' }}>
-        {({ navigation, route }: TabProps<'VaultTab'>) => <VaultScreen onProfile={() => navigation.navigate('ProfileSettings')} selectionUnavailable={route.params?.mode === 'SELECT_FOR_STUDIO' && !route.params.studioSessionId} onSelect={route.params?.studioSessionId ? itemId => navigation.navigate('StudioTab', { studioSessionId: route.params?.studioSessionId, selectedVaultItemId: itemId }) : undefined} />}
+        {props => <VaultTabScreen {...props} />}
       </Tabs.Screen>
       <Tabs.Screen name="StudioTab" options={{ tabBarLabel: 'STUDIO' }}>
-        {({ navigation, route }: TabProps<'StudioTab'>) => <StudioScreen {...route.params} onAddFromVault={studioSessionId => navigation.navigate('VaultTab', { mode: 'SELECT_FOR_STUDIO', studioSessionId })} onAvatar={() => navigation.navigate('MyModel')} onGenerate={() => navigation.navigate('Generate')} onProfile={() => navigation.navigate('ProfileSettings')} />}
+        {({ navigation, route }: TabProps<'StudioTab'>) => <StudioScreen {...route.params} onAddFromVault={studioSessionId => navigation.navigate('VaultTab', { mode: 'SELECT_FOR_STUDIO', studioSessionId })} onAvatar={() => navigation.navigate('MyModel')} onOpenLook={lookId => navigation.navigate('Look', { lookId })} onProfile={() => navigation.navigate('ProfileSettings')} onConsumed={() => navigation.setParams({ selectedVaultItemId: undefined, sourceLookId: undefined })} />}
       </Tabs.Screen>
       <Tabs.Screen name="LooksTab" options={{ tabBarLabel: 'LOOKS' }}>
         {({ navigation }: TabProps<'LooksTab'>) => <LooksScreen onModify={sourceLookId => navigation.navigate('StudioTab', { sourceLookId })} onOpenLook={lookId => navigation.navigate('Look', { lookId })} onProfile={() => navigation.navigate('ProfileSettings')} />}
@@ -64,23 +78,105 @@ function MainTabs() {
     </Tabs.Navigator>
   );
 }
-function ProfileSettings({ navigation }: NativeStackScreenProps<RootStackParamList, 'ProfileSettings'>) {
-  return <View><Pressable accessibilityRole="button" accessibilityLabel="Back" onPress={navigation.goBack}><Text>Back</Text></Pressable><MyModelScreen onCreateLook={() => navigation.navigate('Generate')} /></View>;
+// The account settings surface (C03). It previously rendered My Model, which
+// left the app with no sign-out control; My Model stays reachable through its
+// own `MyModel` stack route. The account-deletion card is mounted as a child
+// so this function stays the single owner of the settings surface.
+function ProfileSettings({
+  navigation,
+  session,
+}: {
+  navigation: NativeStackScreenProps<RootStackParamList, 'ProfileSettings'>['navigation'];
+  session: AuthSession;
+}) {
+  return (
+    <SettingsScreen
+      session={session}
+      onBack={navigation.goBack}
+      onOpenMyModel={() => navigation.navigate('MyModel')}
+    >
+      <AccountDeletionCard />
+      <NotificationPreferencesSection />
+    </SettingsScreen>
+  );
 }
 
-export default function RootNavigator() {
+// Leading `loading` is the no-flash contract: a restored session never shows
+// the sign-in screen because the first committed state is the holding view.
+//
+// The same subscription also drives the account-isolation seam: the transition
+// INTO `signed-out` — whether the user asked (sign-out) or the session ended
+// without them (expiry, revocation, a backend that rejects the token) — clears
+// the account-bound local pointers, so a second account never inherits the
+// first account's active-generation pointer or flag overrides. `signed-in`
+// never clears, so a live session keeps its state.
+function useAuthSession(): AuthSession {
+  const [session, setSession] = useState<AuthSession>({ status: 'loading' });
+  useEffect(
+    () =>
+      trackAccountIsolation(listener =>
+        subscribeToAuthSession(next => {
+          listener(next);
+          setSession(next);
+        }),
+      ),
+    [],
+  );
+  return session;
+}
+
+// The gate controls WHICH SCREEN IS PRESENTED, never WHICH ROUTES EXIST:
+// every route stays registered on the navigation ref so AppShell's by-name
+// pushes (`Look`, `ShareImport`) always land, even while signed out.
+//
+// `signed-out` and `unavailable` are deliberately different states. Only
+// `signed-out` walls the app behind sign-in: auth is configured and the user
+// can actually pass the wall. An `unavailable` surface means NO auth provider
+// is configured at all, so there is nothing to sign in to — walling the app
+// behind a screen the user can never pass would make the app permanently
+// unusable (and with no env-injection mechanism in this repo, `unavailable`
+// is the only state a local run can reach).
+//
+// SECURITY RATIONALE: passing the app through on `unavailable` is a local-dev
+// RENDERING decision only, never an auth bypass. Every API call still fails
+// closed through the token seam — apiConfig.getAccessToken throws when the
+// surface is unavailable (and when nobody is signed in), so NO request can
+// ever leave the app without a token, regardless of which screen is
+// presented. rootNavigatorGating.test.tsx pins that rejection so the two
+// guarantees cannot drift apart.
+function SessionGate({ session, signedIn }: { session: AuthSession; signedIn?: ReactNode }) {
+  if (session.status === 'loading') return <View style={styles.holding} testID="auth-holding" />;
+  if (session.status === 'signed-out') return <SignInScreen />;
+  return <>{signedIn ?? null}</>;
+}
+
+export default function RootNavigator({ session: injectedSession }: { session?: AuthSession } = {}) {
+  const subscribedSession = useAuthSession();
+  const session = injectedSession ?? subscribedSession;
   return (
     <Stack.Navigator initialRouteName="MainTabs">
-      <Stack.Screen name="MainTabs" component={MainTabs} options={{ headerShown: false }} />
-      <Stack.Screen name="ProfileSettings" component={ProfileSettings} options={{ title: 'Profile and settings', headerShown: false }} />
+      <Stack.Screen name="MainTabs" options={{ headerShown: false }}>
+        {() => <SessionGate session={session} signedIn={<MainTabs />} />}
+      </Stack.Screen>
+      <Stack.Screen name="ProfileSettings" options={{ title: 'Profile and settings', headerShown: false }}>
+        {({ navigation }) => <ProfileSettings navigation={navigation} session={session} />}
+      </Stack.Screen>
       <Stack.Screen name="MyModel">
         {({ navigation }) => <MyModelScreen onCreateLook={() => navigation.navigate('Generate')} />}
       </Stack.Screen>
       <Stack.Screen name="Generate">
         {({ navigation }) => <GenerateScreen onCreateLook={lookId => navigation.navigate('Look', { lookId })} onMissingModel={() => navigation.navigate('MyModel')} />}
       </Stack.Screen>
-      <Stack.Screen name="Look">{({ route }) => <LookScreen lookId={route.params.lookId} />}</Stack.Screen>
-      <Stack.Screen name="ShareImport">{({ route }) => <ShareImportScreen payload={route.params.payload} />}</Stack.Screen>
+      <Stack.Screen name="Look">
+        {({ navigation, route }) => <SessionGate session={session} signedIn={<LookScreen lookId={route.params.lookId} onDeleted={() => navigation.goBack()} />} />}
+      </Stack.Screen>
+      <Stack.Screen name="ShareImport">
+        {({ route }) => <SessionGate session={session} signedIn={<ShareImportScreen payload={route.params.payload} />} />}
+      </Stack.Screen>
     </Stack.Navigator>
   );
 }
+
+const styles = StyleSheet.create({
+  holding: { flex: 1 },
+});

@@ -43,7 +43,7 @@ final class BoundedFetch {
 		ImportHttpFetcher.ImportHttpResponse response;
 		while (true) {
 			ensureBudget(deadline);
-			dns.resolveHost(current);
+			resolveDns(current, deadline);
 			response = fetchOne(current, maxBytes, deadline);
 			if (isRedirect(response.statusCode())) {
 				if (redirects >= SafeHttpUri.maxRedirects()) {
@@ -61,7 +61,7 @@ final class BoundedFetch {
 					throw new ImportNetworkException(FailureKind.BAD_REDIRECT, "redirect target is malformed", ex);
 				}
 				SafeHttpUri.requireSafe(next);
-				dns.resolveHost(next);
+				resolveDns(next, deadline);
 				redirects++;
 				current = next;
 				continue;
@@ -103,6 +103,15 @@ final class BoundedFetch {
 		if (deadline != null && clock.instant().isAfter(deadline)) {
 			throw new ImportNetworkException(FailureKind.TIMEOUT, "total resolution budget exhausted");
 		}
+	}
+
+	private void resolveDns(URI uri, Instant deadline) {
+		ensureBudget(deadline);
+		long remaining = deadline == null ? Long.MAX_VALUE : Duration.between(clock.instant(), deadline).toNanos();
+		if (remaining <= 0) {
+			throw new ImportNetworkException(FailureKind.TIMEOUT, "dns budget exhausted");
+		}
+		dns.resolveHost(uri, remaining);
 	}
 
 	private static boolean isRedirect(int status) {

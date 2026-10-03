@@ -91,7 +91,13 @@ class EnvironmentPropertiesMatrixTest {
 		assertFailureIdentifies(without(development(), "vault.s3.temp-bucket"), "S3_TEMP_BUCKET");
 		assertFailureIdentifies(without(development(), "vault.otel.service-name"), "OTEL_SERVICE_NAME");
 		assertFailureIdentifies(without(staging(), "vault.firebase.project-id"), "FIREBASE_PROJECT_ID");
-		assertFailureIdentifies(without(production(), "vault.fashn.api-key"), "FASHN_API_KEY");
+		// t220: the provider key is deliberately OPTIONAL at boot (VaultEnvironmentValidator
+		// removed the FASHN_API_KEY requirement). A missing key must NOT fail startup — the
+		// app boots honestly unavailable — so the old production assertion is re-pinned to
+		// assert the ABSENCE of a startup failure instead of a FASHN_API_KEY failure.
+		runner.withPropertyValues(without(production(), "vault.fashn.api-key")).run(context -> {
+			assertThat(context).hasNotFailed();
+		});
 	}
 
 	@Test
@@ -180,10 +186,23 @@ class EnvironmentPropertiesMatrixTest {
 	}
 
 	@Test
-	void rejectsMissingFashnApiKey() {
-		assertFailureIdentifies(without(development(), "vault.fashn.api-key"), "FASHN_API_KEY");
-		assertFailureIdentifies(without(staging(), "vault.fashn.api-key"), "FASHN_API_KEY");
-		assertFailureIdentifies(without(production(), "vault.fashn.api-key"), "FASHN_API_KEY");
+	void missingOrBlankFashnApiKeyDoesNotFailStartup() {
+		// t220 oracle re-pin (old name: rejectsMissingFashnApiKey). VaultEnvironmentValidator
+		// deliberately does NOT require FASHN_API_KEY (or VTON_IMAGE_API_KEY) at boot: a
+		// missing or blank provider key means no ProviderRegistry bean and an honest
+		// GENERATION_PROVIDER_UNAVAILABLE on create, in ALL environments. Startup failure
+		// for a missing/blank key would be a regression of that contract.
+		for (String[] base : new String[][] {development(), staging(), production()}) {
+			runner.withPropertyValues(without(base, "vault.fashn.api-key")).run(context -> {
+				assertThat(context).hasNotFailed();
+			});
+			runner.withPropertyValues(overlay(base, "vault.fashn.api-key=")).run(context -> {
+				assertThat(context).hasNotFailed();
+			});
+			runner.withPropertyValues(overlay(base, "vault.fashn.api-key=   ")).run(context -> {
+				assertThat(context).hasNotFailed();
+			});
+		}
 	}
 
 	@Test

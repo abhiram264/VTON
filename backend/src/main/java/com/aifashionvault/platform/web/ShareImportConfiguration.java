@@ -69,8 +69,9 @@ public class ShareImportConfiguration {
 	FactoryBean<ShareImportService> shareImportService(
 			ObjectProvider<DataSource> dataSources,
 			ObjectProvider<ShareImportMediaAccess> mediaAccesses,
-			ObjectProvider<ShareImportResolverChain> chains) {
-		return new ShareImportServiceFactoryBean(dataSources, mediaAccesses, chains);
+			ObjectProvider<ShareImportResolverChain> chains,
+			ObjectProvider<com.aifashionvault.analytics.ProductMetrics> productMetrics) {
+		return new ShareImportServiceFactoryBean(dataSources, mediaAccesses, chains, productMetrics);
 	}
 
 	private record Adapters(ObjectStore store, ImageInspector inspector) {
@@ -163,15 +164,18 @@ public class ShareImportConfiguration {
 		private final ObjectProvider<DataSource> dataSources;
 		private final ObjectProvider<ShareImportMediaAccess> mediaAccesses;
 		private final ObjectProvider<ShareImportResolverChain> chains;
+		private final ObjectProvider<com.aifashionvault.analytics.ProductMetrics> productMetrics;
 
 		ShareImportServiceFactoryBean(
 				ObjectProvider<DataSource> dataSources,
 				ObjectProvider<ShareImportMediaAccess> mediaAccesses,
-				ObjectProvider<ShareImportResolverChain> chains
+				ObjectProvider<ShareImportResolverChain> chains,
+				ObjectProvider<com.aifashionvault.analytics.ProductMetrics> productMetrics
 		) {
 			this.dataSources = dataSources;
 			this.mediaAccesses = mediaAccesses;
 			this.chains = chains;
+			this.productMetrics = productMetrics;
 		}
 
 		@Override
@@ -182,7 +186,8 @@ public class ShareImportConfiguration {
 			if (dataSource == null || media == null || chain == null) {
 				return null;
 			}
-			return new ShareImportService(new JdbcShareImportStore(dataSource), media, chain);
+			return new ShareImportService(new JdbcShareImportStore(dataSource), media, chain,
+				productMetrics == null ? null : productMetrics.getIfAvailable());
 		}
 
 		@Override
@@ -233,6 +238,33 @@ public class ShareImportConfiguration {
 			new com.aifashionvault.platform.objectstore.ObjectStoreImportMediaAccess(store, inspector)
 				.deleteObject(key);
 		}
+
+		/**
+		 * Short-lived signed read for the resolved import object. The resolver
+		 * publishes every import object into the VAULT boundary, so the preview
+		 * signs that same boundary; the URL is time-boxed and re-issuable. An
+		 * unavailable store yields empty (the API answers 503) rather than a
+		 * fabricated capability.
+		 */
+		@Override
+		public Optional<com.aifashionvault.platform.objectstore.PresignedAccess> presignPreview(
+				UserId ownerId, StorageKey key) {
+			if (key == null) {
+				return Optional.empty();
+			}
+			try {
+				return Optional.of(store.presignGet(
+					new com.aifashionvault.platform.objectstore.ObjectRef(
+						com.aifashionvault.shared.StorageDomain.VAULT, key.value()),
+					PREVIEW_TTL));
+			}
+			catch (com.aifashionvault.platform.objectstore.ObjectStoreExceptions.ObjectStoreUnavailableException ex) {
+				return Optional.empty();
+			}
+		}
+
+		/** Preview capability lifetime: short so a leaked URL expires quickly. */
+		private static final java.time.Duration PREVIEW_TTL = java.time.Duration.ofMinutes(5);
 
 		private com.aifashionvault.platform.objectstore.ObjectStoreImportMediaAccess ownerScoped(UserId ownerId) {
 			return new com.aifashionvault.platform.objectstore.ObjectStoreImportMediaAccess(store, inspector, null,

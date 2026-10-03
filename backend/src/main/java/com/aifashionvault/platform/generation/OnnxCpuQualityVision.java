@@ -191,8 +191,8 @@ public final class OnnxCpuQualityVision implements QualityVisionPort, AutoClosea
 		 * two half-points are presence agreement and box-count agreement.
 		 */
 		boolean presenceAgreement = (candidateFaces.size() > 0) == (subjectFaces.size() > 0);
-		boolean boxCountAgreement = candidateFaces.size() == subjectFaces.size()
-			&& candidateFaces.size() <= 1;
+		boolean boxCountAgreement = candidateFaces.size() == 1
+			&& subjectFaces.size() == 1;
 		return (presenceAgreement ? 0.5d : 0d) + (boxCountAgreement ? 0.5d : 0d);
 	}
 

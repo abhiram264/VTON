@@ -101,12 +101,15 @@ public final class OfflineEvaluationBenchmarkRunner implements EvaluationBenchma
 	}
 
 	static String configurationFingerprint(BenchmarkRunSpec spec) {
-		return BenchmarkFixtureManifest.fingerprint(String.join("|",
-			spec.benchmarkVersion(),
-			spec.providerKey(),
-			spec.modelOrMode(),
-			spec.promptVersion(),
-			spec.routingVersion()));
+		String material = String.join("|", List.of(
+				spec.benchmarkVersion(),
+				spec.providerKey(),
+				spec.modelOrMode(),
+				spec.promptVersion(),
+				spec.routingVersion()).stream()
+			.map(value -> value.length() + ":" + value)
+			.toList());
+		return BenchmarkFixtureManifest.fingerprint(material);
 	}
 
 	private BenchmarkCaseResult executeCase(BenchmarkRunSpec spec, BenchmarkCase benchmarkCase, String fingerprint) {

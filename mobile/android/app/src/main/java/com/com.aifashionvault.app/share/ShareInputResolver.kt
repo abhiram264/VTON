@@ -21,6 +21,8 @@ object ShareInputResolver {
       val text: CharSequence?,
       val streamUri: String?,
       val clipUris: List<String>,
+      /** Number of source ClipData items, including items without a URI. */
+      val clipItemCount: Int = clipUris.size,
   )
 
   sealed interface Resolution {
@@ -39,7 +41,14 @@ object ShareInputResolver {
 
   fun resolve(inputs: Inputs): Resolution {
     if (inputs.action != ACTION_SEND) return Resolution.Rejected(Reason.NOT_SEND_ACTION)
-    if (inputs.clipUris.size > 1) return Resolution.Rejected(Reason.MULTIPLE_OR_AMBIGUOUS)
+    if (inputs.clipItemCount == 1 && inputs.clipUris.isEmpty()) {
+      return Resolution.Rejected(Reason.NO_VALID_CONTENT)
+    }
+    if (inputs.clipItemCount < 0 ||
+        inputs.clipItemCount > 1 ||
+        inputs.clipItemCount != inputs.clipUris.size) {
+      return Resolution.Rejected(Reason.MULTIPLE_OR_AMBIGUOUS)
+    }
     val clipUri = inputs.clipUris.singleOrNull()
     val imageUri =
         when {

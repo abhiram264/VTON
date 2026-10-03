@@ -1,6 +1,7 @@
 package com.aifashionvault.platform.web;
 
 import java.net.URI;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -17,7 +18,9 @@ import com.aifashionvault.importer.ShareImportKind;
 import com.aifashionvault.importer.ShareImportState;
 import com.aifashionvault.importer.SourceReference;
 import com.aifashionvault.importer.SourceUrls;
+import com.aifashionvault.normalization.ProductCategory;
 import com.aifashionvault.platform.importer.ImporterRetryableException;
+import com.aifashionvault.platform.objectstore.ObjectStoreExceptions;
 import com.aifashionvault.shared.ShareImportId;
 import com.aifashionvault.shared.UploadId;
 import com.aifashionvault.shared.UserId;
@@ -33,12 +36,43 @@ public final class ShareImportService {
 	private final JdbcShareImportStore store;
 	private final ShareImportMediaAccess media;
 	private final ShareImportResolverChain chains;
+	private final com.aifashionvault.analytics.ProductMetrics productMetrics;
 
 	public ShareImportService(JdbcShareImportStore store, ShareImportMediaAccess media,
 			ShareImportResolverChain chains) {
+		this(store, media, chains, null);
+	}
+
+	/**
+	 * C22: import lifecycle analytics is an ADDITIVE, optional dependency. The
+	 * existing constructor delegates with {@code null}, so every current caller is
+	 * unchanged and a deployment without the bean records no import events.
+	 */
+	public ShareImportService(JdbcShareImportStore store, ShareImportMediaAccess media,
+			ShareImportResolverChain chains, com.aifashionvault.analytics.ProductMetrics productMetrics) {
 		this.store = store;
 		this.media = media;
 		this.chains = chains;
+		this.productMetrics = productMetrics;
+	}
+
+	/**
+	 * Records one import lifecycle event. The payload carries only the coarse
+	 * {@link com.aifashionvault.analytics.ProductMetricContext} fields — never the
+	 * source URL, image bytes, prompts or capabilities (ADR-015). Best-effort:
+	 * analytics must never affect an import.
+	 */
+	private void recordImport(com.aifashionvault.analytics.AnalyticsEventName eventName) {
+		if (productMetrics == null || eventName == null) {
+			return;
+		}
+		try {
+			productMetrics.record(eventName, new com.aifashionvault.analytics.ProductMetricContext(
+				java.time.Instant.now(), eventName.wireName(), "SHARE", null, null, null, null, null, null));
+		}
+		catch (RuntimeException ignored) {
+			// Observability is deliberately off the product critical path.
+		}
 	}
 
 	public record CreateOutcome(ShareImportResponse body, int status) {
@@ -50,17 +84,59 @@ public final class ShareImportService {
 	public CreateOutcome create(UserId owner, String rawKey, ShareImportRequest request) {
 		String key = requireKey(rawKey);
 		Parsed parsed = parse(request);
-		requireClaimableUpload(owner, parsed.uploadId);
 		ImportCommand command = new ImportCommand(owner, key, parsed.kind, parsed.sourceUrl, parsed.uploadId);
-		return switch (store.create(command)) {
-			case JdbcShareImportStore.Created created -> runAttempt(created.shareImport(), parsed.uploadId, true);
-			case JdbcShareImportStore.Replayed replayed -> replayCreate(replayed.shareImport(), parsed.uploadId);
+		Optional<JdbcShareImportStore.CreateResult> arbitration = store.arbitrateCreate(command);
+		if (arbitration.isPresent()) {
+			JdbcShareImportStore.CreateResult decided = arbitration.get();
+			// A fingerprint conflict is a key-reuse verdict and nothing else:
+			// it is decided from the stored request alone, so it must not be
+			// re-labelled by the media state of this request (unchanged).
+			if (decided instanceof JdbcShareImportStore.FingerprintConflict) {
+				throw ShareImportProblem.keyReused();
+			}
+			// A replay still revalidates staging before it resolves: the
+			// earlier successful claim consumed that upload, so the media
+			// is no longer claimable and replaying it would answer forever
+			// (docs/API_CONTRACTS.md:48, F05).
+			requireClaimableUpload(owner, parsed.uploadId);
+			return handleCreateResult(decided, parsed.uploadId, false);
+		}
+		requireClaimableUpload(owner, parsed.uploadId);
+		return handleCreateResult(store.create(command), parsed.uploadId, true);
+	}
+
+	private CreateOutcome handleCreateResult(
+			JdbcShareImportStore.CreateResult result, UploadId uploadId, boolean newlyCreated) {
+		return switch (result) {
+			case JdbcShareImportStore.Created created -> runAttempt(created.shareImport(), uploadId, newlyCreated);
+			case JdbcShareImportStore.Replayed replayed -> replayCreate(replayed.shareImport(), uploadId);
 			case JdbcShareImportStore.FingerprintConflict ignored -> throw ShareImportProblem.keyReused();
 		};
 	}
 
 	public ShareImportResponse get(UserId owner, String importId) {
 		return map(requireOwned(owner, importId));
+	}
+
+	/**
+	 * Owner-scoped preview of a resolved import. The lookup is the same
+	 * owner-scoped claim the read/delete/confirm paths use, so another owner's
+	 * import is indistinguishable from a missing one. Only a READY import with
+	 * a resolved object has a preview; anything else is a state conflict. The
+	 * capability itself is minted by the media seam and is short-lived, so a
+	 * stale URL is refreshed by calling this route again.
+	 */
+	public ShareImportPreviewResponse preview(UserId owner, String importId) {
+		ShareImportId id = parseImportId(importId);
+		ShareImport current = requireOwned(owner, importId);
+		if (current.state() != ShareImportState.READY || current.storageKey() == null) {
+			throw ShareImportProblem.stateConflict();
+		}
+		com.aifashionvault.platform.objectstore.PresignedAccess access = media
+			.presignPreview(owner, current.storageKey())
+			.orElseThrow(ShareImportProblem::dependencyUnavailable);
+		return new ShareImportPreviewResponse(id.value().toString(), access.uri().toString(),
+			access.expiresAt(), current.sourceTitle(), current.sourceSiteName());
 	}
 
 	public AttachOutcome attach(UserId owner, String importId, String rawKey, AttachShareImageRequest request) {
@@ -84,7 +160,7 @@ public final class ShareImportService {
 			return new AttachOutcome(ShareImportResponse.ready(current.id().value().toString()), 200);
 		}
 		return switch (current.state()) {
-			case NEEDS_IMAGE -> {
+			case NEEDS_IMAGE, FAILED_RETRYABLE -> {
 				requireClaimableUpload(owner, uploadId);
 				yield switch (store.beginRecovery(owner, id)) {
 					case JdbcShareImportStore.RecoveryClaimed claimed ->
@@ -94,17 +170,17 @@ public final class ShareImportService {
 				};
 			}
 		// PUT never re-runs URL resolution: recovery is permitted only from
-		// NEEDS_IMAGE (spec). While the import is RESOLVING — fresh or expired
-		// lease — invalid request data is rejected without mutation and the
-		// current state is reported; an expired lease is reclaimed through
-		// create replay, which owns the attempt lease.
+		// NEEDS_IMAGE or FAILED_RETRYABLE (spec). While the import is RESOLVING
+		// — fresh or expired lease — invalid request data is rejected without
+		// mutation and the current state is reported; an expired lease is
+		// reclaimed through create replay, which owns the attempt lease.
 		case RESOLVING -> {
 			requireClaimableUpload(owner, uploadId);
 			yield attachState(current);
 		}
-		// Recovery already completed: replay the same result without mutating.
-		case READY -> new AttachOutcome(ShareImportResponse.ready(current.id().value().toString()), 200);
-		case FAILED_RETRYABLE, FAILED_TERMINAL -> throw ShareImportProblem.stateConflict();
+		// A completed recovery replay returned above; any other READY row has no recovery binding.
+		case READY -> throw ShareImportProblem.stateConflict();
+		case FAILED_TERMINAL -> throw ShareImportProblem.stateConflict();
 		case DELETED -> throw ShareImportProblem.notFound();
 		};
 	}
@@ -113,14 +189,98 @@ public final class ShareImportService {
 		ShareImportId id = parseImportId(importId);
 		return switch (store.delete(owner, id)) {
 			case JdbcShareImportStore.Deleted deleted -> {
-				if (deleted.storageKey() != null) {
-					media.deleteObject(deleted.storageKey());
+				deleteObject(deleted.storageKey());
+				markCleanedUp(owner, id);
+				yield true;
+			}
+			case JdbcShareImportStore.AlreadyDeleted alreadyDeleted -> {
+				// A retained key on an already-DELETED row is the cleanup-FAILED
+				// signal: retry the physical removal exactly once. A successful
+				// cleanup cleared the key, so an ordinary repeated DELETE skips
+				// the removal and stays a 204 (idempotent logical delete).
+				if (alreadyDeleted.storageKey() != null) {
+					deleteObject(alreadyDeleted.storageKey());
+					markCleanedUp(owner, id);
 				}
 				yield true;
 			}
-			case JdbcShareImportStore.AlreadyDeleted ignored -> true;
 			case JdbcShareImportStore.Missing ignored -> false;
 		};
+	}
+
+	/**
+	 * Confirms a resolved import into the owner's persistent Vault. The import
+	 * must be READY and owner-visible: the lookup is the same owner-scoped
+	 * claim the read and delete paths use, so another owner's import is
+	 * indistinguishable from a missing one (never weakened). The saved item
+	 * carries the import's own source reference, so provenance survives
+	 * confirmation; a repeated confirmation returns the same saved item.
+	 */
+	public VaultItemResponse confirm(UserId owner, String importId, ConfirmShareImportRequest request) {
+		ShareImportId id = parseImportId(importId);
+		Confirmation corrections = parseConfirmation(request);
+		return store.confirm(owner, id, corrections.name(), corrections.category(), corrections.collectionId())
+			.map(item -> new VaultItemResponse(item.itemId().toString(), item.sourceReferenceId().toString(), null,
+				item.name(), null, category(item.category()), null, null, null, null, item.createdAt()))
+			.orElseThrow(ShareImportProblem::notFound);
+	}
+
+	/**
+	 * Parses the optional owner corrections of a confirmation request. A blank
+	 * name, an unknown category or a malformed collection id is a malformed
+	 * request (400) rather than a silent no-op.
+	 */
+	private static Confirmation parseConfirmation(ConfirmShareImportRequest request) {
+		if (request == null) {
+			return new Confirmation(null, null, null);
+		}
+		String name = request.name() == null ? null : request.name().strip();
+		if (name != null && (name.isEmpty() || name.codePointCount(0, name.length()) > 200)) {
+			throw ShareImportProblem.invalid();
+		}
+		String category = null;
+		if (request.category() != null) {
+			try {
+				category = ProductCategory.valueOf(request.category().strip().toUpperCase(Locale.ROOT)).name();
+			}
+			catch (IllegalArgumentException ex) {
+				throw ShareImportProblem.invalid();
+			}
+		}
+		UUID collectionId = null;
+		if (request.collectionId() != null) {
+			try {
+				collectionId = UUID.fromString(request.collectionId().strip());
+			}
+			catch (IllegalArgumentException ex) {
+				throw ShareImportProblem.invalid();
+			}
+		}
+		return new Confirmation(name, category, collectionId);
+	}
+
+	private static ProductCategory category(String stored) {
+		return stored == null ? null : ProductCategory.valueOf(stored);
+	}
+
+	private record Confirmation(String name, String category, UUID collectionId) {
+	}
+
+
+	private void markCleanedUp(UserId owner, ShareImportId id) {
+		store.markCleanedUp(owner, id);
+	}
+
+	private void deleteObject(com.aifashionvault.shared.StorageKey key) {
+		if (key == null) {
+			return;
+		}
+		try {
+			media.deleteObject(key);
+		}
+		catch (ObjectStoreExceptions.ObjectStoreUnavailableException ex) {
+			throw ShareImportProblem.dependencyUnavailable();
+		}
 	}
 
 	private CreateOutcome replayCreate(ShareImport existing, UploadId uploadId) {
@@ -135,6 +295,10 @@ public final class ShareImportService {
 
 	private CreateOutcome runAttempt(ShareImport attempt, UploadId uploadId, boolean newlyCreated) {
 		int ok = newlyCreated ? 201 : 200;
+		if (newlyCreated) {
+			// Import started: only a genuinely new import counts as a started attempt.
+			recordImport(com.aifashionvault.analytics.AnalyticsEventName.SHARE_RECEIVED);
+		}
 		ResolutionResult result = resolve(attempt, uploadId);
 		if (result.status() == ResolutionStatus.UNSUPPORTED) {
 			store.publish(attempt.id(), attempt.attemptToken(), invalidSource());
@@ -180,11 +344,21 @@ public final class ShareImportService {
 		ImportResolver resolver = chains.chain(attempt.userId(), attempt.id(), attempt.attemptToken().toString());
 		SourceReference source = new SourceReference(attempt.sourceUrl(), uploadId);
 		try {
-			return resolver.resolve(source);
+			ResolutionResult resolved = resolver.resolve(source);
+			// One outcome event per resolution attempt, whichever path (fresh or
+			// recovery) reached it: UNSUPPORTED is a request-validation verdict, so
+			// it is neither a successful nor a failed resolution.
+			if (resolved.status() != ResolutionStatus.UNSUPPORTED) {
+				recordImport(resolved.status() == ResolutionStatus.RESOLVED
+					? com.aifashionvault.analytics.AnalyticsEventName.SHARE_RESOLVED
+					: com.aifashionvault.analytics.AnalyticsEventName.SHARE_RESOLUTION_FAILED);
+			}
+			return resolved;
 		}
 		catch (ImporterRetryableException ex) {
 			store.publish(attempt.id(), attempt.attemptToken(),
 				new ResolutionResult(ResolutionStatus.RETRYABLE_FAILURE, null, null, null, null, ex.reason()));
+			recordImport(com.aifashionvault.analytics.AnalyticsEventName.SHARE_RESOLUTION_FAILED);
 			throw problemFor(ex.reason());
 		}
 	}

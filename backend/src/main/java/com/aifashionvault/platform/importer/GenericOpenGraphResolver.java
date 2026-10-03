@@ -185,8 +185,19 @@ public final class GenericOpenGraphResolver implements SourceResolver {
 			mediaAccess.publishFetchedImage(new ByteArrayInputStream(body), length, destination, contentType);
 		}
 		catch (ObjectStoreExceptions.ObjectStoreUnavailableException ex) {
-			mediaAccess.deleteObject(destination);
+			// R-P2-04: If the object store committed the PUT but returned an ambiguous 5xx/SDK error,
+			// an attempt-unique destination object could be orphaned in VAULT. Best-effort cleanup
+			// reaps the committed-but-unacknowledged object without risking any other attempt.
+			try {
+				mediaAccess.deleteObject(destination);
+			}
+			catch (RuntimeException ignored) {
+				// Best-effort cleanup only.
+			}
 			throw retryable(ResolutionReason.DEPENDENCY_UNAVAILABLE);
+		}
+		catch (IllegalArgumentException ex) {
+			throw new ImportNetworkException(FailureKind.UNUSABLE_CONTENT, "unusable imported content", ex);
 		}
 	}
 

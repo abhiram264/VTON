@@ -9,6 +9,25 @@ import java.util.regex.Pattern;
 public interface AnalyticsEventPublisher {
     void publish(Event event);
 
+    /**
+     * Well-known property keys. They are part of this contract, not of any one
+     * adapter, so a producer references {@code AnalyticsEventPublisher.OCCURRED_AT}
+     * rather than reaching into an implementation.
+     *
+     * <p>{@link #OCCURRED_AT} is the only required key: the metrics boundary
+     * needs a timestamp, so an event without one is dropped instead of being
+     * stamped with the adapter's own clock, which would silently misdate it.
+     */
+    String OCCURRED_AT = "occurred_at";
+    String OUTCOME = "outcome";
+    String MODE = "mode";
+    String QUALITY_DECISION = "quality_decision";
+    String PROVIDER = "provider";
+    String MODEL = "model";
+    String DURATION_MS = "duration_ms";
+    String ITEM_COUNT = "item_count";
+    String COST = "cost";
+
     record Event(AnalyticsEventName name, Map<String, PropertyValue> properties) {
         private static final Pattern KEY = Pattern.compile("[a-z][a-z0-9_]{0,63}");
         private static final Set<String> FORBIDDEN = Set.of("image", "media", "url", "uri", "body", "base64", "bytes",

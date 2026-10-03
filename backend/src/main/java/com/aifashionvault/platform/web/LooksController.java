@@ -8,8 +8,12 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
+import jakarta.servlet.http.HttpServletRequest;
+
 import org.springframework.beans.factory.NoUniqueBeanDefinitionException;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
+
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -29,6 +33,8 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 import com.aifashionvault.generation.CoarseGenerationPhase;
+import com.aifashionvault.integrity.AppIntegrityOperation;
+import com.aifashionvault.integrity.AppIntegrityVerifier;
 import com.aifashionvault.generation.GenerationJob;
 import com.aifashionvault.generation.GenerationStatus;
 import com.aifashionvault.generation.GenerationStore;
@@ -36,6 +42,8 @@ import com.aifashionvault.generation.RenderPlan;
 import com.aifashionvault.generation.RetryPolicySnapshot;
 import com.aifashionvault.look.JdbcLookStore;
 import com.aifashionvault.look.Look;
+import com.aifashionvault.platform.environment.VaultEnvironmentProperties;
+import com.aifashionvault.platform.fashn.FashnConfig;
 import com.aifashionvault.platform.objectstore.ObjectRef;
 import com.aifashionvault.platform.objectstore.ObjectStore;
 import com.aifashionvault.platform.objectstore.ObjectStoreExceptions;
@@ -61,6 +69,14 @@ public class LooksController {
 	private final ObjectStore objects;
 	private final GenerationStore generations;
 	private final Clock clock;
+	private final AppIntegrityBoundary integrity;
+	private final GenerationApiProperties properties;
+	private final boolean providerAvailable;
+	/**
+	 * Best-effort C22 lifecycle seam. A deployment without the bean records nothing;
+	 * a metrics failure never affects the read (see {@link #recordLookViewed}).
+	 */
+	private final com.aifashionvault.analytics.ProductMetrics productMetrics;
 
 	public LooksController(
 		ObjectProvider<JdbcLookStore> lookStores,
@@ -68,11 +84,76 @@ public class LooksController {
 		ObjectProvider<GenerationStore> generationStores,
 		ObjectProvider<Clock> clocks
 	) {
+		this(lookStores, objectStores, generationStores, clocks, null, new GenerationApiProperties(), true);
+	}
+
+	/**
+	 * Unit-test seam: provider availability is assumed present. The Spring
+	 * constructor below derives it from the environment, so production never
+	 * relies on this default.
+	 */
+	LooksController(
+		ObjectProvider<JdbcLookStore> lookStores,
+		ObjectProvider<ObjectStore> objectStores,
+		ObjectProvider<GenerationStore> generationStores,
+		ObjectProvider<Clock> clocks,
+		AppIntegrityVerifier verifier,
+		GenerationApiProperties properties
+	) {
+		this(lookStores, objectStores, generationStores, clocks, verifier, properties, true);
+	}
+
+	@Autowired
+	public LooksController(
+		ObjectProvider<JdbcLookStore> lookStores,
+		ObjectProvider<ObjectStore> objectStores,
+		ObjectProvider<GenerationStore> generationStores,
+		ObjectProvider<Clock> clocks,
+		AppIntegrityVerifier verifier,
+		GenerationApiProperties properties,
+		VaultEnvironmentProperties vaultProperties,
+		ObjectProvider<com.aifashionvault.analytics.ProductMetrics> productMetrics
+	) {
+		this(lookStores, objectStores, generationStores, clocks, verifier, properties,
+			FashnConfig.anyProviderConfigured(vaultProperties), first(productMetrics));
+	}
+
+	LooksController(
+		ObjectProvider<JdbcLookStore> lookStores,
+		ObjectProvider<ObjectStore> objectStores,
+		ObjectProvider<GenerationStore> generationStores,
+		ObjectProvider<Clock> clocks,
+		AppIntegrityVerifier verifier,
+		GenerationApiProperties properties,
+		boolean providerAvailable
+	) {
+		this(lookStores, objectStores, generationStores, clocks, verifier, properties, providerAvailable, null);
+	}
+
+	LooksController(
+		ObjectProvider<JdbcLookStore> lookStores,
+		ObjectProvider<ObjectStore> objectStores,
+		ObjectProvider<GenerationStore> generationStores,
+		ObjectProvider<Clock> clocks,
+		AppIntegrityVerifier verifier,
+		GenerationApiProperties properties,
+		boolean providerAvailable,
+		com.aifashionvault.analytics.ProductMetrics productMetrics
+	) {
 		this.looks = first(lookStores);
 		this.objects = first(objectStores);
 		this.generations = first(generationStores);
 		Clock configured = first(clocks);
 		this.clock = configured == null ? Clock.systemUTC() : configured;
+		this.properties = properties == null ? new GenerationApiProperties() : properties;
+		this.providerAvailable = providerAvailable;
+		this.productMetrics = productMetrics;
+		// Regeneration enqueues the same provider-cost generation job as POST /generations,
+		// so it carries the same attestation gate under the same generation flag. The
+		// boundary is a no-op while the flag is false and fail-closed once it is true; see
+		// AppIntegrityBoundary for the NOT-YET-ENFORCING status of that flag today.
+		this.integrity = new AppIntegrityBoundary(verifier == null ? evidence -> null : verifier,
+			this.properties.isAttestationRequired());
 	}
 
 	@GetMapping
@@ -82,7 +163,12 @@ public class LooksController {
 
 	@GetMapping("/{id}")
 	public LookResource get(@AuthenticationPrincipal UserId ownerId, @PathVariable String id) {
-		return toResource(owned(ownerId, id));
+		LookResource resource = toResource(owned(ownerId, id));
+		// C22 lifecycle: a Look was reopened. Recorded only after the owner-scoped read
+		// succeeded, so a foreign/unknown id records nothing, and the payload is the coarse
+		// context only — never the image, a signed URL, or any source detail.
+		recordLookViewed();
+		return resource;
 	}
 
 	@PostMapping("/{id}/share-link")
@@ -90,13 +176,42 @@ public class LooksController {
 		return capability(owned(ownerId, id));
 	}
 
+	/**
+	 * C22 "Look exported" lifecycle event, as an owner-approved ack (2026-10-03). A C16
+	 * export is user-directed and entirely local — the backend never sees the share — so
+	 * the client acknowledges it here once the export has succeeded. Owner-scoped: a
+	 * foreign or unknown id is 404 and records nothing. Fire-and-forget: the ack never
+	 * affects the export, and the recorded context is the coarse non-identifying shape.
+	 */
+	@PostMapping("/{id}/export-ack")
+	@ResponseStatus(HttpStatus.NO_CONTENT)
+	public void exportAck(@AuthenticationPrincipal UserId ownerId, @PathVariable String id) {
+		owned(ownerId, id);
+		recordLookExported();
+	}
+
 	@PostMapping("/{id}/regenerate")
 	public ResponseEntity<GenerationResponse> regenerate(
 		@AuthenticationPrincipal UserId ownerId,
 		@PathVariable String id,
-		@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey
+		@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+		HttpServletRequest httpRequest
 	) {
+		// First statement: a rejected attestation must 403 before any look lookup, key
+		// validation or generation job creation, matching POST /generations exactly.
+		this.integrity.verify(httpRequest, AppIntegrityOperation.GENERATION_CREATION);
 		String key = validKey(idempotencyKey);
+		// Same global admission policy as POST /generations (GenerationCreationService):
+		// a paused server, or a deployment with no configured image provider, must not
+		// admit a regenerate job either. Checked before the look lookup and before any
+		// job creation, so the verdict never depends on which look was named and no
+		// provider-cost job is ever enqueued while the policy blocks admission.
+		if (properties.isAdmissionPaused()) {
+			throw new AdmissionRejected(HttpStatus.SERVICE_UNAVAILABLE, GenerationCreationService.ADMISSION_PAUSED);
+		}
+		if (!providerAvailable) {
+			throw new AdmissionRejected(HttpStatus.SERVICE_UNAVAILABLE, GenerationCreationService.GENERATION_PROVIDER_UNAVAILABLE);
+		}
 		Look look = owned(ownerId, id);
 		GenerationStore generationStore = generationStore();
 		GenerationJob source = generationStore.findJobForUser(look.generationJobId(), ownerId)
@@ -130,6 +245,21 @@ public class LooksController {
 			.body(body);
 	}
 
+	/**
+	 * In-process entry point for callers with no servlet request to attest against. It
+	 * delegates to the same gated method with a null request, so it is the SAME gate, not
+	 * a disabled one. While the flag is false the boundary returns immediately. Once the
+	 * flag is true the null request reaches the platform-header read inside the boundary's
+	 * try block, whose RuntimeException catch treats it as unusable evidence and rejects
+	 * with 403 APP_INTEGRITY_REQUIRED. Verified by
+	 * requiredIntegrityRejectsInProcessRegenerateWithNoRequestAsForbidden, which fails
+	 * loudly if that rejection ever stops happening.
+	 */
+	ResponseEntity<GenerationResponse> regenerate(UserId ownerId, String id, String idempotencyKey) {
+		return regenerate(ownerId, id, idempotencyKey, null);
+	}
+
+
 	@DeleteMapping("/{id}")
 	@ResponseStatus(HttpStatus.NO_CONTENT)
 	public void delete(@AuthenticationPrincipal UserId ownerId, @PathVariable String id) {
@@ -144,6 +274,11 @@ public class LooksController {
 		catch (ObjectStoreExceptions.StagedObjectMissingException ignored) {
 			// Absence is the converged cleanup state.
 		}
+	}
+
+	@ExceptionHandler(AppIntegrityBoundary.Problem.class)
+	ResponseEntity<GenerationProblemResponse> integrityProblem(AppIntegrityBoundary.Problem ex) {
+		return problem(ex.status(), ex.code());
 	}
 
 	@ExceptionHandler(NotFound.class)
@@ -168,7 +303,7 @@ public class LooksController {
 
 	@ExceptionHandler(AdmissionRejected.class)
 	ResponseEntity<GenerationProblemResponse> admissionRejected(AdmissionRejected ex) {
-		return problem(HttpStatus.TOO_MANY_REQUESTS, ex.reason);
+		return problem(ex.status(), ex.reason());
 	}
 
 	private Look owned(UserId ownerId, String id) {
@@ -270,6 +405,42 @@ public class LooksController {
 			.body(new GenerationProblemResponse(code));
 	}
 
+	/**
+	 * C22 Look lifecycle events, best-effort: a deployment without the metrics bean
+	 * records nothing, and a metrics failure must never fail a read or an ack. The
+	 * context is the coarse, non-identifying shape
+	 * {@link com.aifashionvault.analytics.ProductMetricContext} defines — no image
+	 * bytes, prompts, tokens or signed URLs.
+	 */
+	private void recordLookViewed() {
+		recordLookLifecycle(com.aifashionvault.analytics.AnalyticsEventName.LOOK_VIEWED);
+	}
+
+	/**
+	 * C22 "Look exported": recorded from the owner-approved export ack. {@code LOOK_SHARED}
+	 * is the existing look-lifecycle event for a Look leaving the vault; the public
+	 * share-link route it was originally named for is deliberately unused (C16), so this
+	 * user-directed export ack is its real emitter.
+	 */
+	private void recordLookExported() {
+		recordLookLifecycle(com.aifashionvault.analytics.AnalyticsEventName.LOOK_SHARED);
+	}
+
+	private void recordLookLifecycle(com.aifashionvault.analytics.AnalyticsEventName event) {
+		if (productMetrics == null) {
+			return;
+		}
+		try {
+			productMetrics.record(
+				event,
+				new com.aifashionvault.analytics.ProductMetricContext(
+					clock.instant(), null, null, null, null, null, null, null, null));
+		}
+		catch (RuntimeException ignored) {
+			// Observability is deliberately off the product critical path.
+		}
+	}
+
 	private static <T> T first(ObjectProvider<T> provider) {
 		try {
 			return provider.getIfAvailable();
@@ -278,13 +449,29 @@ public class LooksController {
 			return provider.orderedStream().findFirst().orElse(null);
 		}
 	}
-
 	private static final class NotFound extends RuntimeException {}
 	private static final class NotRegeneratable extends RuntimeException {}
 	private static final class MissingKey extends RuntimeException {}
 	private static final class KeyConflict extends RuntimeException {}
-	private static final class AdmissionRejected extends RuntimeException {
+	static final class AdmissionRejected extends RuntimeException {
+		private final HttpStatus status;
 		private final String reason;
-		private AdmissionRejected(String reason) { this.reason = reason; }
+
+		AdmissionRejected(String reason) {
+			this(HttpStatus.TOO_MANY_REQUESTS, reason);
+		}
+
+		AdmissionRejected(HttpStatus status, String reason) {
+			this.status = status;
+			this.reason = reason;
+		}
+
+		HttpStatus status() {
+			return status;
+		}
+
+		String reason() {
+			return reason;
+		}
 	}
 }

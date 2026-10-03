@@ -108,6 +108,7 @@ class LooksHttpContractTest {
 		mockMvc.perform(get("/looks")).andExpect(status().isUnauthorized());
 		mockMvc.perform(get("/looks/" + id)).andExpect(status().isUnauthorized());
 		mockMvc.perform(post("/looks/" + id + "/share-link")).andExpect(status().isUnauthorized());
+		mockMvc.perform(post("/looks/" + id + "/export-ack")).andExpect(status().isUnauthorized());
 		mockMvc.perform(post("/looks/" + id + "/regenerate").header("Idempotency-Key", "key"))
 			.andExpect(status().isUnauthorized());
 		mockMvc.perform(delete("/looks/" + id)).andExpect(status().isUnauthorized());
@@ -136,6 +137,58 @@ class LooksHttpContractTest {
 		assertThat(objects.deleted).isEqualTo(new ObjectRef(StorageDomain.LOOK, storageKey(owner, id)));
 		mockMvc.perform(get("/looks/" + id).header(HttpHeaders.AUTHORIZATION, bearer(owner.token())))
 			.andExpect(status().isNotFound()).andExpect(content().string(NOT_FOUND));
+	}
+
+	@Test
+	void exportAckIsOwnerScopedAndReturnsNoContent() throws Exception {
+		Owner owner = owner();
+		UUID id = insertLook(owner);
+
+		// C22 "Look exported": the client acknowledges a local export; the ack is a
+		// fire-and-forget 204 and never discloses anything about the Look.
+		mockMvc.perform(post("/looks/" + id + "/export-ack").header(HttpHeaders.AUTHORIZATION, bearer(owner.token())))
+			.andExpect(status().isNoContent())
+			.andExpect(content().string(""));
+
+		// A Look the caller does not own is indistinguishable from a missing one.
+		Owner other = owner("export-ack-other-subject");
+		mockMvc.perform(post("/looks/" + id + "/export-ack").header(HttpHeaders.AUTHORIZATION, bearer(other.token())))
+			.andExpect(status().isNotFound())
+			.andExpect(content().string(NOT_FOUND));
+	}
+
+	@Test
+	void deletingALookKeepsTheVaultGarmentsItWasMadeFrom() throws Exception {
+		Owner owner = owner();
+		UUID lookId = insertLook(owner);
+		// A reusable garment the Look was rendered from: the whole point of a
+		// Vault is that deleting a render never destroys the clothing.
+		UUID garmentId = UUID.randomUUID();
+		jdbc.update("INSERT INTO vault_item (id, user_id, storage_key, name, created_at) VALUES (?, ?, ?, ?, ?)",
+			garmentId, owner.userId().value(), "users/" + owner.userId().value() + "/vault/shirt.jpg", "Linen shirt",
+			Timestamp.from(NOW));
+		jdbc.update("INSERT INTO look_item (look_id, vault_item_id, slot) VALUES (?, ?, 'UPPER_BODY')",
+			lookId, garmentId);
+
+		mockMvc.perform(delete("/looks/" + lookId).header(HttpHeaders.AUTHORIZATION, bearer(owner.token())))
+			.andExpect(status().isNoContent());
+
+		// The garment row survives with its original values: a Look delete is a
+		// delete of the RENDER, not of the clothing it used. A "clean up
+		// everything associated with the look" cascade would fail here.
+		Map<String, Object> garment = jdbc.queryForMap(
+			"SELECT storage_key, name FROM vault_item WHERE id = ?", garmentId);
+		assertThat(garment.get("name")).isEqualTo("Linen shirt");
+		assertThat(garment.get("storage_key"))
+			.isEqualTo("users/" + owner.userId().value() + "/vault/shirt.jpg");
+
+		// ...and it is still usable through the owner's mounted Vault route.
+		mockMvc.perform(get("/vault/items/" + garmentId).header(HttpHeaders.AUTHORIZATION, bearer(owner.token())))
+			.andExpect(status().isOk())
+			.andExpect(content().string(org.hamcrest.Matchers.containsString("Linen shirt")));
+
+		// Only the render object left the object store.
+		assertThat(objects.deleted).isEqualTo(new ObjectRef(StorageDomain.LOOK, storageKey(owner, lookId)));
 	}
 
 	@Test
@@ -248,7 +301,6 @@ class LooksHttpContractTest {
 		@Bean @Primary ExternalTokenVerifier verifier() { return InProcessJwtFixture.verifier(); }
 		@Bean @Primary GenerationStore generations() { return mock(GenerationStore.class); }
 		@Bean @Primary FakeLooksObjectStore objects() { return new FakeLooksObjectStore(); }
-		@Bean JdbcLookStore looks(DataSource dataSource) { return new JdbcLookStore(dataSource); }
 	}
 
 	static final class FakeLooksObjectStore implements ObjectStore {

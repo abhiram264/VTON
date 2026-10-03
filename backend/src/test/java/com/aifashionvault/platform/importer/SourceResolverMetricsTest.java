@@ -2,6 +2,7 @@ package com.aifashionvault.platform.importer;
 
 import java.net.URI;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
 
 import org.junit.jupiter.api.Test;
@@ -184,12 +185,14 @@ class SourceResolverMetricsTest {
 	void onErrorHandlerFailureDoesNotEscapeAndOriginalErrorStillPropagates() {
 		SimpleMeterRegistry meters = new SimpleMeterRegistry();
 		TestObservationRegistry spans = TestObservationRegistry.create();
-		spans.observationConfig().observationHandler(failingHandler(FailingStage.ON_ERROR));
+		AtomicInteger errorCallbacks = new AtomicInteger();
+		spans.observationConfig().observationHandler(failingHandler(FailingStage.ON_ERROR, errorCallbacks));
 		IllegalStateException failure = new IllegalStateException("canary resolver failure");
 		SourceResolver decorated = new SourceResolverMetrics(meters, new ObservationFacade(spans))
 			.decorate("SHARED_IMAGE", resolverThatThrows(failure));
 
 		assertThatThrownBy(() -> decorated.resolve(SOURCE)).isSameAs(failure);
+		assertThat(errorCallbacks).hasValue(1);
 		assertThat(meters.find(SourceResolverMetrics.OUTCOME).counter().count()).isEqualTo(1);
 	}
 
@@ -291,6 +294,13 @@ class SourceResolverMetricsTest {
 	}
 
 	private static ObservationHandler<Observation.Context> failingHandler(FailingStage stage) {
+		return failingHandler(stage, null);
+	}
+
+	private static ObservationHandler<Observation.Context> failingHandler(
+		FailingStage stage,
+		AtomicInteger callbacks
+	) {
 		return new ObservationHandler<Observation.Context>() {
 
 			@Override
@@ -306,8 +316,11 @@ class SourceResolverMetricsTest {
 			}
 
 			@Override
-			public void onEvent(Observation.Event event, Observation.Context context) {
+			public void onError(Observation.Context context) {
 				if (stage == FailingStage.ON_ERROR) {
+					if (callbacks != null) {
+						callbacks.incrementAndGet();
+					}
 					throw new IllegalStateException("canary onError handler failure");
 				}
 			}

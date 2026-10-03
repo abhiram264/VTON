@@ -7,11 +7,41 @@ export type FeatureFlagName =
   | 'SHARE_IMPORT_IOS'
   | 'NEW_QUALITY_GATE';
 
-export const DEFAULT_FEATURE_FLAGS: Record<FeatureFlagName, boolean> = {
+// Client mirror of the backend's `FeatureFlagName.supported` bit: a capability
+// with no working backing path is refused on the client no matter what a flag
+// payload, an offline fetch or a cached value says (guide C22 item 4). The
+// backend stays authoritative for everything else (item 5).
+//
+// Deliberate asymmetries with the backend enum, so the next reader does not
+// re-raise them:
+//  - MULTI_ITEM is client-gated off by operator ruling (option C, ledger §12):
+//    the backend marks it supported (C12 route) but the MOBILE affordance stays
+//    off until the owner supplies the real image API key. The client is
+//    intentionally stricter here; do not flip without a new ruling.
+//  - NATURAL_LANGUAGE_STUDIO has a mounted route (C21) and defers to the
+//    backend, which refuses the capability itself when its flag is off. It
+//    still defaults OFF.
+//  - NEW_QUALITY_GATE is not listed because the backend never emits it enabled:
+//    FeatureFlagService.isEnabled returns false for any unsupported name before
+//    consulting overrides, and override(name, true) throws. A client guard would
+//    be unreachable, so the table omits it rather than adding dead code.
+export const UNSUPPORTED_CAPABILITIES: Readonly<
+  Record<FeatureFlagName, boolean>
+> = {
   MULTI_ITEM: true,
-  NATURAL_LANGUAGE_STUDIO: true,
-  TRYON_MAX: true,
+  NATURAL_LANGUAGE_STUDIO: false,
+  TRYON_MAX: false,
   HD_GENERATION: true,
+  SHARE_IMPORT_ANDROID: false,
+  SHARE_IMPORT_IOS: false,
+  NEW_QUALITY_GATE: false,
+};
+
+export const DEFAULT_FEATURE_FLAGS: Record<FeatureFlagName, boolean> = {
+  MULTI_ITEM: false,
+  NATURAL_LANGUAGE_STUDIO: false,
+  TRYON_MAX: true,
+  HD_GENERATION: false,
   SHARE_IMPORT_ANDROID: true,
   SHARE_IMPORT_IOS: true,
   NEW_QUALITY_GATE: false,
@@ -29,6 +59,9 @@ function isFeatureFlagName(name: string): name is FeatureFlagName {
 }
 
 export function isFeatureEnabled(name: FeatureFlagName): boolean {
+  if (UNSUPPORTED_CAPABILITIES[name]) {
+    return false;
+  }
   return activeFeatureFlags[name] ?? DEFAULT_FEATURE_FLAGS[name];
 }
 

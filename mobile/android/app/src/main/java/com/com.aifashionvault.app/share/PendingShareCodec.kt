@@ -1,7 +1,9 @@
 package com.aifashionvault.app.share
 
+import java.io.File
 import java.io.StringReader
 import java.io.StringWriter
+import java.net.URI
 import java.util.Properties
 
 /**
@@ -95,5 +97,19 @@ object SharePayloadValidator {
     }
   }
 
-  private fun isFileUri(uri: String): Boolean = uri.startsWith("file:")
+  private fun isFileUri(uri: String): Boolean =
+      try {
+        val parsed = URI(uri)
+        val path = parsed.path ?: return false
+        parsed.scheme == "file" &&
+            parsed.rawAuthority == null &&
+            parsed.rawQuery == null &&
+            parsed.rawFragment == null &&
+            path.startsWith("/") &&
+            !path.contains('\\') &&
+            File(path).name.isNotBlank() &&
+            File(path).canonicalFile.toURI().path == path
+      } catch (_: Exception) {
+        false
+      }
 }

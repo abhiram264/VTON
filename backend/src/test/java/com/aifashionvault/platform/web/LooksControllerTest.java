@@ -139,13 +139,123 @@ class LooksControllerTest {
 		verify(objects).delete(new ObjectRef(StorageDomain.LOOK, KEY.value()));
 	}
 
+	/**
+	 * C22: "Look reopened" must be recorded, and only for an owner-scoped read that
+	 * actually succeeded. The payload is the coarse context — the recording below asserts
+	 * nothing identifying is passed.
+	 */
+	@Test
+	void reopeningAnOwnedLookRecordsTheLookViewedLifecycleEvent() {
+		JdbcLookStore store = mock(JdbcLookStore.class);
+		ObjectStore objects = mock(ObjectStore.class);
+		when(store.findByIdForUser(LOOK_ID, OWNER)).thenReturn(Optional.of(look()));
+		when(objects.presignGet(new ObjectRef(StorageDomain.LOOK, KEY.value()), java.time.Duration.ofMinutes(5)))
+			.thenReturn(new PresignedAccess(new ObjectRef(StorageDomain.LOOK, KEY.value()), "GET",
+				URI.create("https://private.invalid/read?signature=secret"), Map.of(), NOW.plusSeconds(300)));
+		RecordingProductMetrics metrics = new RecordingProductMetrics();
+
+		controller(store, objects, metrics).get(OWNER, LOOK_ID.value().toString());
+
+		assertThat(metrics.events).hasSize(1);
+		assertThat(metrics.events.get(0).name()).isEqualTo(com.aifashionvault.analytics.AnalyticsEventName.LOOK_VIEWED);
+		assertThat(metrics.events.get(0).context().occurredAt()).isEqualTo(NOW);
+		// No image/signed-URL/identity leaks into the event context.
+		assertThat(metrics.events.get(0).context().provider()).isNull();
+		assertThat(metrics.events.get(0).context().model()).isNull();
+		assertThat(metrics.events.get(0).context().cost()).isNull();
+	}
+
+	@Test
+	void aForeignOrDeletedLookRecordsNothing() {
+		JdbcLookStore store = mock(JdbcLookStore.class);
+		ObjectStore objects = mock(ObjectStore.class);
+		when(store.findByIdForUser(LOOK_ID, OWNER)).thenReturn(Optional.empty());
+		RecordingProductMetrics metrics = new RecordingProductMetrics();
+
+		assertThatThrownBy(() -> controller(store, objects, metrics).get(OWNER, LOOK_ID.value().toString()))
+			.isInstanceOf(RuntimeException.class);
+
+		assertThat(metrics.events).isEmpty();
+	}
+
+	/**
+	 * C22: "Look exported" is recorded from the owner-approved export ack (C16 exports are
+	 * user-directed and local, so the client acknowledges them). Owner-scoped, and the
+	 * recorded context stays coarse — no image, signed URL or identity.
+	 */
+	@Test
+	void exportingAnOwnedLookRecordsTheLookSharedLifecycleEvent() {
+		JdbcLookStore store = mock(JdbcLookStore.class);
+		ObjectStore objects = mock(ObjectStore.class);
+		when(store.findByIdForUser(LOOK_ID, OWNER)).thenReturn(Optional.of(look()));
+		RecordingProductMetrics metrics = new RecordingProductMetrics();
+
+		controller(store, objects, metrics).exportAck(OWNER, LOOK_ID.value().toString());
+
+		assertThat(metrics.events).hasSize(1);
+		assertThat(metrics.events.get(0).name()).isEqualTo(com.aifashionvault.analytics.AnalyticsEventName.LOOK_SHARED);
+		assertThat(metrics.events.get(0).context().occurredAt()).isEqualTo(NOW);
+		assertThat(metrics.events.get(0).context().provider()).isNull();
+		assertThat(metrics.events.get(0).context().model()).isNull();
+		assertThat(metrics.events.get(0).context().cost()).isNull();
+	}
+
+	@Test
+	void aForeignLookExportAckRecordsNothing() {
+		JdbcLookStore store = mock(JdbcLookStore.class);
+		ObjectStore objects = mock(ObjectStore.class);
+		when(store.findByIdForUser(LOOK_ID, OWNER)).thenReturn(Optional.empty());
+		RecordingProductMetrics metrics = new RecordingProductMetrics();
+
+		assertThatThrownBy(() -> controller(store, objects, metrics).exportAck(OWNER, LOOK_ID.value().toString()))
+			.isInstanceOf(RuntimeException.class);
+
+		assertThat(metrics.events).isEmpty();
+	}
+
+	private static final class RecordingProductMetrics implements com.aifashionvault.analytics.ProductMetrics {
+		private final List<Recorded> events = new java.util.ArrayList<>();
+
+		@Override
+		public void record(
+			com.aifashionvault.analytics.AnalyticsEventName eventName,
+			com.aifashionvault.analytics.ProductMetricContext context
+		) {
+			events.add(new Recorded(eventName, context));
+		}
+
+		private record Recorded(
+			com.aifashionvault.analytics.AnalyticsEventName name,
+			com.aifashionvault.analytics.ProductMetricContext context
+		) {}
+	}
+
 	@SuppressWarnings("unchecked")
 	private static LooksController controller(JdbcLookStore store, ObjectStore objects) {
 		return controller(store, objects, mock(GenerationStore.class));
 	}
 
 	@SuppressWarnings("unchecked")
+	private static LooksController controller(
+		JdbcLookStore store,
+		ObjectStore objects,
+		com.aifashionvault.analytics.ProductMetrics metrics
+	) {
+		return controller(store, objects, mock(GenerationStore.class), metrics);
+	}
+
+	@SuppressWarnings("unchecked")
 	private static LooksController controller(JdbcLookStore store, ObjectStore objects, GenerationStore generations) {
+		return controller(store, objects, generations, null);
+	}
+
+	@SuppressWarnings("unchecked")
+	private static LooksController controller(
+		JdbcLookStore store,
+		ObjectStore objects,
+		GenerationStore generations,
+		com.aifashionvault.analytics.ProductMetrics metrics
+	) {
 		ObjectProvider<JdbcLookStore> stores = mock(ObjectProvider.class);
 		ObjectProvider<ObjectStore> objectStores = mock(ObjectProvider.class);
 		ObjectProvider<GenerationStore> generationStores = mock(ObjectProvider.class);
@@ -154,7 +264,8 @@ class LooksControllerTest {
 		when(objectStores.getIfAvailable()).thenReturn(objects);
 		when(generationStores.getIfAvailable()).thenReturn(generations);
 		when(clocks.getIfAvailable()).thenReturn(Clock.fixed(NOW, ZoneOffset.UTC));
-		return new LooksController(stores, objectStores, generationStores, clocks);
+		return new LooksController(stores, objectStores, generationStores, clocks, null,
+			new GenerationApiProperties(), true, metrics);
 	}
 
 	private static Look look() {

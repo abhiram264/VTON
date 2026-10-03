@@ -4,6 +4,9 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   linux-node:
     runs-on: ubuntu-latest
@@ -21,7 +24,7 @@ jobs:
       - run: npm run typecheck
       - run: npm run lint
       - run: npm run format:check
-      - run: npm test
+      - run: npm run test:ci
 
   linux-android:
     runs-on: ubuntu-latest
@@ -60,7 +63,7 @@ jobs:
       - run: npm run typecheck
       - run: npm run lint
       - run: npm run format:check
-      - run: npm test
+      - run: npm run test:ci
 
   # Best-effort, not a required PR gate.
   # Consumes private-repo Actions minutes at the macOS rate.

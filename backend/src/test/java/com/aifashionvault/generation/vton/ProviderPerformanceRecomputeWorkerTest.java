@@ -14,8 +14,9 @@ import javax.sql.DataSource;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
 
-import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 
 class ProviderPerformanceRecomputeWorkerTest {
 
@@ -31,15 +32,16 @@ class ProviderPerformanceRecomputeWorkerTest {
 	}
 
 	@Test
-	void trailingWindowSpansThreeUtcDaysBackwardThroughToday() {
-		RecordingStore recording = new RecordingStore();
+	void scheduledRecomputeUsesExactTrailingWindowOnce() {
+		JdbcProviderPerformanceStore store = mock(JdbcProviderPerformanceStore.class);
 		ProviderPerformanceRecomputeWorker worker =
-			new ProviderPerformanceRecomputeWorker(new StoreProvider(null), CLOCK);
+			new ProviderPerformanceRecomputeWorker(new StoreProvider(store), CLOCK);
 
-		worker.recomputeTrailingWindow(recording);
+		worker.scheduledRecompute();
 
-		assertThat(recording.from).isEqualTo(Instant.parse("2026-03-30T00:00:00Z"));
-		assertThat(recording.to).isEqualTo(Instant.parse("2026-04-03T00:00:00Z"));
+		verify(store).recompute(
+			Instant.parse("2026-03-30T00:00:00Z"),
+			Instant.parse("2026-04-03T00:00:00Z"));
 	}
 
 	@Test
@@ -64,23 +66,6 @@ class ProviderPerformanceRecomputeWorkerTest {
 		@Override
 		public JdbcProviderPerformanceStore getIfAvailable() {
 			return store;
-		}
-	}
-
-	private static final class RecordingStore implements ProviderPerformanceStore {
-
-		private Instant from;
-		private Instant to;
-
-		@Override
-		public ProviderPerformanceSnapshot snapshot(ProviderPerformanceQuery query) {
-			throw new UnsupportedOperationException("unexpected");
-		}
-
-		@Override
-		public void recompute(Instant fromInclusive, Instant toExclusive) {
-			this.from = fromInclusive;
-			this.to = toExclusive;
 		}
 	}
 

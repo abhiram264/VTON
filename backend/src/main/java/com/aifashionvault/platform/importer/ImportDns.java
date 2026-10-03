@@ -4,7 +4,10 @@ import java.net.Inet6Address;
 import java.net.InetAddress;
 import java.net.URI;
 import java.net.UnknownHostException;
-
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 /**
  * DNS + address safety gate for the share-import resolver. All A/AAAA records
  * of every hostname are resolved and every candidate must be externally
@@ -52,6 +55,31 @@ public class ImportDns {
 		return new ResolvedTarget(host, candidates);
 	}
 
+	ResolvedTarget resolveHost(URI httpUri, long timeoutNanos) {
+		if (timeoutNanos <= 0) {
+			throw new ImportNetworkException(FailureKind.TIMEOUT, "dns budget exhausted");
+		}
+		CompletableFuture<ResolvedTarget> lookup = CompletableFuture.supplyAsync(() -> resolveHost(httpUri));
+		try {
+			return lookup.get(timeoutNanos, TimeUnit.NANOSECONDS);
+		}
+		catch (TimeoutException ex) {
+			lookup.cancel(true);
+			throw new ImportNetworkException(FailureKind.TIMEOUT, "dns lookup timed out", ex);
+		}
+		catch (ExecutionException ex) {
+			if (ex.getCause() instanceof ImportNetworkException failure) {
+				throw failure;
+			}
+			throw new ImportNetworkException(FailureKind.DNS_FAILURE, "dns lookup failed", ex.getCause());
+		}
+		catch (InterruptedException ex) {
+			lookup.cancel(true);
+			Thread.currentThread().interrupt();
+			throw new ImportNetworkException(FailureKind.TIMEOUT, "dns lookup interrupted", ex);
+		}
+	}
+
 	/** Policy check for a single literal address. */
 	public void requireRoutable(InetAddress address) {
 		if (address == null || !isExternallyRoutable(address)) {
@@ -96,13 +124,60 @@ public class ImportDns {
 				return isRoutableIpv4(new byte[] {a[12], a[13], a[14], a[15]});
 			}
 		}
-		// 2001:db8::/32 documentation
-		return !((a[0] & 0xFF) == 0x20 && (a[1] & 0xFF) == 0x01 && (a[2] & 0xFF) == 0x0D && (a[3] & 0xFF) == 0xB8);
+		// 64:ff9b::/96 is IPv4-embedded NAT64; 64:ff9b:1::/48 is local-use translation.
+		boolean wellKnownNat64 = a[0] == 0 && a[1] == 0x64 && a[2] == (byte) 0xFF
+			&& a[3] == (byte) 0x9B && a[4] == 0 && a[5] == 0;
+		if (wellKnownNat64 && allZero(a, 6, 11)) {
+			return isRoutableIpv4(new byte[] {a[12], a[13], a[14], a[15]});
+		}
+		if (a[0] == 0 && a[1] == 0x64 && a[2] == (byte) 0xFF && a[3] == (byte) 0x9B && a[4] == 0 && a[5] == 1) {
+			return false;
+		}
+		// 100::/64 discard-only, 2001::/23 IETF special-purpose, and 2001:db8::/32 documentation.
+		if (a[0] == 1 && allZero(a, 1, 7)) {
+			return false;
+		}
+		if (a[0] == 0x20 && a[1] == 1 && (a[2] & 0xFE) == 0) {
+			return false;
+		}
+		if (a[0] == 0x20 && a[1] == 1 && a[2] == 0x0D && a[3] == (byte) 0xB8) {
+			return false;
+		}
+		// 3fff::/20 documentation (RFC 9637).
+		if (a[0] == 0x3F && (a[1] & 0xF0) == 0xF0) {
+			return false;
+		}
+		// 2002::/16 embeds an IPv4 destination in the next four bytes.
+		if (a[0] == 0x20 && a[1] == 2) {
+			return isRoutableIpv4(new byte[] {a[2], a[3], a[4], a[5]});
+		}
+		return true;
+	}
+
+	private static boolean allZero(byte[] value, int from, int to) {
+		for (int i = from; i <= to; i++) {
+			if (value[i] != 0) {
+				return false;
+			}
+		}
+		return true;
 	}
 
 	private static boolean isRoutableIpv4(byte[] a) {
 		int o1 = a[0] & 0xFF;
 		int o2 = a[1] & 0xFF;
+		if (o1 == 0 || o1 == 127) {
+			return false; // 0.0.0.0/8 unspecified and 127.0.0.0/8 loopback
+		}
+		if (o1 == 169 && o2 == 254) {
+			return false; // 169.254.0.0/16 link-local
+		}
+		if (o1 >= 224 && o1 < 240) {
+			return false; // 224.0.0.0/4 multicast
+		}
+		if (o1 == 192 && o2 == 88 && (a[2] & 0xFF) == 99) {
+			return false; // 192.88.99.0/24 6to4 relay anycast
+		}
 		if (o1 == 10 || (o1 == 172 && o2 >= 16 && o2 <= 31) || (o1 == 192 && o2 == 168)) {
 			return false; // RFC1918 private
 		}

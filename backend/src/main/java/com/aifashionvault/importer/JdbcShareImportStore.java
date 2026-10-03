@@ -70,7 +70,8 @@ public class JdbcShareImportStore {
 	public record Deleted(StorageKey storageKey) implements DeleteResult {
 	}
 
-	public record AlreadyDeleted() implements DeleteResult {
+	/** The retained key lets later delete calls retry physical cleanup. */
+	public record AlreadyDeleted(StorageKey storageKey) implements DeleteResult {
 	}
 
 	public record Missing() implements DeleteResult {
@@ -133,13 +134,27 @@ public class JdbcShareImportStore {
 			if (!isUniqueViolation(ex)) {
 				throw ex;
 			}
-			ShareImport existing = rowByOwnerAndKey(command.ownerId(), command.idempotencyKey()).orElseThrow(() -> ex);
-			if (fingerprint.equals(existing.requestFingerprint())) {
-				return new Replayed(existing);
-			}
-			return new FingerprintConflict(existing.id());
+			return arbitrateCreate(command).orElseThrow(() -> ex);
 		}
 		return new Created(rowById(command.ownerId(), id).orElseThrow());
+	}
+
+	/**
+	 * Resolves an existing create request without touching staging media.
+	 * Empty means the caller may validate media and proceed to {@link #create}.
+	 */
+	public Optional<CreateResult> arbitrateCreate(ImportCommand command) {
+		Objects.requireNonNull(command, "command");
+		String fingerprint = fingerprint(command);
+		Optional<ShareImport> existing = rowByOwnerAndKey(command.ownerId(), command.idempotencyKey());
+		if (existing.isEmpty()) {
+			return Optional.empty();
+		}
+		ShareImport row = existing.get();
+		CreateResult result = fingerprint.equals(row.requestFingerprint())
+			? new Replayed(row)
+			: new FingerprintConflict(row.id());
+		return Optional.of(result);
 	}
 
 	public Optional<ShareImport> find(UserId ownerId, ShareImportId id) {
@@ -207,7 +222,7 @@ public class JdbcShareImportStore {
 		int updated = jdbc.update(
 			"UPDATE share_import SET resolver_state = 'RESOLVING', attempt_count = attempt_count + 1, "
 				+ "attempt_leased_at = ?, attempt_token = ?, terminal_reason_code = NULL, updated_at = ? "
-				+ "WHERE id = ? AND user_id = ? AND resolver_state = 'NEEDS_IMAGE'",
+				+ "WHERE id = ? AND user_id = ? AND resolver_state IN ('NEEDS_IMAGE', 'FAILED_RETRYABLE')",
 			Timestamp.from(now), attemptToken, Timestamp.from(now), id.value(), ownerId.value());
 		ShareImport current = rowById(ownerId, id).orElse(null);
 		if (updated == 1) {
@@ -262,22 +277,153 @@ public class JdbcShareImportStore {
 			id.value(), ownerId.value()).stream().findFirst();
 	}
 
+	/**
+	 * Confirms an owner-owned READY import into the persistent Vault. The
+	 * resolved object is already owned by this user at {@code storage_key}, so
+	 * confirmation reuses it — no second upload, no download round-trip, and
+	 * no original upload id, which a URL import never had (PRD PR-08).
+	 * <p>
+	 * Identity is derived from (user, import), so a repeated or concurrent
+	 * confirmation converges on the same saved item instead of creating two,
+	 * and the import's source provenance is preserved through the
+	 * {@code source_reference} row. The write is owner-scoped and transactional;
+	 * a foreign import never resolves here and no item is inserted.
+	 * <p>
+	 * Optional owner corrections ({@code correctedName}, {@code correctedCategory})
+	 * overwrite the saved item's metadata, and {@code collectionId} adds the item
+	 * to an owned collection, in the same transaction as the insert. Repeating
+	 * the same confirmation therefore converges on the same item and the same
+	 * single membership row.
+	 *
+	 * @return the confirmed Vault item, or empty when the import is not
+	 * owner-visible, is not READY, has no resolved object, or names a collection
+	 * that is not owned by the confirming user.
+	 */
+	public Optional<ConfirmedItem> confirm(UserId ownerId, ShareImportId id,
+			String correctedName, String correctedCategory, UUID collectionId) {
+		Objects.requireNonNull(ownerId, "ownerId");
+		Objects.requireNonNull(id, "id");
+		ShareImport current = find(ownerId, id).orElse(null);
+		if (current == null || current.state() != ShareImportState.READY || current.storageKey() == null) {
+			return Optional.empty();
+		}
+		// An unowned collection is refused before any write: the owner-scoped
+		// lookup keeps another owner's collection indistinguishable from a
+		// missing one, and a rejected confirmation saves nothing.
+		if (collectionId != null && !collectionOwned(ownerId, collectionId)) {
+			return Optional.empty();
+		}
+		UUID itemId = confirmedItemId(ownerId, id);
+		Instant now = clock.instant();
+		transactions.executeWithoutResult(status -> {
+			// The source row is the vault_item FK target; ON CONFLICT keeps a
+			// repeat confirmation idempotent without losing provenance.
+			jdbc.update(
+				"INSERT INTO source_reference (id, url, retailer, raw_metadata, created_at) VALUES (?, ?, ?, ?::jsonb, ?) "
+					+ "ON CONFLICT (id) DO NOTHING",
+				id.value(), current.sourceUrl() == null ? null : current.sourceUrl().toString(),
+				current.sourceSiteName(), sourceMetadata(current), Timestamp.from(now));
+			jdbc.update(
+				"INSERT INTO vault_item (id, user_id, storage_key, source_reference_id, name, created_at) "
+					+ "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING",
+				itemId, ownerId.value(), current.storageKey().value(), id.value(),
+				current.sourceTitle(), Timestamp.from(now));
+			// Owner corrections are applied after the idempotent insert, so a
+			// repeat confirmation with the same corrections converges on the
+			// same row instead of creating a second item.
+			if (correctedName != null || correctedCategory != null) {
+				jdbc.update(
+					"UPDATE vault_item SET name = COALESCE(?, name), category = COALESCE(?, category) "
+						+ "WHERE id = ? AND user_id = ?",
+					correctedName, correctedCategory, itemId, ownerId.value());
+			}
+			if (collectionId != null) {
+				jdbc.update(
+					"INSERT INTO collection_item (collection_id, vault_item_id, user_id, created_at) VALUES (?, ?, ?, ?) "
+						+ "ON CONFLICT DO NOTHING",
+					collectionId, itemId, ownerId.value(), Timestamp.from(now));
+			}
+		});
+		return confirmedItem(ownerId, itemId);
+	}
+
+	private boolean collectionOwned(UserId ownerId, UUID collectionId) {
+		return !jdbc.query(
+			"SELECT 1 FROM collection WHERE id = ? AND user_id = ?",
+			(rs, rowNum) -> rs.getInt(1), collectionId, ownerId.value()).isEmpty();
+	}
+
+	private Optional<ConfirmedItem> confirmedItem(UserId ownerId, UUID itemId) {
+		return jdbc.query(
+			"SELECT v.id, v.source_reference_id, v.name, v.category, v.created_at FROM vault_item v "
+				+ "WHERE v.id = ? AND v.user_id = ?",
+			(rs, rowNum) -> new ConfirmedItem(rs.getObject("id", UUID.class),
+				rs.getObject("source_reference_id", UUID.class), rs.getString("name"), rs.getString("category"),
+				rs.getTimestamp("created_at").toInstant()),
+			itemId, ownerId.value()).stream().findFirst();
+	}
+
+	/**
+	 * Stable saved-item identity for one (owner, import) pair: repeating or
+	 * racing a confirmation can never mint a second item for the same import.
+	 */
+	private static UUID confirmedItemId(UserId ownerId, ShareImportId id) {
+		return UUID.nameUUIDFromBytes(
+			("share-import:" + ownerId.value() + ":" + id.value()).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+	}
+
+	private static String sourceMetadata(ShareImport current) {
+		if (current.sourceSiteName() == null && current.sourceTitle() == null) {
+			return null;
+		}
+		return "{\"siteName\":" + jsonText(current.sourceSiteName()) + ",\"title\":" + jsonText(current.sourceTitle()) + "}";
+	}
+
+	private static String jsonText(String value) {
+		return value == null ? "null" : "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\"";
+	}
+
+	/** Saved-item identity and stored metadata returned by a successful confirmation. */
+	public record ConfirmedItem(UUID itemId, UUID sourceReferenceId, String name, String category,
+			java.time.Instant createdAt) {
+	}
+
 	public DeleteResult delete(UserId ownerId, ShareImportId id) {
 		Objects.requireNonNull(ownerId, "ownerId");
 		Objects.requireNonNull(id, "id");
+		Instant now = clock.instant();
+		List<StorageKey> deleted = jdbc.query(
+			"UPDATE share_import SET resolver_state = 'DELETED', attempt_token = NULL, attempt_leased_at = NULL, "
+				+ "terminal_reason_code = NULL, updated_at = ? "
+				+ "WHERE id = ? AND user_id = ? AND resolver_state <> 'DELETED' RETURNING storage_key",
+			(rs, rowNum) -> storageKey(rs),
+			Timestamp.from(now), id.value(), ownerId.value());
+		if (!deleted.isEmpty()) {
+			return new Deleted(deleted.getFirst());
+		}
 		ShareImport current = rowById(ownerId, id).orElse(null);
 		if (current == null) {
 			return new Missing();
 		}
 		if (current.state() == ShareImportState.DELETED) {
-			return new AlreadyDeleted();
+			return new AlreadyDeleted(current.storageKey());
 		}
-		Instant now = clock.instant();
+		throw new IllegalStateException("share import delete was not applied: " + id.value());
+	}
+
+	/**
+	 * Clears the storage key of an already-DELETED row once its object removal
+	 * has SUCCEEDED, so a later DELETE reads no key and does not repeat the
+	 * removal. A row whose key is still set is a cleanup-FAILED row, which a
+	 * later delete call retries. The clear is owner-scoped and state-fenced.
+	 */
+	public void markCleanedUp(UserId ownerId, ShareImportId id) {
+		Objects.requireNonNull(ownerId, "ownerId");
+		Objects.requireNonNull(id, "id");
 		jdbc.update(
-			"UPDATE share_import SET resolver_state = 'DELETED', attempt_token = NULL, attempt_leased_at = NULL, "
-				+ "terminal_reason_code = NULL, updated_at = ? WHERE id = ? AND user_id = ? AND resolver_state <> 'DELETED'",
-			Timestamp.from(now), id.value(), ownerId.value());
-		return new Deleted(current.storageKey());
+			"UPDATE share_import SET storage_key = NULL, updated_at = ? "
+				+ "WHERE id = ? AND user_id = ? AND resolver_state = 'DELETED'",
+			Timestamp.from(clock.instant()), id.value(), ownerId.value());
 	}
 
 	public List<StorageKey> storageKeysFor(UserId ownerId) {

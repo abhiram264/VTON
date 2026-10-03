@@ -218,11 +218,13 @@ class UploadsApiTest {
 
 		assertReadyWithoutStorageKeys(complete(token, id), id);
 
-		MvcResult aborted = mockMvc.perform(delete("/uploads/" + UUID.randomUUID())
+		MvcResult aborted = mockMvc.perform(delete("/uploads/" + id)
 				.header(HttpHeaders.AUTHORIZATION, bearer(token)))
 			.andExpect(status().isNoContent())
 			.andReturn();
 		assertThat(aborted.getResponse().getContentAsString()).isEmpty();
+		assertThat(this.fakeUploadStore.lastAbortedId).isEqualTo(new UploadId(UUID.fromString(id)));
+		assertThat(this.fakeUploadStore.staged).doesNotContainKey(this.fakeUploadStore.lastStagedKey);
 	}
 
 	@Test
@@ -404,6 +406,7 @@ class UploadsApiTest {
 		}
 
 		@Bean
+		@Primary
 		FakeUploadStore fakeUploadStore() {
 			return new FakeUploadStore();
 		}
@@ -411,7 +414,7 @@ class UploadsApiTest {
 		@Bean
 		@Primary
 		UploadWorkflow fakeUploadWorkflow(FakeUploadStore store) {
-			return new UploadWorkflow(store, new ImageInspector());
+			return UploadWorkflow.forTesting(store, new ImageInspector());
 		}
 	}
 
@@ -508,9 +511,17 @@ class UploadsApiTest {
 			throw new AssertionError("claim must not be called");
 		}
 
+		// Not an error any more. DELETE /me now PURGES before it marks the account deleted: that
+		// ordering is the erasure guarantee (JdbcIdentityProvisioning purges every object, then
+		// UPDATEs deleted_at, and rethrows per-object failures). This test exercises exactly that
+		// path, so a throw here took out a correct guarantee instead of catching a bug. The purge is
+		// recorded so the sequence stays observable; the ordering itself is pinned in the
+		// JdbcIdentityProvisioning erasure tests, not here.
+		final java.util.List<UserId> purgedUserIds = new java.util.ArrayList<>();
+
 		@Override
 		public void purgeUserObjects(UserId userId) {
-			throw new AssertionError("purgeUserObjects must not be called");
+			this.purgedUserIds.add(userId);
 		}
 
 		@Override

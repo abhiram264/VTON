@@ -1,133 +1,51 @@
 # Terraform code only — apply prohibited for slice-69.
 
-# Plan §69: AI-Specific Production Alert — Provider HTTP success = normal BUT Quality Gate pass rate collapses.
+# Plan §69: Technical generation success = normal BUT Quality Gate pass rate collapses.
 resource "aws_cloudwatch_metric_alarm" "ai_quality_collapse" {
   alarm_name          = "${var.ai_quality_collapse_alarm_name_prefix}ai-quality-collapse"
   comparison_operator = "GreaterThanOrEqualToThreshold"
   evaluation_periods  = var.ai_quality_collapse_evaluation_periods
   datapoints_to_alarm = var.ai_quality_collapse_datapoints_to_alarm
   threshold           = 1
-  alarm_description   = "Plan §69: Provider HTTP success = normal (provider_success_ratio >= ${var.ai_quality_collapse_provider_success_min}) BUT Quality Gate pass rate collapses (reject_share > ${1 - var.ai_quality_collapse_pass_rate_floor}) with volume >= ${var.ai_quality_collapse_min_evaluated}."
+  alarm_description   = "Plan §69: Technical generation success ratio >= ${var.ai_quality_collapse_provider_success_min} BUT Quality Gate reject share > ${1 - var.ai_quality_collapse_pass_rate_floor} with evaluated decisions >= ${var.ai_quality_collapse_min_evaluated}."
   alarm_actions       = [aws_sns_topic.p1.arn]
   treat_missing_data  = "notBreaching"
   tags                = local.tags
 
   metric_query {
     id          = "breach"
-    expression  = "IF(AND(IF(succ + fail1 + fail2 + fail3 + fail4 > 0, succ / (succ + fail1 + fail2 + fail3 + fail4), 1) >= ${var.ai_quality_collapse_provider_success_min}, IF(succ > 0, (rej1 + rej2) / succ, 0) > ${1 - var.ai_quality_collapse_pass_rate_floor}, succ >= ${var.ai_quality_collapse_min_evaluated}), 1, 0)"
+    expression  = "IF(AND(IF(tech_success + tech_failure > 0, tech_success / (tech_success + tech_failure), 1) >= ${var.ai_quality_collapse_provider_success_min}, IF(retry + fail + pass > 0, (retry + fail) / (retry + fail + pass), 0) > ${1 - var.ai_quality_collapse_pass_rate_floor}, retry + fail + pass >= ${var.ai_quality_collapse_min_evaluated}), 1, 0)"
     label       = "AI Quality Collapse Breach"
     return_data = true
   }
 
+  # SEARCH, not metric{}: GenerationMetrics publishes these meters with their full
+  # tag set (generation.cost.attempt = provider, model, technical_outcome, quality_outcome,
+  # cost_status; generation.quality = policy_version, decision, reason_code, category), and a
+  # CloudWatch metric query matches the dimension set exactly. A metric{} block naming only one
+  # of those dimensions can never match, so the alarm would never fire.
   metric_query {
-    id          = "succ"
-    return_data = false
-
-    metric {
-      metric_name = "generation.terminal.count"
-      namespace   = var.metric_namespace
-      period      = var.ai_quality_collapse_period_seconds
-      stat        = "Sum"
-
-      dimensions = {
-        category = "COMPLETED"
-      }
-    }
+    id         = "tech_success"
+    expression = "SEARCH('{${var.metric_namespace}} generation.cost.attempt', 'technical_outcome', 'SUCCESS', ${var.ai_quality_collapse_period_seconds})"
   }
 
   metric_query {
-    id          = "fail1"
-    return_data = false
-
-    metric {
-      metric_name = "generation.terminal.count"
-      namespace   = var.metric_namespace
-      period      = var.ai_quality_collapse_period_seconds
-      stat        = "Sum"
-
-      dimensions = {
-        category = "FAILED"
-      }
-    }
+    id         = "tech_failure"
+    expression = "SEARCH('{${var.metric_namespace}} generation.cost.attempt', 'technical_outcome', 'FAILED', ${var.ai_quality_collapse_period_seconds})"
   }
 
   metric_query {
-    id          = "fail2"
-    return_data = false
-
-    metric {
-      metric_name = "generation.terminal.count"
-      namespace   = var.metric_namespace
-      period      = var.ai_quality_collapse_period_seconds
-      stat        = "Sum"
-
-      dimensions = {
-        category = "BUDGET_EXHAUSTED"
-      }
-    }
+    id         = "retry"
+    expression = "SEARCH('{${var.metric_namespace}} generation.quality', 'decision', 'RETRY', ${var.ai_quality_collapse_period_seconds})"
   }
 
   metric_query {
-    id          = "fail3"
-    return_data = false
-
-    metric {
-      metric_name = "generation.terminal.count"
-      namespace   = var.metric_namespace
-      period      = var.ai_quality_collapse_period_seconds
-      stat        = "Sum"
-
-      dimensions = {
-        category = "DEADLINE_EXPIRED"
-      }
-    }
+    id         = "fail"
+    expression = "SEARCH('{${var.metric_namespace}} generation.quality', 'decision', 'FAIL', ${var.ai_quality_collapse_period_seconds})"
   }
 
   metric_query {
-    id          = "fail4"
-    return_data = false
-
-    metric {
-      metric_name = "generation.terminal.count"
-      namespace   = var.metric_namespace
-      period      = var.ai_quality_collapse_period_seconds
-      stat        = "Sum"
-
-      dimensions = {
-        category = "UNKNOWN"
-      }
-    }
-  }
-
-  metric_query {
-    id          = "rej1"
-    return_data = false
-
-    metric {
-      metric_name = "generation.quality.count"
-      namespace   = var.metric_namespace
-      period      = var.ai_quality_collapse_period_seconds
-      stat        = "Sum"
-
-      dimensions = {
-        decision = "RETRY"
-      }
-    }
-  }
-
-  metric_query {
-    id          = "rej2"
-    return_data = false
-
-    metric {
-      metric_name = "generation.quality.count"
-      namespace   = var.metric_namespace
-      period      = var.ai_quality_collapse_period_seconds
-      stat        = "Sum"
-
-      dimensions = {
-        decision = "FAIL"
-      }
-    }
+    id         = "pass"
+    expression = "SEARCH('{${var.metric_namespace}} generation.quality', 'decision', 'PASS', ${var.ai_quality_collapse_period_seconds})"
   }
 }

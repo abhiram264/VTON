@@ -140,7 +140,11 @@ class GenerationCreateConcurrencyTest {
     @TestConfiguration
     static class Configuration {
         @Bean @Primary ExternalTokenVerifier verifier() { return InProcessJwtFixture.verifier(); }
-        @Bean @Primary GenerationMediaStore generationMediaStore() {
+		// RULE: never reuse a production bean name for a test bean. A name collision throws
+		// BeanDefinitionOverrideException at registration and kills the context, and @Primary
+		// does not prevent it. Renamed from generationMediaStore; the product bean is @Primary
+		// and delegates to this stub, so the request path still uses the double.
+        @Bean GenerationMediaStore stubGenerationMediaStore() {
             return new GenerationMediaStore() {
                 @Override public void putBounded(StorageKey dest, InputStream source, long maxBytes, String mediaType) { }
                 @Override public ClaimResult claim(com.aifashionvault.platform.objectstore.GenerationClaimCommand command) { throw new UnsupportedOperationException(); }

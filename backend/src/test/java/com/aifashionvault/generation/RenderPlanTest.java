@@ -31,18 +31,42 @@ class RenderPlanTest {
 	}
 
 	@Test
-	void oneProductPerStepOrdersByCategoryThenVaultId() {
+	void oneProductPerStepKeepsSubmittedOrderAndCarriesRevisions() {
 		RenderPlan plan = RenderPlan.oneProductPerStep(List.of(
-			new RenderPlan.PlannedProduct(SHOE, "shoes", "feet"),
-			new RenderPlan.PlannedProduct(BOTTOM, "bottom", "legs"),
-			new RenderPlan.PlannedProduct(TOP, "top", "torso")));
+			new RenderPlan.PlannedProduct(SHOE, "shoes", "feet", 7, 3),
+			new RenderPlan.PlannedProduct(BOTTOM, "bottom", "legs", 8, 3),
+			new RenderPlan.PlannedProduct(TOP, "top", "torso", 9, 3)));
 
 		assertThat(plan.steps()).extracting(RenderStep::stepIndex).containsExactly(1, 2, 3);
 		assertThat(plan.steps()).extracting(step -> step.items().getFirst().vaultItemId())
-			.containsExactly(BOTTOM, SHOE, TOP);
+			.containsExactly(SHOE, BOTTOM, TOP);
 		assertThat(plan.steps()).extracting(step -> step.items().getFirst().itemOrdinal())
 			.containsOnly(1);
 		assertThat(plan.steps()).allMatch(step -> step.items().size() == 1);
+		assertThat(plan.steps()).extracting(RenderStep::capabilitySnapshot)
+			.containsExactly(
+				"PlannedProduct[assetRevision=7;profileRevision=3]",
+				"PlannedProduct[assetRevision=8;profileRevision=3]",
+				"PlannedProduct[assetRevision=9;profileRevision=3]");
+	}
+
+	@Test
+	void submittedOrderIsNotReSortedByCategoryOrVaultId() {
+		RenderPlan plan = RenderPlan.oneProductPerStep(List.of(
+			new RenderPlan.PlannedProduct(TOP, "top", "torso"),
+			new RenderPlan.PlannedProduct(SHOE, "shoes", "feet"),
+			new RenderPlan.PlannedProduct(BOTTOM, "bottom", "legs")));
+
+		assertThat(plan.steps()).extracting(step -> step.items().getFirst().vaultItemId())
+			.containsExactly(TOP, SHOE, BOTTOM);
+	}
+
+	@Test
+	void productsWithoutRevisionsKeepAnEmptyCapabilitySnapshot() {
+		RenderPlan plan = RenderPlan.oneProductPerStep(List.of(
+			new RenderPlan.PlannedProduct(TOP, "top", "torso")));
+
+		assertThat(plan.steps()).extracting(RenderStep::capabilitySnapshot).containsExactly((String) null);
 	}
 
 	@Test

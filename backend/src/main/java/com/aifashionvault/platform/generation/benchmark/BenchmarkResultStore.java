@@ -23,7 +23,7 @@ public final class BenchmarkResultStore {
 	}
 
 	private static String key(String runId, String caseId) {
-		return runId + "/" + caseId;
+		return runId.length() + ":" + runId + caseId;
 	}
 
 	public boolean isCompleted(String runId, String caseId, String configurationFingerprint) {

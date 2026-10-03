@@ -31,6 +31,7 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 
+import com.aifashionvault.shared.AccountMediaPurge;
 import com.aifashionvault.shared.IdentityMappingId;
 import com.aifashionvault.shared.UserId;
 
@@ -267,8 +268,51 @@ class IdentityProvisioningTest {
 		IdentityResolution.Active active = (IdentityResolution.Active) identityProvisioning.resolve(ISSUER, "already-deleted");
 		identityProvisioning.beginDeletion(active.userId(), DELETED_AT);
 
-		assertThatThrownBy(() -> identityProvisioning.beginDeletion(active.userId(), Instant.parse("2026-04-01T00:00:00Z")))
-			.isInstanceOf(IllegalArgumentException.class);
+		List<UserId> purged = new ArrayList<>();
+		JdbcIdentityProvisioning repeat = new JdbcIdentityProvisioning(
+			dataSource,
+			Clock.systemUTC(),
+			List.<AccountMediaPurge>of(purged::add));
+
+		User second = repeat.beginDeletion(active.userId(), Instant.parse("2026-04-01T00:00:00Z"));
+
+		assertThat(second.id()).isEqualTo(active.userId());
+		assertThat(second.deletedAt()).isEqualTo(DELETED_AT);
+		assertThat(purged).isEmpty();
+		assertThat(jdbc.queryForObject("SELECT deleted_at FROM users WHERE id = ?", Timestamp.class, active.userId().value()))
+			.isEqualTo(Timestamp.from(DELETED_AT));
+		assertThat(jdbc.queryForObject("SELECT updated_at FROM users WHERE id = ?", Timestamp.class, active.userId().value()))
+			.isEqualTo(Timestamp.from(DELETED_AT));
+	}
+
+	@Test
+	void beginDeletionCommitsBarrierBeforeMediaPurge() {
+		IdentityResolution.Active active = (IdentityResolution.Active) identityProvisioning.resolve(ISSUER, "barrier-order");
+		List<Boolean> barrierVisibleDuringPurge = new ArrayList<>();
+		JdbcIdentityProvisioning provisioning = new JdbcIdentityProvisioning(
+			dataSource,
+			Clock.systemUTC(),
+			List.<AccountMediaPurge>of(userId -> barrierVisibleDuringPurge.add(jdbc.queryForObject(
+				"SELECT deleted_at IS NOT NULL FROM users WHERE id = ?", Boolean.class, userId.value()))));
+
+		provisioning.beginDeletion(active.userId(), DELETED_AT);
+
+		assertThat(barrierVisibleDuringPurge).containsExactly(true);
+	}
+
+	@Test
+	void beginDeletionBarrierSurvivesMediaPurgeFailure() {
+		IdentityResolution.Active active = (IdentityResolution.Active) identityProvisioning.resolve(ISSUER, "barrier-survives");
+		JdbcIdentityProvisioning provisioning = new JdbcIdentityProvisioning(
+			dataSource,
+			Clock.systemUTC(),
+			List.<AccountMediaPurge>of(userId -> {
+				throw new IllegalStateException("media purge failed");
+			}));
+
+		assertThatThrownBy(() -> provisioning.beginDeletion(active.userId(), DELETED_AT))
+			.isInstanceOf(IllegalStateException.class);
+
 		assertThat(jdbc.queryForObject("SELECT deleted_at FROM users WHERE id = ?", Timestamp.class, active.userId().value()))
 			.isEqualTo(Timestamp.from(DELETED_AT));
 	}

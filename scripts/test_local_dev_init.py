@@ -39,8 +39,17 @@ SECRETS = {
 COMPAT_COMPOSE = """services:
   postgres:
     image: postgres:18
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql
   localstack:
     image: localstack/localstack-pro:2026.07.2
+    ports:
+      - "127.0.0.1:4566:4566"
+    volumes:
+      - localstack_data:/var/lib/localstack
+      - ./infra/docker/localstack_ready.py:/etc/localstack/init/ready.d/localstack_ready.py:ro
 """
 
 COMPAT_ENV = """LOCALSTACK_AUTH_TOKEN=
@@ -52,6 +61,7 @@ AWS_REGION=us-east-1
 AWS_ACCESS_KEY_ID=test
 AWS_SECRET_ACCESS_KEY=test
 FASHN_API_KEY=
+VTON_IMAGE_API_KEY=
 FIREBASE_PROJECT_ID=
 OTEL_SERVICE_NAME=ai-fashion-vault-api
 S3_AVATAR_BUCKET=ai-fashion-vault-local-avatar-private
@@ -206,6 +216,7 @@ class TestLocalDevInit(IsolatedTempRoot):
                 "AWS_ACCESS_KEY_ID",
                 "AWS_SECRET_ACCESS_KEY",
                 "FASHN_API_KEY",
+                "VTON_IMAGE_API_KEY",
                 "FIREBASE_PROJECT_ID",
                 "OTEL_SERVICE_NAME",
                 "S3_AVATAR_BUCKET",
@@ -224,6 +235,7 @@ class TestLocalDevInit(IsolatedTempRoot):
         self.assertIn("AWS_ACCESS_KEY_ID=test", env_example)
         self.assertIn("AWS_SECRET_ACCESS_KEY=test", env_example)
         self.assertIn("FASHN_API_KEY=\n", env_norm)
+        self.assertIn("VTON_IMAGE_API_KEY=\n", env_norm)
         self.assertIn("FIREBASE_PROJECT_ID=\n", env_norm)
         self.assertIn("OTEL_SERVICE_NAME=ai-fashion-vault-api", env_example)
         self.assertNotIn("REDIS_URL", env_example)
@@ -309,6 +321,33 @@ class TestLocalDevInit(IsolatedTempRoot):
         self.assertEqual((self.root / "compose.yaml").read_bytes(), before_compose)
         self.assertEqual((self.root / ".env.example").read_bytes(), before_env)
         self.assertFalse((self.root / ".env").exists())
+
+    def test_owned_symlinks_fail_closed(self) -> None:
+        outside = self.root / "outside"
+        outside.mkdir()
+        nested = self.root / "nested"
+        nested.mkdir()
+        dangling = self.root / "dangling"
+        dangling.mkdir()
+        try:
+            (nested / "infra").symlink_to(outside, target_is_directory=True)
+            (dangling / ".env.example").symlink_to(self.root / "missing-env")
+        except OSError as exc:
+            self.skipTest(f"symlinks unavailable: {exc}")
+
+        nested_proc = _run_init(nested)
+        self.assertEqual(nested_proc.returncode, 2, nested_proc.stderr)
+        self.assertEqual(_state_lines(nested_proc.stdout), ["COLLISION"])
+        self.assertIn(
+            "infra/docker/localstack_ready.py", _collision_paths(nested_proc.stdout)
+        )
+        self.assertFalse((outside / "docker" / "localstack_ready.py").exists())
+
+        dangling_proc = _run_init(dangling)
+        self.assertEqual(dangling_proc.returncode, 2, dangling_proc.stderr)
+        self.assertEqual(_state_lines(dangling_proc.stdout), ["COLLISION"])
+        self.assertIn(".env.example", _collision_paths(dangling_proc.stdout))
+        self.assertFalse((self.root / "missing-env").exists())
 
     def test_initialized_noop_preserves_compatible_image_tags(self) -> None:
         _write(self.root, "compose.yaml", TAG_COMPOSE)
@@ -409,6 +448,41 @@ class TestLocalDevInit(IsolatedTempRoot):
    localstack:
      image: localstack/localstack-pro:2026.07.2
  """,
+            "privileged": TAG_COMPOSE.replace(
+                "image: postgres:18.5", "image: postgres:18.5\n    privileged: true"
+            ),
+            "host-network": TAG_COMPOSE.replace(
+                "image: postgres:18.5", "image: postgres:18.5\n    network_mode: host"
+            ),
+            "host-pid": TAG_COMPOSE.replace(
+                "image: postgres:18.5", "image: postgres:18.5\n    pid: host"
+            ),
+            "cap-add": TAG_COMPOSE.replace(
+                "image: postgres:18.5", "image: postgres:18.5\n    cap_add:\n      - SYS_ADMIN"
+            ),
+            "host-bind": TAG_COMPOSE.replace(
+                "image: postgres:18.5",
+                "image: postgres:18.5\n    volumes:\n      - /tmp/host:/container",
+            ),
+            "flow-ports": TAG_COMPOSE.replace(
+                "image: postgres:18.5", "image: postgres:18.5\n    ports: [\"0.0.0.0:5432:5432\"]"
+            ),
+            "flow-bind": TAG_COMPOSE.replace(
+                "image: postgres:18.5", "image: postgres:18.5\n    volumes: [\"/:/host:rw\"]"
+            ),
+            "merge-privileged": TAG_COMPOSE.replace(
+                "image: postgres:18.5", "image: postgres:18.5\n    <<: *unsafe"
+            ),
+            "host-ipc": TAG_COMPOSE.replace(
+                "image: postgres:18.5", "image: postgres:18.5\n    ipc: host"
+            ),
+            "alias-port": TAG_COMPOSE.replace(
+                "image: postgres:18.5", "image: postgres:18.5\n    ports: *host"
+            ),
+            "windows-drive-bind": TAG_COMPOSE.replace(
+                "image: postgres:18.5",
+                "image: postgres:18.5\n    volumes:\n      - C:/Users/test/host:/var/lib/postgresql",
+            ),
         }
         for label, body in cases.items():
             with self.subTest(label):

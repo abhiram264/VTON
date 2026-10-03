@@ -8,6 +8,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import run_backend
 
@@ -160,6 +161,21 @@ class RunBackendTests(unittest.TestCase):
         self.assertNotIn("pw-secret", combined)
         self.assertIn("spring-boot:run", combined)
 
+
+    def test_windows_launch_keeps_root_out_of_cmd_arguments(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo&echo-owned"
+            root.mkdir()
+            _write_env(root, SAMPLE)
+            with mock.patch.object(run_backend.os, "name", "nt"), mock.patch.object(
+                run_backend.subprocess, "call", return_value=0
+            ) as call:
+                self.assertEqual(run_backend.main(["--root", str(root)]), 0)
+
+            cmd = call.call_args.args[0]
+            self.assertEqual(cmd[:4], ["cmd.exe", "/d", "/c", "mvnw.cmd"])
+            self.assertNotIn(str(root), cmd)
+            self.assertEqual(call.call_args.kwargs["cwd"], root / "backend")
     def test_service_version_from_backend_pom(self) -> None:
         version = run_backend.backend_artifact_version(REPO)
         self.assertTrue(version)

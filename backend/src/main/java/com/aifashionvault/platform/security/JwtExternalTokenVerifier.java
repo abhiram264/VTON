@@ -11,9 +11,11 @@ import java.security.Signature;
 import java.security.SignatureException;
 import java.security.spec.RSAPublicKeySpec;
 import java.time.Clock;
+import java.time.Duration;
 import java.util.Base64;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 
 import tools.jackson.core.JacksonException;
@@ -21,6 +23,8 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 public final class JwtExternalTokenVerifier implements ExternalTokenVerifier {
+
+	static final long REFRESH_INTERVAL_NANOS = Duration.ofHours(1).toNanos();
 
 	private static final ObjectMapper MAPPER = new ObjectMapper();
 	private static final String RS256 = "RS256";
@@ -30,14 +34,16 @@ public final class JwtExternalTokenVerifier implements ExternalTokenVerifier {
 	private final PublicKey publicKey;
 	private final Supplier<String> jwks;
 	private final Clock clock;
+	private final LongSupplier nanoSource;
 	private volatile Map<String, PublicKey> jwksKeys;
+	private volatile long jwksKeysNanos;
 
 	public JwtExternalTokenVerifier(String projectId, PublicKey publicKey) {
 		this(projectId, publicKey, Clock.systemUTC());
 	}
 
 	public JwtExternalTokenVerifier(String projectId, PublicKey publicKey, Clock clock) {
-		this(projectId, requirePublicKey(publicKey), null, clock);
+		this(projectId, requirePublicKey(publicKey), null, clock, System::nanoTime);
 	}
 
 	public JwtExternalTokenVerifier(String projectId, Supplier<String> jwks) {
@@ -45,10 +51,23 @@ public final class JwtExternalTokenVerifier implements ExternalTokenVerifier {
 	}
 
 	public JwtExternalTokenVerifier(String projectId, Supplier<String> jwks, Clock clock) {
-		this(projectId, null, requireJwks(jwks), clock);
+		this(projectId, null, requireJwks(jwks), clock, System::nanoTime);
 	}
 
-	private JwtExternalTokenVerifier(String projectId, PublicKey publicKey, Supplier<String> jwks, Clock clock) {
+	JwtExternalTokenVerifier(String projectId, Supplier<String> jwks, LongSupplier nanoSource) {
+		this(projectId, null, requireJwks(jwks), Clock.systemUTC(), nanoSource);
+	}
+
+	JwtExternalTokenVerifier(String projectId, Supplier<String> jwks, Clock clock, LongSupplier nanoSource) {
+		this(projectId, null, requireJwks(jwks), clock, nanoSource);
+	}
+
+	private JwtExternalTokenVerifier(
+			String projectId,
+			PublicKey publicKey,
+			Supplier<String> jwks,
+			Clock clock,
+			LongSupplier nanoSource) {
 		if (projectId == null || projectId.isBlank()) {
 			throw new IllegalArgumentException("projectId is required");
 		}
@@ -60,6 +79,7 @@ public final class JwtExternalTokenVerifier implements ExternalTokenVerifier {
 		this.publicKey = publicKey;
 		this.jwks = jwks;
 		this.clock = clock;
+		this.nanoSource = nanoSource != null ? nanoSource : System::nanoTime;
 	}
 
 	@Override
@@ -149,21 +169,16 @@ public final class JwtExternalTokenVerifier implements ExternalTokenVerifier {
 			return publicKey;
 		}
 		try {
+			long now = nanoSource.getAsLong();
 			Map<String, PublicKey> keys = jwksKeys;
-			if (keys == null) {
-				String document = jwks.get();
-				if (document == null || document.isBlank()) {
-					throw fail(TokenVerificationFailure.UNVERIFIABLE);
-				}
-				keys = parseJwks(document);
-				jwksKeys = keys;
+			if (keys == null || now - jwksKeysNanos >= REFRESH_INTERVAL_NANOS) {
+				keys = refreshKeys(false);
 			}
-			if (keys.isEmpty()) {
-				throw fail(TokenVerificationFailure.UNVERIFIABLE);
+			PublicKey found = findKey(keys, kid);
+			if (found == null) {
+				keys = refreshKeys(true);
+				found = findKey(keys, kid);
 			}
-			PublicKey found = kid == null || kid.isBlank()
-				? (keys.size() == 1 ? keys.values().iterator().next() : null)
-				: keys.get(kid);
 			if (found == null) {
 				throw fail(TokenVerificationFailure.UNVERIFIABLE);
 			}
@@ -175,6 +190,27 @@ public final class JwtExternalTokenVerifier implements ExternalTokenVerifier {
 		catch (RuntimeException ex) {
 			throw fail(TokenVerificationFailure.UNVERIFIABLE);
 		}
+	}
+
+	private synchronized Map<String, PublicKey> refreshKeys(boolean force) {
+		long now = nanoSource.getAsLong();
+		if (!force && jwksKeys != null && now - jwksKeysNanos < REFRESH_INTERVAL_NANOS) {
+			return jwksKeys;
+		}
+		String document = force && jwks instanceof JwksSource source ? source.refresh() : jwks.get();
+		if (document == null || document.isBlank()) {
+			throw fail(TokenVerificationFailure.UNVERIFIABLE);
+		}
+		Map<String, PublicKey> keys = parseJwks(document);
+		jwksKeys = keys;
+		jwksKeysNanos = nanoSource.getAsLong();
+		return keys;
+	}
+
+	private static PublicKey findKey(Map<String, PublicKey> keys, String kid) {
+		return kid == null || kid.isBlank()
+			? (keys.size() == 1 ? keys.values().iterator().next() : null)
+			: keys.get(kid);
 	}
 
 	private static Map<String, PublicKey> parseJwks(String document) {
@@ -272,6 +308,10 @@ public final class JwtExternalTokenVerifier implements ExternalTokenVerifier {
 
 	private static TokenVerificationException fail(TokenVerificationFailure failure) {
 		return new TokenVerificationException(failure);
+	}
+
+	interface JwksSource extends Supplier<String> {
+		String refresh();
 	}
 
 	private record ParsedJwt(

@@ -61,8 +61,8 @@ public final class JdbcIdentityProvisioning implements IdentityProvisioning {
 		}
 		this.jdbc = new JdbcTemplate(dataSource);
 		this.transactions = new TransactionTemplate(new DataSourceTransactionManager(dataSource));
+		this.mediaPurges = mediaPurges;
 		this.clock = clock;
-		this.mediaPurges = List.copyOf(mediaPurges);
 	}
 
 	@Override
@@ -103,15 +103,27 @@ public final class JdbcIdentityProvisioning implements IdentityProvisioning {
 		if (user == null) {
 			throw new IllegalArgumentException("user is required");
 		}
-		for (AccountMediaPurge mediaPurge : mediaPurges) {
-			mediaPurge.purgeForUser(userId);
+		if (user.deletedAt() != null) {
+			return user;
 		}
 		User deleted = UserDeletion.markDeleted(user, deletedAt);
-		jdbc.update(
-			"UPDATE users SET deleted_at = ?, updated_at = ? WHERE id = ?",
+		// Barrier first, committed in its own transaction. Everything that
+		// gates new work reads the account's deleted_at, so it must be durable
+		// before any irreversible AccountMediaPurge runs: a purge failure or
+		// process death must never leave media destroyed while the account
+		// still looks active. Conditional on `deleted_at IS NULL` so concurrent
+		// deleters converge on one winner; a loser purges nothing.
+		Integer established = transactions.execute(status -> jdbc.update(
+			"UPDATE users SET deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL",
 			Timestamp.from(deleted.deletedAt()),
 			Timestamp.from(deleted.updatedAt()),
-			deleted.id().value());
+			deleted.id().value()));
+		if (established == null || established == 0) {
+			return loadUser(userId);
+		}
+		for (AccountMediaPurge purge : this.mediaPurges) {
+			purge.purgeForUser(userId);
+		}
 		return deleted;
 	}
 

@@ -38,6 +38,7 @@ output "p1_alarm_names" {
     aws_cloudwatch_metric_alarm.push_failures.alarm_name,
     aws_cloudwatch_metric_alarm.generation_cost_hourly.alarm_name,
     aws_cloudwatch_metric_alarm.provider_credits_low.alarm_name,
+    aws_cloudwatch_metric_alarm.ai_quality_collapse.alarm_name,
   ]
 }
 

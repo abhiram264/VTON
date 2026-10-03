@@ -230,7 +230,7 @@ class FirstVerticalSliceIntegrationTest {
 
 	private static VaultEnvironmentProperties queueProperties() {
 		return new VaultEnvironmentProperties(AppEnv.development, null, null,
-			new VaultEnvironmentProperties.Sqs("https://sqs.invalid/generation"), null, null, null, null);
+			new VaultEnvironmentProperties.Sqs("https://sqs.invalid/generation"), null, null, null, null, null);
 	}
 
 	private record Owner(String token, UUID userId) {}
@@ -239,11 +239,14 @@ class FirstVerticalSliceIntegrationTest {
 	static class Fakes {
 		@Bean @Primary ExternalTokenVerifier verifier() { return InProcessJwtFixture.verifier(); }
 		@Bean @Primary ObjectStore objects() { return mock(ObjectStore.class); }
-		@Bean @Primary GenerationMediaStore generationMediaStore() {
+		// RULE: never reuse a production bean name for a test bean. A name collision throws
+		// BeanDefinitionOverrideException at registration and kills the context, and @Primary
+		// does not prevent it. Renamed from generationMediaStore; the product bean is @Primary
+		// and delegates to this stub, so the request path still uses the double.
+		@Bean GenerationMediaStore stubGenerationMediaStore() {
 			GenerationMediaStore mediaStore = mock(GenerationMediaStore.class);
 			when(mediaStore.claimProductInput(any())).thenReturn(new ClaimResult.Copied());
 			return mediaStore;
 		}
-		@Bean JdbcLookStore jdbcLookStore(DataSource dataSource) { return new JdbcLookStore(dataSource); }
 	}
 }

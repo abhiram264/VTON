@@ -4,11 +4,14 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.security.KeyPair;
+import java.security.KeyPairGenerator;
 import java.sql.Timestamp;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.Base64;
 import java.util.List;
 import java.util.TimeZone;
 import java.util.UUID;
@@ -53,6 +56,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 	"management.tracing.enabled=false",
 	"vault.notification.project-id=test-project",
 	"vault.notification.access-token=test-token",
+	// A pasted static token is refused by default (C20); this local test opts in
+	// explicitly, which is exactly the posture a dev run must take.
+	"vault.notification.allow-static-access-token=true",
 	// Keep the autonomous delivery tick out of other focused test contexts' way.
 	"vault.notification.poll-delay=PT1S" })
 @Import(NotificationConfigurationTest.DeliveryBeans.class)
@@ -187,6 +193,74 @@ class NotificationConfigurationTest {
 			});
 	}
 
+	/**
+	 * C20 credential lifecycle: a pasted short-lived access token must never be the
+	 * production credential. With project-id and access-token configured but no explicit
+	 * opt-in, no FcmClient exists at all — the delivery path stays absent rather than
+	 * authenticating with a pasted value.
+	 */
+	@Test
+	void aStaticAccessTokenIsRefusedUnlessExplicitlyAllowed() {
+		new ApplicationContextRunner()
+			.withUserConfiguration(NotificationConfiguration.class, NotificationDeliveryConfiguration.Registrar.class)
+			.withPropertyValues(
+				"vault.notification.project-id=test-project",
+				"vault.notification.access-token=pasted-short-lived-token")
+			.run(context -> {
+				assertThat(context).hasNotFailed();
+				assertThat(context.getBeansOfType(FcmClient.class)).isEmpty();
+				assertThat(context.getBeansOfType(FcmDeliveryWorker.class)).isEmpty();
+			});
+	}
+
+	@Test
+	void aStaticAccessTokenIsAcceptedWhenExplicitlyAllowedForLocalRuns() {
+		new ApplicationContextRunner()
+			.withUserConfiguration(NotificationConfiguration.class, NotificationDeliveryConfiguration.Registrar.class)
+			.withPropertyValues(
+				"vault.notification.project-id=test-project",
+				"vault.notification.access-token=local-dev-token",
+				"vault.notification.allow-static-access-token=true")
+			.run(context -> {
+				assertThat(context).hasNotFailed();
+				assertThat(context.getBeansOfType(FcmClient.class)).hasSize(1);
+			});
+	}
+
+	/**
+	 * The durable path: a service-account credential builds the client without any
+	 * pasted token, so the minted value is refreshed rather than configured.
+	 */
+	@Test
+	void aServiceAccountCredentialBuildsTheClientWithoutAPastedToken() {
+		String serviceAccountJson;
+		try {
+			KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA");
+			generator.initialize(2048);
+			KeyPair pair = generator.generateKeyPair();
+			String pem = "-----BEGIN PRIVATE KEY-----\n"
+				+ Base64.getMimeEncoder(64, "\n".getBytes(StandardCharsets.UTF_8))
+					.encodeToString(pair.getPrivate().getEncoded())
+				+ "\n-----END PRIVATE KEY-----\n";
+			serviceAccountJson = "{\"client_email\":\"vault@test-project.iam.gserviceaccount.com\","
+				+ "\"token_uri\":\"http://127.0.0.1:1/token\",\"private_key\":\""
+				+ pem.replace("\n", "\\n") + "\"}";
+		}
+		catch (java.security.GeneralSecurityException ex) {
+			throw new IllegalStateException(ex);
+		}
+
+		new ApplicationContextRunner()
+			.withUserConfiguration(NotificationConfiguration.class, NotificationDeliveryConfiguration.Registrar.class)
+			.withPropertyValues(
+				"vault.notification.project-id=test-project",
+				"vault.notification.service-account-json=" + serviceAccountJson)
+			.run(context -> {
+				assertThat(context).hasNotFailed();
+				assertThat(context.getBeansOfType(FcmClient.class)).hasSize(1);
+			});
+	}
+
 	private void seedLookReady() {
 		UserId userId = insertUser();
 		GenerationJobId generationId = insertJob(userId);
@@ -208,9 +282,9 @@ class NotificationConfigurationTest {
 	}
 
 	private DeviceDelivery waitForSingleDeliveryRow() {
-		List<DeviceDelivery> deliveries = deliveryRows();
 		waitUntil("exactly one persisted delivery row", WAIT_TIMEOUT,
 			() -> deliveryRows().size() == 1);
+		List<DeviceDelivery> deliveries = deliveryRows();
 		assertThat(deliveries).hasSize(1);
 		return deliveries.getFirst();
 	}

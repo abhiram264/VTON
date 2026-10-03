@@ -39,6 +39,10 @@
 			<artifactId>spring-boot-starter-actuator</artifactId>
 		</dependency>
 		<dependency>
+			<groupId>io.micrometer</groupId>
+			<artifactId>micrometer-registry-cloudwatch2</artifactId>
+		</dependency>
+		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-security</artifactId>
 		</dependency>
@@ -165,6 +169,18 @@
 
 	<build>
 		<plugins>
+			<plugin>
+				<artifactId>maven-surefire-plugin</artifactId>
+				<configuration>
+					<!-- Testcontainers' postgres:18 rejects the Windows default zone
+					     alias (Asia/Calcutta): the JDBC driver passes the JVM default
+					     as the startup TimeZone parameter and the server answers
+					     FATAL 22023, so every Testcontainers test dies at Flyway
+					     connect. Pin the test fork to UTC so the suite does not
+					     depend on the developer machine's time zone. -->
+					<argLine>-Duser.timezone=UTC</argLine>
+				</configuration>
+			</plugin>
 			<plugin>
 				<groupId>org.springframework.boot</groupId>
 				<artifactId>spring-boot-maven-plugin</artifactId>

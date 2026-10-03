@@ -15,7 +15,8 @@ import software.amazon.awssdk.services.s3.model.S3Exception;
  * generic {@link GenerationMediaStore#putBounded} writes without an import
  * ownership marker and only into generation key shapes, so the importer keeps
  * this dedicated adapter: If-None-Match create, claim metadata recording the
- * owning import attempt, and a losing create deletes its partial object.
+ * owning import attempt. S3 PUT is atomic, so ambiguous failures are never
+ * followed by deletion.
  */
 public final class ImportObjectWriter {
 
@@ -34,16 +35,16 @@ public final class ImportObjectWriter {
 
 	/**
 	 * Conditionally creates the object. Returns false when an object already
-	 * exists at the key. On any non-precondition failure the partial object is
-	 * deleted best-effort before the failure propagates.
+	 * exists at the key. Other failures surface as a typed unavailable error
+	 * without deleting the key because the request outcome may be ambiguous.
 	 */
 	public boolean putIfAbsent(ObjectRef destination, InputStream content, long contentLength, String claimMarker,
 			String contentType) {
 		if (destination == null || content == null) {
 			throw new IllegalArgumentException("destination and content are required");
 		}
-		if (contentLength < 0) {
-			throw new IllegalArgumentException("contentLength must not be negative");
+		if (contentLength < ImageMediaPolicy.MIN_BYTES || contentLength > ImageMediaPolicy.MAX_BYTES) {
+			throw new IllegalArgumentException("contentLength is out of range");
 		}
 		if (claimMarker == null || claimMarker.isBlank()) {
 			throw new IllegalArgumentException("claimMarker is required");
@@ -52,7 +53,7 @@ public final class ImportObjectWriter {
 			throw new IllegalArgumentException("contentType is required");
 		}
 		requireS3();
-		byte[] payload = readAll(content);
+		byte[] payload = readAll(content, contentLength);
 		PutObjectRequest put = PutObjectRequest.builder()
 			.bucket(store.bucket(destination.boundary()))
 			.key(destination.objectKey())
@@ -69,13 +70,11 @@ public final class ImportObjectWriter {
 			if (isPreconditionFailed(ex)) {
 				return false;
 			}
-			deleteQuietly(destination);
 			// Service-side S3 failure (e.g. transient 5xx) must surface as the
 			// typed store-unavailable failure callers already handle, never raw.
 			throw new ObjectStoreExceptions.ObjectStoreUnavailableException("object store is unavailable");
 		}
 		catch (SdkClientException ex) {
-			deleteQuietly(destination);
 			throw new ObjectStoreExceptions.ObjectStoreUnavailableException("object store is unavailable");
 		}
 	}
@@ -86,29 +85,29 @@ public final class ImportObjectWriter {
 		}
 	}
 
-	private static byte[] readAll(InputStream content) {
-		ByteArrayOutputStream out = new ByteArrayOutputStream();
+	private static byte[] readAll(InputStream content, long expectedLength) {
+		ByteArrayOutputStream out = new ByteArrayOutputStream((int) expectedLength);
 		byte[] buffer = new byte[8192];
+		long total = 0L;
 		try (content) {
 			int read;
 			while ((read = content.read(buffer)) != -1) {
+				total += read;
+				if (total > expectedLength) {
+					throw new IllegalArgumentException("content length mismatch");
+				}
 				out.write(buffer, 0, read);
 			}
 		}
 		catch (IOException ex) {
 			throw new ObjectStoreExceptions.ObjectStoreUnavailableException("failed reading fetched content");
 		}
+		if (total != expectedLength) {
+			throw new IllegalArgumentException("content length mismatch");
+		}
 		return out.toByteArray();
 	}
 
-	private void deleteQuietly(ObjectRef destination) {
-		try {
-			store.delete(destination);
-		}
-		catch (RuntimeException ignored) {
-			// best-effort partial cleanup
-		}
-	}
 
 	private static boolean isPreconditionFailed(software.amazon.awssdk.core.exception.SdkServiceException ex) {
 		if (ex.statusCode() == 412 || ex.statusCode() == 409) {

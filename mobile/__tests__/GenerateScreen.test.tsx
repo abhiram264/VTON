@@ -6,6 +6,13 @@ import {
   waitFor,
 } from '@testing-library/react-native';
 import GenerateScreen from '../src/screens/GenerateScreen';
+
+jest.mock('../src/config/apiConfig', () => ({
+  productionApiConfig: {
+    baseUrl: 'https://api.test',
+    getAccessToken: () => 'test-token',
+  },
+}));
 import {
   ACTION_CHOOSE_ANOTHER_PHOTO,
   ACTION_TRY_AGAIN,
@@ -16,6 +23,7 @@ import {
 } from '../src/features/generation/failureContract';
 import type { LocalPhoto } from '../src/features/my-model/types';
 import type { VaultItemSummary } from '../src/features/vault/vaultApi';
+import { clearActiveGeneration } from '../src/features/generation/activeGeneration';
 
 const PNG_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47]).buffer;
 const PHOTO_A: LocalPhoto = { uri: 'file:///product-a.png' };
@@ -72,6 +80,7 @@ function mockGenerationFetch(options: {
   createResponse?: () => Promise<Response>;
   uploadResponse?: () => Promise<Response>;
   lookResponse?: () => Promise<Response>;
+  listResponse?: () => Promise<Response>;
 }) {
   return (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = requestUrl(input);
@@ -79,6 +88,12 @@ function mockGenerationFetch(options: {
 
     if (url.startsWith('file:///')) {
       return bytesResponse(PNG_BYTES, 'image/png');
+    }
+    if (url.endsWith('/generations') && method === 'GET') {
+      if (options.listResponse) {
+        return options.listResponse();
+      }
+      return jsonResponse(200, []);
     }
     if (url.includes('/uploads') && method === 'POST') {
       if (url.includes('/complete')) {
@@ -147,6 +162,7 @@ describe('GenerateScreen', () => {
   beforeEach(() => {
     fetchMock.mockReset();
     globalThis.fetch = fetchMock as typeof fetch;
+    clearActiveGeneration();
   });
 
   test('quality failure shows exact copy, live region, and action buttons without generic notice or sensitive leaks', async () => {
@@ -191,6 +207,68 @@ describe('GenerateScreen', () => {
     expect(screen.queryByText('QUALITY_REJECTED')).toBeNull();
     expect(screen.queryByText(/https?:\/\//)).toBeNull();
     expect(screen.queryByText(/product-a\.png/)).toBeNull();
+  });
+
+  test('announces generation phase labels politely while polling', async () => {
+    const picker = jest.fn().mockResolvedValue(PHOTO_A);
+    let polls = 0;
+    fetchMock.mockImplementation(
+      mockGenerationFetch({
+        pollResponse: () => {
+          polls += 1;
+          return polls === 1
+            ? jsonResponse(200, {
+                id: 'gen-1',
+                status: 'GENERATING',
+                phase: 'GENERATING',
+                statusVersion: 1,
+                createdAt: '2026-08-23T12:00:00Z',
+                updatedAt: '2026-08-23T12:00:00Z',
+              })
+            : jsonResponse(200, {
+                id: 'gen-1',
+                status: 'COMPLETED',
+                phase: 'READY',
+                lookId: 'look-1',
+                statusVersion: 2,
+                createdAt: '2026-08-23T12:00:00Z',
+                updatedAt: '2026-08-23T12:00:00Z',
+              });
+        },
+      }),
+    );
+
+    await render(<GenerateScreen picker={picker} />);
+    await act(async () => {
+      fireEvent.press(
+        screen.getByRole('button', { name: 'Choose product photo' }),
+      );
+    });
+
+    const phase = await screen.findByText('Generating');
+    expect(phase.props.accessibilityLiveRegion).toBe('polite');
+  });
+
+  test('non-retryable create outcome blocks a second paid attempt', async () => {
+    const picker = jest.fn().mockResolvedValue(PHOTO_A);
+    fetchMock.mockImplementation(
+      mockGenerationFetch({
+        createResponse: () => jsonResponse(409, { code: 'CREATE_OUTCOME_UNKNOWN' }),
+      }),
+    );
+
+    await render(<GenerateScreen picker={picker} />);
+    await act(async () => {
+      fireEvent.press(
+        screen.getByRole('button', { name: 'Choose product photo' }),
+      );
+    });
+
+    expect(
+      await screen.findByText('We could not confirm whether this Look was created.'),
+    ).toBeTruthy();
+    expect(screen.queryByRole('button', { name: ACTION_TRY_AGAIN })).toBeNull();
+    expect(screen.queryByText(OUTAGE_TITLE)).toBeNull();
   });
 
   test('quality Try Again reuses retained photo, skips picker, and executes fresh upload/create', async () => {
@@ -458,7 +536,7 @@ describe('GenerateScreen', () => {
     expect(screen.queryByText(/https?:\/\//)).toBeNull();
   });
 
-  test('create-time ADMISSION_PAUSED 503 produces generic notice without outage or Vault persist', async () => {
+  test('create-time ADMISSION_PAUSED 503 shows generic notice without outage or Vault persist', async () => {
     const picker = jest.fn().mockResolvedValue(PHOTO_A);
     const vaultSave = jest.fn().mockResolvedValue({
       id: 'vault-1',
@@ -488,6 +566,7 @@ describe('GenerateScreen', () => {
     );
     expect(notice).toBeTruthy();
     expect(notice.props.accessibilityLiveRegion).toBe('polite');
+    expect(screen.queryByRole('button', { name: ACTION_TRY_AGAIN })).toBeNull();
     expect(screen.queryByText(OUTAGE_TITLE)).toBeNull();
     expect(screen.queryByText(OUTAGE_BODY)).toBeNull();
     expect(vaultSave).not.toHaveBeenCalled();
@@ -495,7 +574,7 @@ describe('GenerateScreen', () => {
     expect(screen.queryByText(/product-a\.png/)).toBeNull();
   });
 
-  test('uncoded network failure during generation triggers outage flow with Vault persist', async () => {
+  test('uncoded create-phase network failure blocks retry and does not persist to Vault', async () => {
     const picker = jest.fn().mockResolvedValue(PHOTO_A);
     const vaultSave = jest.fn().mockResolvedValue({
       id: 'vault-1',
@@ -540,12 +619,12 @@ describe('GenerateScreen', () => {
       );
     });
 
-    expect(await screen.findByText(OUTAGE_TITLE)).toBeTruthy();
-    expect(screen.getByText(OUTAGE_BODY)).toBeTruthy();
-    expect(vaultSave).toHaveBeenCalledWith(PHOTO_A);
     expect(
-      screen.queryByText('Could not create the look. Try again.'),
-    ).toBeNull();
+      await screen.findByText('We could not confirm whether this Look was created.'),
+    ).toBeTruthy();
+    expect(screen.queryByRole('button', { name: ACTION_TRY_AGAIN })).toBeNull();
+    expect(screen.queryByText(OUTAGE_TITLE)).toBeNull();
+    expect(vaultSave).not.toHaveBeenCalled();
   });
 
   test.each(PROVIDER_OUTAGE_TRIGGER_CODES)(
@@ -741,7 +820,7 @@ describe('GenerateScreen', () => {
     expect(screen.queryByText(OUTAGE_TITLE)).toBeNull();
     expect(screen.queryByText('UNKNOWN_ERROR')).toBeNull();
   });
-  test('malformed generation response produces generic notice and no outage title or Vault save', async () => {
+  test('malformed generation response shows generic notice without outage or Vault persist', async () => {
     const picker = jest.fn().mockResolvedValue(PHOTO_A);
     const vaultSave = jest.fn();
 
@@ -769,8 +848,217 @@ describe('GenerateScreen', () => {
     );
     expect(notice).toBeTruthy();
     expect(notice.props.accessibilityLiveRegion).toBe('polite');
+    expect(screen.queryByRole('button', { name: ACTION_TRY_AGAIN })).toBeNull();
     expect(screen.queryByText(OUTAGE_TITLE)).toBeNull();
     expect(screen.queryByText(OUTAGE_BODY)).toBeNull();
     expect(vaultSave).not.toHaveBeenCalled();
+  });
+
+  test('an in-flight generation found on the server is resumed instead of starting a second one', async () => {
+    const picker = jest.fn();
+    const onCreateLook = jest.fn();
+    let listCalls = 0;
+
+    fetchMock.mockImplementation((input, init) => {
+      const url = requestUrl(input);
+      const method = (init?.method ?? 'GET').toUpperCase();
+      if (url.endsWith('/generations') && method === 'GET') {
+        listCalls += 1;
+        return jsonResponse(200, [
+          {
+            id: 'gen-1',
+            status: 'GENERATING',
+            phase: 'GENERATING',
+            statusVersion: 2,
+            createdAt: '2026-08-23T12:00:00Z',
+            updatedAt: '2026-08-23T12:01:00Z',
+          },
+        ]);
+      }
+      if (url.includes('/generations/gen-1') && method === 'GET') {
+        return jsonResponse(200, {
+          id: 'gen-1',
+          status: 'COMPLETED',
+          phase: 'READY',
+          lookId: 'look-1',
+          statusVersion: 3,
+          createdAt: '2026-08-23T12:00:00Z',
+          updatedAt: '2026-08-23T12:02:00Z',
+        });
+      }
+      throw new Error(`unexpected fetch ${method} ${url}`);
+    });
+
+    await render(<GenerateScreen picker={picker} onCreateLook={onCreateLook} />);
+
+    await waitFor(() => expect(onCreateLook).toHaveBeenCalledWith('look-1'));
+    expect(listCalls).toBe(1);
+    // The whole point: recovery resumed the accepted job and never re-created
+    // it (no POST /generations) and never asked for another photo.
+    const methods = fetchMock.mock.calls.map(
+      ([input, init]) =>
+        `${(init?.method ?? 'GET').toUpperCase()} ${requestUrl(input)}`,
+    );
+    expect(methods).toEqual([
+      'GET https://api.test/generations',
+      'GET https://api.test/generations/gen-1',
+    ]);
+    expect(picker).not.toHaveBeenCalled();
+  });
+
+  test('an empty server list leaves the normal choose-a-photo flow usable', async () => {
+    const picker = jest.fn().mockResolvedValue(PHOTO_A);
+
+    fetchMock.mockImplementation(mockGenerationFetch({}));
+
+    await render(<GenerateScreen picker={picker} />);
+    await act(async () => {
+      fireEvent.press(
+        screen.getByRole('button', { name: 'Choose product photo' }),
+      );
+    });
+
+    await waitFor(() =>
+      expect(picker).toHaveBeenCalledTimes(1),
+    );
+  });
+
+  test('quality retry discloses that it starts a new chargeable request', async () => {
+    const picker = jest.fn().mockResolvedValue(PHOTO_A);
+    fetchMock.mockImplementation(
+      mockGenerationFetch({
+        pollResponse: () =>
+          jsonResponse(200, {
+            id: 'gen-1',
+            status: 'FAILED',
+            phase: 'FAILED',
+            failureCode: 'QUALITY_REJECTED',
+            statusVersion: 1,
+            createdAt: '2026-08-23T12:00:00Z',
+            updatedAt: '2026-08-23T12:00:00Z',
+          }),
+      }),
+    );
+
+    await render(<GenerateScreen picker={picker} />);
+    await act(async () => {
+      fireEvent.press(
+        screen.getByRole('button', { name: 'Choose product photo' }),
+      );
+    });
+
+    expect(await screen.findByText(QUALITY_FAILURE_BODY)).toBeTruthy();
+    expect(
+      screen.getByText(
+        'Trying again starts a new try-on request. It may use another generation credit.',
+      ),
+    ).toBeTruthy();
+  });
+
+  test('an outage that saved the item offers a try-on retry that starts a new request and discloses it', async () => {
+    const picker = jest.fn().mockResolvedValue(PHOTO_A);
+    const vaultSave = jest.fn().mockResolvedValue({ id: 'v-1' } as VaultItemSummary);
+    let generationCreates = 0;
+    const base = mockGenerationFetch({
+      pollResponse: () =>
+        jsonResponse(200, {
+          id: 'gen-1',
+          status: 'FAILED',
+          phase: 'FAILED',
+          failureCode: 'PROVIDER_UNAVAILABLE',
+          statusVersion: 1,
+          createdAt: '2026-08-23T12:00:00Z',
+          updatedAt: '2026-08-23T12:00:00Z',
+        }),
+    });
+    fetchMock.mockImplementation((input, init) => {
+      if (
+        requestUrl(input).endsWith('/generations') &&
+        (init?.method ?? 'GET').toUpperCase() === 'POST'
+      ) {
+        generationCreates += 1;
+      }
+      return base(input, init);
+    });
+
+    await render(
+      <GenerateScreen
+        picker={picker}
+        vault={{ createFromPhoto: vaultSave } as unknown as typeof import('../src/features/vault/vaultApi').vaultApi}
+      />,
+    );
+    await act(async () => {
+      fireEvent.press(
+        screen.getByRole('button', { name: 'Choose product photo' }),
+      );
+    });
+
+    expect(await screen.findByText(OUTAGE_BODY)).toBeTruthy();
+    expect(generationCreates).toBe(1);
+    expect(
+      screen.getByText(
+        'Trying again starts a new try-on request. It may use another generation credit.',
+      ),
+    ).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.press(screen.getByRole('button', { name: 'Try-on again' }));
+    });
+
+    // The retained outfit was reused and a NEW request was created, which is
+    // exactly what the disclosure above told the user.
+    await waitFor(() => expect(generationCreates).toBe(2));
+    expect(picker).toHaveBeenCalledTimes(1);
+  });
+
+  test('the vault-save retry discloses that it starts no new try-on request', async () => {
+    const picker = jest.fn().mockResolvedValue(PHOTO_A);
+    const vaultSave = jest
+      .fn()
+      .mockRejectedValue(new Error('Vault storage unavailable'));
+
+    fetchMock.mockImplementation(
+      mockGenerationFetch({
+        pollResponse: () =>
+          jsonResponse(200, {
+            id: 'gen-1',
+            status: 'FAILED',
+            phase: 'FAILED',
+            failureCode: 'PROVIDER_UNAVAILABLE',
+            statusVersion: 1,
+            createdAt: '2026-08-23T12:00:00Z',
+            updatedAt: '2026-08-23T12:00:00Z',
+          }),
+      }),
+    );
+
+    await render(
+      <GenerateScreen
+        picker={picker}
+        vault={{ createFromPhoto: vaultSave } as unknown as typeof import('../src/features/vault/vaultApi').vaultApi}
+      />,
+    );
+    await act(async () => {
+      fireEvent.press(
+        screen.getByRole('button', { name: 'Choose product photo' }),
+      );
+    });
+
+    expect(
+      await screen.findByText('We could not save this item to the Vault. Try again.'),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        'Retrying saves the same photo to your Vault. It does not start a new try-on request.',
+      ),
+    ).toBeTruthy();
+  });
+
+  test('the screen title is exposed as an accessible header', async () => {
+    await render(<GenerateScreen />);
+
+    // A screen reader announces this as a heading, so the user can jump to it
+    // instead of hearing an unlabelled run of text.
+    expect(await screen.findByRole('header', { name: 'Create a Look' })).toBeTruthy();
   });
 });

@@ -44,6 +44,7 @@ ENV_NAMES = frozenset(
         "AWS_ACCESS_KEY_ID",
         "AWS_SECRET_ACCESS_KEY",
         "FASHN_API_KEY",
+        "VTON_IMAGE_API_KEY",
         "FIREBASE_PROJECT_ID",
         "OTEL_SERVICE_NAME",
         "S3_AVATAR_BUCKET",
@@ -62,6 +63,14 @@ READY_NAMES = (
 )
 READY_FORBIDDEN = ("fifo",)
 POSTGRES_MAJOR_18 = re.compile(r"^18([.-].*)?$")
+NAMED_VOLUME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+LOCALSTACK_READY_MOUNT = (
+    "./infra/docker/localstack_ready.py:/etc/localstack/init/ready.d/localstack_ready.py:ro"
+)
+SERVICE_DATA_MOUNTS = {
+    "postgres": "/var/lib/postgresql",
+    "localstack": "/var/lib/localstack",
+}
 
 
 def _unquote(value: str) -> str:
@@ -120,6 +129,29 @@ def _localstack_pro(image: str) -> bool:
     )
 
 
+def _allowed_volume(service: str, item: str) -> bool:
+    value = _unquote(item)
+    if value == LOCALSTACK_READY_MOUNT:
+        return service == "localstack"
+    parts = value.split(":")
+    if re.match(r"^(?:[A-Za-z]:[\\/]|\\\\)", value):
+        return False
+    return (
+        len(parts) in (2, 3)
+        and NAMED_VOLUME.fullmatch(parts[0]) is not None
+        and parts[1] == SERVICE_DATA_MOUNTS[service]
+    )
+
+
+def _owned_path(root: Path, rel: str) -> Path:
+    path = root
+    for part in Path(rel).parts:
+        path /= part
+        if path.is_symlink():
+            raise OSError(f"Refusing symlink in owned path: {path}")
+    return path
+
+
 def _scan_services(text: str) -> dict[str, dict] | None:
     in_services = False
     saw_services = False
@@ -151,7 +183,15 @@ def _scan_services(text: str) -> dict[str, dict] | None:
             key = content.split(":", 1)[0].strip()
             service_indent = indent
             current = key
-            services[current] = {"image": None, "ports": []}
+            services[current] = {
+                "image": None,
+                "ports": [],
+                "volumes": [],
+                "privileged": False,
+                "network_mode": None,
+                "pid": None,
+                "cap_add": False,
+            }
             body_indent = None
             section = None
             continue
@@ -161,8 +201,16 @@ def _scan_services(text: str) -> dict[str, dict] | None:
                 continue
             key = content.split(":", 1)[0].strip()
             current = key
-            services[current] = {"image": None, "ports": []}
             body_indent = None
+            services[current] = {
+                "image": None,
+                "ports": [],
+                "volumes": [],
+                "privileged": False,
+                "network_mode": None,
+                "pid": None,
+                "cap_add": False,
+            }
             section = None
             continue
 
@@ -173,6 +221,8 @@ def _scan_services(text: str) -> dict[str, dict] | None:
             item = content[2:].strip()
             if section == "ports":
                 services[current]["ports"].append(item)
+            if section == "volumes":
+                services[current]["volumes"].append(item)
             continue
 
         if ":" not in content:
@@ -187,6 +237,17 @@ def _scan_services(text: str) -> dict[str, dict] | None:
             section = key
             if key == "image" and rest:
                 services[current]["image"] = _unquote(rest)
+            elif key == "privileged":
+                services[current]["privileged"] = _unquote(rest).lower() in {
+                    "1",
+                    "on",
+                    "true",
+                    "yes",
+                }
+            elif key == "cap_add":
+                services[current]["cap_add"] = True
+            elif key in {"network_mode", "pid"}:
+                services[current][key] = _unquote(rest)
 
     if not saw_services:
         return None
@@ -196,10 +257,35 @@ def _scan_services(text: str) -> dict[str, dict] | None:
 def _compose_collides(text: str) -> bool:
     if "docker.sock" in text:
         return True
+    lowered = text.lower()
+    if re.search(r"(?m)^\s*privileged\s*:\s*(?:true|yes|on|1)\s*(?:#.*)?$", lowered):
+        return True
+    if re.search(r"(?m)^\s*(?:network_mode|pid|ipc|uts|cgroup)\s*:\s*['\"]?host['\"]?\s*(?:#.*)?$", lowered):
+        return True
+    if re.search(r"(?m)^\s*cap_add\s*:", lowered):
+        return True
+    if re.search(r"(?m)^\s*(?:ports|volumes)\s*:\s*\[", lowered):
+        return True
+    if re.search(r"(?m)^\s*<<\s*:", lowered):
+        return True
+    if re.search(r"(?m)(?:^|\s)[&*][A-Za-z0-9_-]+", text):
+        return True
     services = _scan_services(text)
     if services is None:
         return True
     if set(services) != ALLOWED_SERVICES:
+        return True
+    if any(
+        service["privileged"]
+        or service["network_mode"] == "host"
+        or service["pid"] == "host"
+        or service["cap_add"]
+        or any(
+            not _allowed_volume(name, str(item))
+            for item in service["volumes"]
+        )
+        for name, service in services.items()
+    ):
         return True
     postgres = services.get("postgres")
     if postgres is not None:
@@ -267,7 +353,11 @@ def _classify(root: Path) -> tuple[str, list[str]]:
     collisions: list[str] = []
     present: list[str] = []
     for rel in OWNED:
-        path = root / rel
+        try:
+            path = _owned_path(root, rel)
+        except OSError:
+            collisions.append(rel)
+            continue
         if not path.exists():
             continue
         present.append(rel)
@@ -286,7 +376,7 @@ def _copy_owned(root: Path, rel: str) -> None:
     src = SCRIPT_HOME / rel
     if not src.is_file():
         raise FileNotFoundError(f"Required template missing: {src}")
-    dest = root / rel
+    dest = _owned_path(root, rel)
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_bytes(src.read_bytes())
 
@@ -322,7 +412,7 @@ def main(argv: list[str] | None = None) -> int:
             _write_missing(root)
         elif state == STATE_PARTIAL:
             _write_missing(root)
-    except FileNotFoundError as exc:
+    except (FileNotFoundError, OSError) as exc:
         print(str(exc), file=sys.stderr)
         return 1
 

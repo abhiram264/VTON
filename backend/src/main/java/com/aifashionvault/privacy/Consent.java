@@ -21,5 +21,8 @@ public record Consent(ConsentId id, UserId userId, String purpose, String versio
 		if (grantedAt == null) {
 			throw new IllegalArgumentException("grantedAt is required");
 		}
+		if (revokedAt != null && revokedAt.isBefore(grantedAt)) {
+			throw new IllegalArgumentException("revokedAt must not precede grantedAt");
+		}
 	}
 }

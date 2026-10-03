@@ -63,7 +63,24 @@ describe('saveToVaultFallback', () => {
       { kind: 'image', localImageUri: validPhoto.uri },
       expect.any(Object),
     );
-    expect(result).toEqual({ outcome: 'saved', vaultItemId: 'vault-item-123' });
+    expect(result).toEqual({ outcome: 'saved' });
+  });
+
+  it('never reports a Vault item id derived from an importId', async () => {
+    const importer = jest.fn().mockResolvedValue({
+      status: 'READY',
+      importId: 'imp-abc',
+    } as ShareImportResponse);
+
+    const result = await saveToVaultFallback({
+      photo: validPhoto,
+      importer,
+    });
+
+    // A Vault item id is minted only by POST /share/imports/{id}/confirm.
+    // This path does not call confirm, so no item id may be reported.
+    expect(result).toEqual({ outcome: 'saved' });
+    expect(JSON.stringify(result)).not.toContain('imp-abc');
   });
 
   it('rejects READY with blank importId', async () => {

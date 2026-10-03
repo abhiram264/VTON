@@ -130,9 +130,42 @@ POM_RE_PARENT = re.compile(
 )
 POM_RE_JAVA = re.compile(r"<java\.version>\s*([^<]+)\s*</java\.version>")
 
+BASELINE_TESTS = {
+    "ApplicationContextTest.java": CONTEXT_TEST,
+    "ActuatorHealthTest.java": HEALTH_TEST,
+    "ModulithVerificationTest.java": MODULITH_TEST,
+    "SecurityPresenceTest.java": SECURITY_TEST,
+}
+
 
 def _rel(root: Path, path: Path) -> str:
-    return path.resolve().relative_to(root.resolve()).as_posix()
+    return path.relative_to(root).as_posix()
+
+
+def _within(root: Path, path: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+    except (OSError, RuntimeError, ValueError):
+        return False
+    return True
+
+
+def _require_contained(root: Path, path: Path) -> None:
+    if not _within(root, path):
+        raise RuntimeError(f"Refusing to write outside backend: {_rel(root, path)}")
+
+
+def _write_paths(backend: Path) -> tuple[Path, ...]:
+    test_root = backend / "src" / "test" / "java" / "com" / "aifashionvault"
+    return (
+        backend / "mvnw",
+        backend / "mvnw.cmd",
+        backend / ".mvn" / "wrapper" / "maven-wrapper.properties",
+        backend / "src" / "main" / "resources" / "application.yaml",
+        backend / "src" / "main" / "resources" / "application.properties",
+        backend / "src" / "main" / "java",
+        *(test_root / name for name in BASELINE_TESTS),
+    )
 
 
 def _substantive_files(backend: Path) -> list[Path]:
@@ -210,7 +243,7 @@ def _has_gradle(backend: Path) -> bool:
 
 
 def _nested_git(backend: Path) -> bool:
-    return (backend / ".git").exists()
+    return (backend / ".git").is_symlink() or (backend / ".git").exists()
 
 
 def _is_boot4(version: str) -> bool:
@@ -225,7 +258,7 @@ def _wrapper_present(backend: Path) -> bool:
     return (
         (backend / "mvnw").is_file()
         and (backend / "mvnw.cmd").is_file()
-        and (backend / ".mvn" / "wrapper").is_dir()
+        and (backend / ".mvn" / "wrapper" / "maven-wrapper.properties").is_file()
     )
 
 
@@ -246,13 +279,7 @@ def _application_class(backend: Path) -> Path | None:
 
 def _tests_present(backend: Path) -> bool:
     test_root = backend / "src" / "test" / "java" / "com" / "aifashionvault"
-    needed = (
-        "ApplicationContextTest.java",
-        "ActuatorHealthTest.java",
-        "ModulithVerificationTest.java",
-        "SecurityPresenceTest.java",
-    )
-    return all((test_root / name).is_file() for name in needed)
+    return all((test_root / name).is_file() for name in BASELINE_TESTS)
 
 
 def _complete(backend: Path) -> bool:
@@ -308,16 +335,23 @@ def _identity_collision(backend: Path, pom: str) -> bool:
 
 def _classify(root: Path) -> tuple[str, list[str]]:
     backend = root / "backend"
+    if backend.is_symlink():
+        return STATE_COLLISION, ["backend"]
     if not backend.exists():
         return STATE_ABSENT, []
     if not backend.is_dir():
         return STATE_COLLISION, ["backend"]
+    if _nested_git(backend):
+        return STATE_COLLISION, [_rel(root, backend / ".git")]
+    unsafe_writes = [
+        path for path in _write_paths(backend) if not _within(backend, path)
+    ]
+    if unsafe_writes:
+        return STATE_COLLISION, [_rel(root, path) for path in unsafe_writes]
     files = _substantive_files(backend)
     if not files:
         return STATE_EMPTY, []
     collisions: list[str] = []
-    if _nested_git(backend):
-        collisions.append(_rel(root, backend / ".git"))
     if _has_gradle(backend):
         for name in ("build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts", "gradlew"):
             p = backend / name
@@ -361,13 +395,20 @@ def _http_json(url: str) -> dict:
 def _confirm_initializr() -> str:
     meta = _http_json(f"{INITIALIZR}/metadata/client")
     boot_ids = [v["id"] for v in meta["bootVersion"]["values"]]
-    pin_ids = [i for i in boot_ids if i.startswith(BOOT_PIN)]
-    if not pin_ids:
+    exact = [v for v in boot_ids if v == BOOT_PIN or v.startswith(f"{BOOT_PIN}.")]
+    boot4 = [v for v in boot_ids if v.startswith("4.")]
+    if exact:
+        boot_id = exact[0]
+    elif boot4:
+        boot_id = boot4[0]
+        print(
+            f"WARNING: Spring Boot {BOOT_PIN} is unavailable; using live Boot 4 version {boot_id}",
+            file=sys.stderr,
+        )
+    else:
         print("CLARIFICATION_REQUIRED:", file=sys.stderr)
         print(f"live boot versions: {boot_ids}", file=sys.stderr)
-        raise RuntimeError("Spring Boot 4.1.0 is unavailable from start.spring.io")
-    # Maven Central publishes 4.1.0; Initializr metadata may list 4.1.0.RELEASE.
-    boot_id = BOOT_PIN
+        raise RuntimeError("Spring Boot 4 is unavailable from start.spring.io")
     dep_ids: list[str] = []
     for group in meta["dependencies"]["values"]:
         for item in group.get("values", []):
@@ -403,6 +444,7 @@ def _download_zip(boot_id: str) -> bytes:
 
 def _extract_zip(data: bytes, dest: Path) -> None:
     dest.mkdir(parents=True, exist_ok=True)
+    dest = dest.resolve()
     with zipfile.ZipFile(io.BytesIO(data)) as zf:
         for info in zf.infolist():
             name = info.filename.replace("\\", "/")
@@ -411,11 +453,13 @@ def _extract_zip(data: bytes, dest: Path) -> None:
                 rel = "/".join(parts[1:])
             else:
                 rel = name
+            target = (dest / rel).resolve()
+            if target != dest and dest not in target.parents:
+                raise RuntimeError("Initializr archive contains an unsafe path")
             if not rel or rel.endswith("/"):
                 if rel:
-                    (dest / rel).mkdir(parents=True, exist_ok=True)
+                    target.mkdir(parents=True, exist_ok=True)
                 continue
-            target = dest / rel
             target.parent.mkdir(parents=True, exist_ok=True)
             with zf.open(info) as src, open(target, "wb") as out:
                 out.write(src.read())
@@ -423,7 +467,8 @@ def _extract_zip(data: bytes, dest: Path) -> None:
                 os.chmod(target, 0o755)
 
 
-def _write_text(path: Path, text: str) -> None:
+def _write_text(backend: Path, path: Path, text: str) -> None:
+    _require_contained(backend, path)
     path.parent.mkdir(parents=True, exist_ok=True)
     data = text.replace("\r\n", "\n")
     if not data.endswith("\n"):
@@ -441,27 +486,25 @@ def _application_simple_name(backend: Path) -> str:
 def _write_baseline_tests(backend: Path) -> None:
     test_root = backend / "src" / "test" / "java" / "com" / "aifashionvault"
     app_name = _application_simple_name(backend)
-    modulith = MODULITH_TEST.replace("BackendApplication", app_name)
-    mapping = {
-        "ApplicationContextTest.java": CONTEXT_TEST,
-        "ActuatorHealthTest.java": HEALTH_TEST,
-        "ModulithVerificationTest.java": modulith,
-        "SecurityPresenceTest.java": SECURITY_TEST,
-    }
+    mapping = dict(BASELINE_TESTS)
+    mapping["ModulithVerificationTest.java"] = MODULITH_TEST.replace(
+        "BackendApplication", app_name
+    )
     for name, content in mapping.items():
         dest = test_root / name
         if not dest.exists():
-            _write_text(dest, content)
+            _write_text(backend, dest, content)
 
 
 def _ensure_yaml(backend: Path) -> None:
     path = backend / "src" / "main" / "resources" / "application.yaml"
     if not path.exists():
-        _write_text(path, APPLICATION_YAML)
+        _write_text(backend, path, APPLICATION_YAML)
 
 
 def _strip_help_controller(backend: Path) -> None:
     src = backend / "src" / "main" / "java"
+    _require_contained(backend, src)
     if not src.is_dir():
         return
     for path in src.rglob("*.java"):
@@ -490,13 +533,18 @@ def _copy_missing_wrapper(backend: Path, generated: Path) -> None:
         dest = backend / rel
         src = generated / rel
         if not dest.exists() and src.is_file():
+            _require_contained(backend, dest)
             shutil.copy2(src, dest)
             if rel == "mvnw":
                 os.chmod(dest, 0o755)
     src_wrap = generated / ".mvn" / "wrapper"
     dest_wrap = backend / ".mvn" / "wrapper"
-    if src_wrap.is_dir() and not dest_wrap.exists():
-        shutil.copytree(src_wrap, dest_wrap)
+    src_properties = src_wrap / "maven-wrapper.properties"
+    dest_properties = dest_wrap / "maven-wrapper.properties"
+    if src_properties.is_file() and not dest_properties.exists():
+        _require_contained(backend, dest_properties)
+        dest_wrap.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src_properties, dest_properties)
 
 
 def _reconcile_partial(backend: Path) -> None:

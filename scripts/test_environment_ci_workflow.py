@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import re
+import shlex
 import unittest
 from pathlib import Path
 
@@ -223,6 +225,61 @@ def _all_runs(jobs: dict) -> str:
     )
 
 
+_ENV_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
+_HEREDOC = re.compile(r"<<-?\s*['\"]?([A-Za-z_][A-Za-z0-9_]*)['\"]?")
+
+
+def _shell_commands(jobs: dict):
+    for job in jobs.values():
+        if not isinstance(job, dict):
+            continue
+        for run in _runs(job):
+            heredoc_end: str | None = None
+            continuation = ""
+            for raw_line in run.splitlines():
+                line = raw_line.strip()
+                if heredoc_end is not None:
+                    if line == heredoc_end:
+                        heredoc_end = None
+                    continue
+                if continuation:
+                    line = f"{continuation} {line}"
+                    continuation = ""
+                if line.endswith("\\"):
+                    continuation = line[:-1].rstrip()
+                    continue
+                if not line:
+                    continue
+                if "<<" in line:
+                    head, marker = line.split("<<", 1)
+                    match = _HEREDOC.search(marker)
+                    if head.strip():
+                        yield shlex.split(head)
+                    if match is not None:
+                        heredoc_end = match.group(1)
+                    continue
+                yield shlex.split(line)
+
+
+def _command_argv(argv: list[str]) -> list[str]:
+    index = 0
+    while index < len(argv) and _ENV_ASSIGNMENT.match(argv[index]):
+        index += 1
+    return argv[index:]
+
+
+def _is_command(argv: list[str], executable: str, *operands: str) -> bool:
+    argv = _command_argv(argv)
+    while argv and re.match(r"^\d*(?:>>?|<)", argv[-1]):
+        argv = argv[:-1]
+    name = argv[0].rsplit("/", 1)[-1] if argv else ""
+    return name == executable and tuple(argv[1:]) == operands
+
+
+def _has_command(jobs: dict, executable: str, *operands: str) -> bool:
+    return any(_is_command(argv, executable, *operands) for argv in _shell_commands(jobs))
+
+
 class EnvironmentCiWorkflowTests(unittest.TestCase):
     def setUp(self) -> None:
         self.raw = WORKFLOW.read_text(encoding="utf-8")
@@ -260,9 +317,11 @@ class EnvironmentCiWorkflowTests(unittest.TestCase):
                     found_pom = True
         self.assertTrue(found_setup, "workflow must set up Java 21")
         self.assertTrue(found_pom, "workflow must verify Java 21 in the backend POM")
+        self.assertTrue(_has_command(self.jobs, "python3", "-"))
 
     def test_checks_spring_boot_4x(self) -> None:
         blob = _all_runs(self.jobs)
+        self.assertTrue(_has_command(self.jobs, "python3", "-"))
         self.assertIn("spring-boot-starter-parent", blob)
         self.assertTrue(
             "startswith(\"4.\")" in blob or "startswith('4.')" in blob or "4.x" in blob,
@@ -270,39 +329,49 @@ class EnvironmentCiWorkflowTests(unittest.TestCase):
         )
 
     def test_runs_backend_tests(self) -> None:
-        blob = _all_runs(self.jobs)
-        self.assertIn("mvnw", blob)
-        self.assertIn("verify", blob)
+        self.assertTrue(_has_command(self.jobs, "mvnw", "verify"))
 
     def test_runs_environment_policy(self) -> None:
-        blob = _all_runs(self.jobs)
-        self.assertIn("test_environment_contract.py", blob)
+        self.assertTrue(
+            _has_command(self.jobs, "python3", "scripts/test_environment_contract.py")
+        )
+
+    def test_runs_workflow_contract_suite(self) -> None:
+        self.assertTrue(
+            _has_command(
+                self.jobs, "python3", "scripts/test_environment_ci_workflow.py"
+            )
+        )
 
     def test_runs_content_secret_scan(self) -> None:
-        blob = _all_runs(self.jobs)
-        self.assertIn("secret_content_scan.py", blob)
-        self.assertNotIn("gitleaks", blob.lower())
-        self.assertNotIn("trufflehog", blob.lower())
+        self.assertTrue(
+            _has_command(self.jobs, "python3", "scripts/secret_content_scan.py")
+        )
+        self.assertTrue(
+            _has_command(self.jobs, "python3", "scripts/test_secret_content_scan.py")
+        )
+        blob = _all_runs(self.jobs).lower()
+        self.assertNotIn("gitleaks", blob)
+        self.assertNotIn("trufflehog", blob)
 
     def test_renders_compose_with_placeholders(self) -> None:
         found = False
-        for job in self.jobs.values():
-            if not isinstance(job, dict):
+        for argv in _shell_commands(self.jobs):
+            if not _is_command(
+                argv, "docker", "compose", "-f", "compose.yaml", "config"
+            ):
                 continue
-            for run in _runs(job):
-                if "docker compose" not in run or "config" not in run:
-                    continue
-                self.assertIn("LOCALSTACK_AUTH_TOKEN", run)
-                self.assertIn("POSTGRES_PASSWORD", run)
-                self.assertIn("ci-placeholder", run)
-                self.assertNotIn("secrets.LOCALSTACK_AUTH_TOKEN", run)
-                found = True
+            self.assertIn("LOCALSTACK_AUTH_TOKEN=ci-placeholder", argv)
+            self.assertIn("POSTGRES_PASSWORD=ci-placeholder", argv)
+            self.assertFalse(any(value.startswith("secrets.") for value in argv))
+            found = True
         self.assertTrue(found, "workflow must render compose.yaml with placeholders")
 
     def _runtime_job(self) -> dict:
         for job in self.jobs.values():
             if isinstance(job, dict) and any(
-                "test_localstack_resources.py" in run for run in _runs(job)
+                _is_command(argv, "python3", "scripts/test_localstack_resources.py")
+                for argv in _shell_commands({"runtime": job})
             ):
                 return job
         self.fail("missing trusted LocalStack runtime job")
@@ -313,9 +382,14 @@ class EnvironmentCiWorkflowTests(unittest.TestCase):
         cond = str(runtime.get("if") or "")
         self.assertTrue(
             ("head.repo.full_name" in cond and "github.repository" in cond)
-            or "head.repo.fork" in cond,
-            "trusted runtime job must skip untrusted fork pull_request execution",
+            or "head.repo.fork" in cond
+            or ("github.event_name" in cond and "pull_request" in cond),
+            "trusted runtime job must skip untrusted pull_request execution",
         )
+        self.assertIn("github.ref", cond)
+        self.assertIn("default_branch", cond)
+        self.assertIn("&&", cond)
+        self.assertNotIn("||", cond)
         self.assertIn("secrets.LOCALSTACK_AUTH_TOKEN", _flatten(runtime))
         for job in self.jobs.values():
             if not isinstance(job, dict) or job is runtime:
@@ -330,12 +404,20 @@ class EnvironmentCiWorkflowTests(unittest.TestCase):
         for step in _steps(runtime):
             if isinstance(step, dict):
                 self.assertNotEqual(step.get("continue-on-error"), True)
-        runs = "\n".join(_runs(runtime))
-        self.assertIn("test_localstack_resources.py", runs)
+        commands = list(_shell_commands({"runtime": runtime}))
         self.assertTrue(
-            "-z" in runs and "LOCALSTACK_AUTH_TOKEN" in runs and "exit 1" in runs,
-            "trusted runtime must fail closed when the CI token is absent",
+            any(
+                _is_command(argv, "python3", "scripts/test_localstack_resources.py")
+                for argv in commands
+            )
         )
+        runtime_blob = "\n".join(
+            str(step.get("run") or "")
+            for step in _steps(runtime)
+            if isinstance(step, dict)
+        )
+        self.assertIn('if [ -z "${LOCALSTACK_AUTH_TOKEN}" ]; then', runtime_blob)
+        self.assertIn("exit 1", runtime_blob)
 
     def test_does_not_install_dependencies(self) -> None:
         blob = _all_runs(self.jobs).lower()

@@ -1,42 +1,91 @@
-import { useEffect } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   NavigationContainer,
-  useNavigationContainerRef,
+  StackActions,
+  createNavigationContainerRef,
 } from '@react-navigation/native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import RootNavigator, {
   type RootStackParamList,
 } from '../navigation/RootNavigator';
 import { startShareLinkHandling } from '../features/share/linkHandler';
+import { initializeFirebase } from '../config/firebase';
+import { startFeatureFlagSync } from './featureFlagSync';
+
+// Module scope is total and never throws; the surface module memoizes, so no
+// provider/effect is needed and the auth surface resolves before navigation.
+initializeFirebase();
 
 const initialMetrics = {
   frame: { x: 0, y: 0, width: 0, height: 0 },
   insets: { top: 0, left: 0, right: 0, bottom: 0 },
 };
+type PendingDeepLink =
+  | { name: 'Look'; params: RootStackParamList['Look'] }
+  | { name: 'ShareImport'; params: RootStackParamList['ShareImport'] };
+
+
 
 export default function AppShell() {
-  const navigationRef = useNavigationContainerRef<RootStackParamList>();
+  const navigationRef = useRef(createNavigationContainerRef<RootStackParamList>()).current;
+  const [pendingDeepLinks, setPendingDeepLinks] = useState<PendingDeepLink[]>([]);
+  const navigateTarget = useCallback((target: PendingDeepLink) => {
+    navigationRef.dispatch(StackActions.push(target.name, target.params));
+  }, [navigationRef]);
+  const navigateOrQueue = useCallback((target: PendingDeepLink) => {
+    if (navigationRef.isReady()) {
+      navigateTarget(target);
+      return;
+    }
+    setPendingDeepLinks(current => [...current, target]);
+  }, [navigateTarget, navigationRef]);
+
+  useEffect(() => {
+    if (pendingDeepLinks.length === 0) return;
+    let cancelled = false;
+    let attempts = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const drain = () => {
+      if (cancelled) return;
+      if (!navigationRef.isReady()) {
+        if (attempts < 20) {
+          attempts += 1;
+          timer = setTimeout(drain, 0);
+        }
+        return;
+      }
+      const targets = pendingDeepLinks;
+      setPendingDeepLinks([]);
+      targets.forEach(navigateTarget);
+    };
+    timer = setTimeout(drain, 0);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [navigateTarget, navigationRef, pendingDeepLinks]);
 
   useEffect(
     () =>
       startShareLinkHandling(
-        (name, params) => {
-          if (navigationRef.isReady()) {
-            navigationRef.navigate(name, params);
-          }
-        },
-        (name, params) => {
-          if (navigationRef.isReady()) {
-            navigationRef.navigate(name, params);
-          }
-        },
+        (name, params) => navigateOrQueue({ name, params }),
+        (name, params) => navigateOrQueue({ name, params }),
       ),
-    [navigationRef],
+    [navigateOrQueue],
   );
+
+  // The backend capability snapshot is authoritative (C22): fetch it once a
+  // session exists so an operator's server-side flag change reaches the app.
+  useEffect(() => startFeatureFlagSync(), []);
 
   return (
     <SafeAreaProvider initialMetrics={initialMetrics}>
-      <NavigationContainer ref={navigationRef}>
+      <NavigationContainer
+        ref={navigationRef}
+        onReady={() => {
+          setPendingDeepLinks(current => [...current]);
+        }}
+      >
         <RootNavigator />
       </NavigationContainer>
     </SafeAreaProvider>

@@ -43,7 +43,6 @@ public final class GenerationOrphanSweeper {
 	public int sweep() {
 		int deleted = 0;
 		deleted += sweepBoundary(StorageDomain.TEMP);
-		deleted += sweepBoundary(StorageDomain.TEMP);
 		deleted += sweepBoundary(StorageDomain.LOOK);
 		return deleted;
 	}

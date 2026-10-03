@@ -1,6 +1,7 @@
 import {
   DEFAULT_FEATURE_FLAGS,
   FEATURE_FLAGS,
+  UNSUPPORTED_CAPABILITIES,
   FeatureFlagName,
   FeatureFlagRefreshConfig,
   applyFeatureFlagPayload,
@@ -56,10 +57,10 @@ describe('mobile feature flags', () => {
       const actualKeys = Object.keys(DEFAULT_FEATURE_FLAGS).sort();
       expect(actualKeys).toEqual([...expectedKeys].sort());
 
-      expect(DEFAULT_FEATURE_FLAGS.MULTI_ITEM).toBe(true);
-      expect(DEFAULT_FEATURE_FLAGS.NATURAL_LANGUAGE_STUDIO).toBe(true);
+      expect(DEFAULT_FEATURE_FLAGS.MULTI_ITEM).toBe(false);
+      expect(DEFAULT_FEATURE_FLAGS.NATURAL_LANGUAGE_STUDIO).toBe(false);
       expect(DEFAULT_FEATURE_FLAGS.TRYON_MAX).toBe(true);
-      expect(DEFAULT_FEATURE_FLAGS.HD_GENERATION).toBe(true);
+      expect(DEFAULT_FEATURE_FLAGS.HD_GENERATION).toBe(false);
       expect(DEFAULT_FEATURE_FLAGS.SHARE_IMPORT_ANDROID).toBe(true);
       expect(DEFAULT_FEATURE_FLAGS.SHARE_IMPORT_IOS).toBe(true);
       expect(DEFAULT_FEATURE_FLAGS.NEW_QUALITY_GATE).toBe(false);
@@ -68,10 +69,10 @@ describe('mobile feature flags', () => {
     });
 
     test('isFeatureEnabled returns D1 defaults synchronously', () => {
-      expect(isFeatureEnabled('MULTI_ITEM')).toBe(true);
-      expect(isFeatureEnabled('NATURAL_LANGUAGE_STUDIO')).toBe(true);
+      expect(isFeatureEnabled('MULTI_ITEM')).toBe(false);
+      expect(isFeatureEnabled('NATURAL_LANGUAGE_STUDIO')).toBe(false);
       expect(isFeatureEnabled('TRYON_MAX')).toBe(true);
-      expect(isFeatureEnabled('HD_GENERATION')).toBe(true);
+      expect(isFeatureEnabled('HD_GENERATION')).toBe(false);
       expect(isFeatureEnabled('SHARE_IMPORT_ANDROID')).toBe(true);
       expect(isFeatureEnabled('SHARE_IMPORT_IOS')).toBe(true);
       expect(isFeatureEnabled('NEW_QUALITY_GATE')).toBe(false);
@@ -80,6 +81,102 @@ describe('mobile feature flags', () => {
     test('preserves backwards compatibility for share-import flags', () => {
       expect(isFeatureEnabled('SHARE_IMPORT_IOS')).toBe(true);
       expect(isFeatureEnabled('SHARE_IMPORT_ANDROID')).toBe(true);
+    });
+  });
+
+  describe('unsupported capabilities fail closed (C22)', () => {
+    // NATURAL_LANGUAGE_STUDIO is excluded: C21 mounted a backing path, so the
+    // backend (not the client hard-block) is the authority for it. It still
+    // defaults OFF, but a fetch may enable it.
+    const unsupported: FeatureFlagName[] = ['MULTI_ITEM', 'HD_GENERATION'];
+
+    test('default off in code', () => {
+      for (const name of unsupported) {
+        expect(DEFAULT_FEATURE_FLAGS[name]).toBe(false);
+        expect(isFeatureEnabled(name)).toBe(false);
+      }
+      expect(UNSUPPORTED_CAPABILITIES.MULTI_ITEM).toBe(true);
+      expect(UNSUPPORTED_CAPABILITIES.HD_GENERATION).toBe(true);
+      expect(UNSUPPORTED_CAPABILITIES.TRYON_MAX).toBe(false);
+      expect(UNSUPPORTED_CAPABILITIES.SHARE_IMPORT_ANDROID).toBe(false);
+      expect(UNSUPPORTED_CAPABILITIES.SHARE_IMPORT_IOS).toBe(false);
+      // NL is server-authoritative now; it is not a client hard-block.
+      expect(UNSUPPORTED_CAPABILITIES.NATURAL_LANGUAGE_STUDIO).toBe(false);
+    });
+
+    test('a flag payload cannot enable them (offline or remote)', () => {
+      applyFeatureFlagPayload({
+        flags: {
+          MULTI_ITEM: true,
+          NATURAL_LANGUAGE_STUDIO: true,
+          HD_GENERATION: true,
+          TRYON_MAX: true,
+        },
+        overrides: {
+          MULTI_ITEM: true,
+          NATURAL_LANGUAGE_STUDIO: true,
+          HD_GENERATION: true,
+        },
+      });
+
+      for (const name of unsupported) {
+        expect(isFeatureEnabled(name)).toBe(false);
+      }
+      // Supported capabilities are unaffected by the guard.
+      expect(isFeatureEnabled('TRYON_MAX')).toBe(true);
+    });
+
+    test('a flat payload cannot enable them either', () => {
+      applyFeatureFlagPayload({
+        MULTI_ITEM: true,
+        NATURAL_LANGUAGE_STUDIO: true,
+        HD_GENERATION: true,
+      });
+
+      for (const name of unsupported) {
+        expect(isFeatureEnabled(name)).toBe(false);
+      }
+    });
+
+    test('a capability with a mounted backing path (NL) defers to the backend', () => {
+      // C21 mounted the NL route; the client must not permanently veto it. A
+      // fetched flag can enable it, and the server refuses the capability when
+      // its own flag is off, so the backend stays authoritative.
+      applyFeatureFlagPayload({ flags: { NATURAL_LANGUAGE_STUDIO: true } });
+      expect(isFeatureEnabled('NATURAL_LANGUAGE_STUDIO')).toBe(true);
+      expect(isFeatureEnabled('MULTI_ITEM')).toBe(false);
+    });
+
+    test('a remote or offline flag fetch cannot enable them', async () => {
+      const fetchResponse = jest.fn().mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        headers: { get: () => 'application/json' },
+        json: () =>
+          Promise.resolve({
+            flags: {
+              MULTI_ITEM: true,
+              NATURAL_LANGUAGE_STUDIO: true,
+              HD_GENERATION: true,
+              TRYON_MAX: true,
+            },
+          }),
+      });
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = fetchResponse as unknown as typeof fetch;
+      try {
+        await refreshFeatureFlags({
+          baseUrl: 'https://api.aifashionvault.com',
+          getAccessToken: () => null,
+        });
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+
+      for (const name of unsupported) {
+        expect(isFeatureEnabled(name)).toBe(false);
+      }
+      expect(isFeatureEnabled('TRYON_MAX')).toBe(true);
     });
   });
 
@@ -103,7 +200,7 @@ describe('mobile feature flags', () => {
       expect(isFeatureEnabled('NATURAL_LANGUAGE_STUDIO')).toBe(false);
       expect(isFeatureEnabled('HD_GENERATION')).toBe(false);
       expect(isFeatureEnabled('NEW_QUALITY_GATE')).toBe(true);
-      expect(isFeatureEnabled('MULTI_ITEM')).toBe(true);
+      expect(isFeatureEnabled('MULTI_ITEM')).toBe(false);
     });
 
     test('valid partial payload updates only known boolean entries and retains prior state', () => {
@@ -114,7 +211,7 @@ describe('mobile feature flags', () => {
       });
 
       expect(isFeatureEnabled('HD_GENERATION')).toBe(false);
-      expect(isFeatureEnabled('MULTI_ITEM')).toBe(true);
+      expect(isFeatureEnabled('MULTI_ITEM')).toBe(false);
       expect(isFeatureEnabled('NEW_QUALITY_GATE')).toBe(false);
       expect(isFeatureEnabled('SHARE_IMPORT_IOS')).toBe(true);
     });
@@ -127,7 +224,7 @@ describe('mobile feature flags', () => {
 
       expect(isFeatureEnabled('MULTI_ITEM')).toBe(false);
       expect(isFeatureEnabled('NEW_QUALITY_GATE')).toBe(true);
-      expect(isFeatureEnabled('HD_GENERATION')).toBe(true);
+      expect(isFeatureEnabled('HD_GENERATION')).toBe(false);
     });
 
     test('ignores unknown flag names without corrupting known state', () => {
@@ -138,7 +235,7 @@ describe('mobile feature flags', () => {
         },
       });
 
-      expect(isFeatureEnabled('MULTI_ITEM')).toBe(true);
+      expect(isFeatureEnabled('MULTI_ITEM')).toBe(false);
       expect(isFeatureEnabled('NEW_QUALITY_GATE')).toBe(false);
     });
 
@@ -153,11 +250,11 @@ describe('mobile feature flags', () => {
         },
       });
 
-      expect(isFeatureEnabled('MULTI_ITEM')).toBe(true);
-      expect(isFeatureEnabled('HD_GENERATION')).toBe(true);
+      expect(isFeatureEnabled('MULTI_ITEM')).toBe(false);
+      expect(isFeatureEnabled('HD_GENERATION')).toBe(false);
       expect(isFeatureEnabled('NEW_QUALITY_GATE')).toBe(false);
       expect(isFeatureEnabled('TRYON_MAX')).toBe(true);
-      expect(isFeatureEnabled('NATURAL_LANGUAGE_STUDIO')).toBe(true);
+      expect(isFeatureEnabled('NATURAL_LANGUAGE_STUDIO')).toBe(false);
     });
 
     test('never throws on non-object or nullish payloads', () => {
@@ -168,7 +265,7 @@ describe('mobile feature flags', () => {
       expect(() => applyFeatureFlagPayload(true)).not.toThrow();
       expect(() => applyFeatureFlagPayload([])).not.toThrow();
 
-      expect(isFeatureEnabled('MULTI_ITEM')).toBe(true);
+      expect(isFeatureEnabled('MULTI_ITEM')).toBe(false);
       expect(isFeatureEnabled('NEW_QUALITY_GATE')).toBe(false);
     });
   });
@@ -281,7 +378,7 @@ describe('mobile feature flags', () => {
       );
 
       await expect(refreshFeatureFlags(config)).resolves.toBeUndefined();
-      expect(isFeatureEnabled('MULTI_ITEM')).toBe(true);
+      expect(isFeatureEnabled('MULTI_ITEM')).toBe(false);
       expect(isFeatureEnabled('NEW_QUALITY_GATE')).toBe(false);
     });
 
@@ -289,7 +386,7 @@ describe('mobile feature flags', () => {
       fetchMock.mockRejectedValueOnce(new Error('Network request failed'));
 
       await expect(refreshFeatureFlags(config)).resolves.toBeUndefined();
-      expect(isFeatureEnabled('MULTI_ITEM')).toBe(true);
+      expect(isFeatureEnabled('MULTI_ITEM')).toBe(false);
       expect(isFeatureEnabled('NEW_QUALITY_GATE')).toBe(false);
     });
 
@@ -302,7 +399,7 @@ describe('mobile feature flags', () => {
       } as unknown as Response);
 
       await expect(refreshFeatureFlags(config)).resolves.toBeUndefined();
-      expect(isFeatureEnabled('MULTI_ITEM')).toBe(true);
+      expect(isFeatureEnabled('MULTI_ITEM')).toBe(false);
       expect(isFeatureEnabled('NEW_QUALITY_GATE')).toBe(false);
     });
 
@@ -316,7 +413,7 @@ describe('mobile feature flags', () => {
         }),
       ).resolves.toBeUndefined();
 
-      expect(isFeatureEnabled('MULTI_ITEM')).toBe(true);
+      expect(isFeatureEnabled('MULTI_ITEM')).toBe(false);
     });
   });
 });

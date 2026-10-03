@@ -3,19 +3,26 @@ package com.aifashionvault.platform.generation;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
-import org.springframework.scheduling.annotation.Scheduled;
+import java.time.Duration;
+import org.springframework.scheduling.TaskScheduler;
 
 import com.aifashionvault.platform.logging.LoggingPolicy;
 import com.aifashionvault.platform.queue.GenerationWorkLease;
 import com.aifashionvault.platform.queue.GenerationWorkQueue;
+
 public final class GenerationWorkWorker {
 
 	private static final Logger log = LoggerFactory.getLogger(GenerationWorkWorker.class);
+	private static final Duration POLL_DELAY = Duration.ofMillis(1000);
 
 	private final GenerationWorkQueue queue;
 	private final GenerationWorkProcessor processor;
 
 	public GenerationWorkWorker(GenerationWorkQueue queue, GenerationWorkProcessor processor) {
+		this(queue, processor, null);
+	}
+
+	public GenerationWorkWorker(GenerationWorkQueue queue, GenerationWorkProcessor processor, TaskScheduler scheduler) {
 		if (queue == null) {
 			throw new IllegalArgumentException("queue is required");
 		}
@@ -24,9 +31,11 @@ public final class GenerationWorkWorker {
 		}
 		this.queue = queue;
 		this.processor = processor;
+		if (scheduler != null) {
+			scheduler.scheduleWithFixedDelay(this::poll, POLL_DELAY);
+		}
 	}
 
-	@Scheduled(fixedDelay = 1000)
 	void poll() {
 		queue.receive().ifPresent(this::processWithScope);
 	}

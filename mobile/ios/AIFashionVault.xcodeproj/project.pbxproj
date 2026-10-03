@@ -14,6 +14,11 @@
 		761781042CA45674006654EE /* FashionVaultShare.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 761781032CA45674006654EE /* FashionVaultShare.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		7617811A2CA45674006654EE /* ShareHandoff.swift in Sources */ = {isa = PBXBuildFile; fileRef = 761781182CA45674006654EE /* ShareHandoff.swift */; };
 		7617811B2CA45674006654EE /* ShareHandoff.m in Sources */ = {isa = PBXBuildFile; fileRef = 761781192CA45674006654EE /* ShareHandoff.m */; };
+		AA0400012CA45674006654EE /* PhotoPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0400062CA45674006654EE /* PhotoPicker.swift */; };
+		AA0400022CA45674006654EE /* PhotoPicker.m in Sources */ = {isa = PBXBuildFile; fileRef = AA0400072CA45674006654EE /* PhotoPicker.m */; };
+		AA0400032CA45674006654EE /* PhotoPickerStaging.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0400082CA45674006654EE /* PhotoPickerStaging.swift */; };
+		AA0400042CA45674006654EE /* PhotoPickerStaging.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0400082CA45674006654EE /* PhotoPickerStaging.swift */; };
+		AA0400052CA45674006654EE /* PhotoPickerStagingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0400092CA45674006654EE /* PhotoPickerStagingTests.swift */; };
 		7617811C2CA45674006654EE /* LookNotificationRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 761781172CA45674006654EE /* LookNotificationRouter.swift */; };
 		2E64422647794AB794858FAE /* ShareHandoffDiscovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3237F98B841431DBE323BD0 /* ShareHandoffDiscovery.swift */; };
 		81AB9BB82411601600AC10FF /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */; };
@@ -25,6 +30,8 @@
 		761781292CA45674006654EE /* LookNotificationRouterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 761781282CA45674006654EE /* LookNotificationRouterTests.swift */; };
 		7617812B2CA45674006654EE /* ShareHandoffContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7617812A2CA45674006654EE /* ShareHandoffContractTests.swift */; };
 		761781322CA45674006654EE /* HandoffRecordTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 761781312CA45674006654EE /* HandoffRecordTests.swift */; };
+		13B07FC01A68108700A75B9A /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 13B07FB81A68108700A75B9A /* PrivacyInfo.xcprivacy */; };
+		13B07FC11A68108700A75B9A /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 13B07FB81A68108700A75B9A /* PrivacyInfo.xcprivacy */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -59,6 +66,10 @@
 		D3237F98B841431DBE323BD0 /* ShareHandoffDiscovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ShareHandoffDiscovery.swift; path = AIFashionVault/ShareHandoffDiscovery.swift; sourceTree = "<group>"; };
 		761781172CA45674006654EE /* LookNotificationRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LookNotificationRouter.swift; path = AIFashionVault/LookNotificationRouter.swift; sourceTree = "<group>"; };
 		761781182CA45674006654EE /* ShareHandoff.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ShareHandoff.swift; path = AIFashionVault/ShareHandoff.swift; sourceTree = "<group>"; };
+		AA0400062CA45674006654EE /* PhotoPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PhotoPicker.swift; path = AIFashionVault/PhotoPicker.swift; sourceTree = "<group>"; };
+		AA0400072CA45674006654EE /* PhotoPicker.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; name = PhotoPicker.m; path = AIFashionVault/PhotoPicker.m; sourceTree = "<group>"; };
+		AA0400082CA45674006654EE /* PhotoPickerStaging.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PhotoPickerStaging.swift; path = AIFashionVault/PhotoPickerStaging.swift; sourceTree = "<group>"; };
+		AA0400092CA45674006654EE /* PhotoPickerStagingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoPickerStagingTests.swift; sourceTree = "<group>"; };
 		81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = file.storyboard; name = LaunchScreen.storyboard; path = AIFashionVault/LaunchScreen.storyboard; sourceTree = "<group>"; };
 		ED297162215061F000B7C4FE /* JavaScriptCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = JavaScriptCore.framework; path = System/Library/Frameworks/JavaScriptCore.framework; sourceTree = SDKROOT; };
 		00E356F11AD99517003FC87E /* AIFashionVaultTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AIFashionVaultTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -115,6 +126,9 @@
 				761781172CA45674006654EE /* LookNotificationRouter.swift */,
 				761781182CA45674006654EE /* ShareHandoff.swift */,
 				761781192CA45674006654EE /* ShareHandoff.m */,
+				AA0400062CA45674006654EE /* PhotoPicker.swift */,
+				AA0400072CA45674006654EE /* PhotoPicker.m */,
+				AA0400082CA45674006654EE /* PhotoPickerStaging.swift */,
 				13B07FB61A68108700A75B9A /* Info.plist */,
 				761781082CA45674006654EE /* AIFashionVault.entitlements */,
 				81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */,
@@ -192,6 +206,7 @@
 			children = (
 				761781282CA45674006654EE /* LookNotificationRouterTests.swift */,
 				7617812A2CA45674006654EE /* ShareHandoffContractTests.swift */,
+				AA0400092CA45674006654EE /* PhotoPickerStagingTests.swift */,
 				761781272CA45674006654EE /* Info.plist */,
 			);
 			path = AIFashionVaultTests;
@@ -333,6 +348,7 @@
 			files = (
 				81AB9BB82411601600AC10FF /* LaunchScreen.storyboard in Resources */,
 				13B07FBF1A68108700A75B9A /* Images.xcassets in Resources */,
+				13B07FC01A68108700A75B9A /* PrivacyInfo.xcprivacy in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -340,6 +356,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				13B07FC11A68108700A75B9A /* PrivacyInfo.xcprivacy in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -443,6 +460,9 @@
 				761781212CA45674006654EE /* ShareHandoffContract.swift in Sources */,
 				7617811A2CA45674006654EE /* ShareHandoff.swift in Sources */,
 				7617811B2CA45674006654EE /* ShareHandoff.m in Sources */,
+				AA0400012CA45674006654EE /* PhotoPicker.swift in Sources */,
+				AA0400022CA45674006654EE /* PhotoPicker.m in Sources */,
+				AA0400032CA45674006654EE /* PhotoPickerStaging.swift in Sources */,
 				7617811C2CA45674006654EE /* LookNotificationRouter.swift in Sources */,
 				2E64422647794AB794858FAE /* ShareHandoffDiscovery.swift in Sources */,
 			);
@@ -465,6 +485,8 @@
 				761781262CA45674006654EE /* LookNotificationRouter.swift in Sources */,
 				761781292CA45674006654EE /* LookNotificationRouterTests.swift in Sources */,
 				7617812B2CA45674006654EE /* ShareHandoffContractTests.swift in Sources */,
+				AA0400042CA45674006654EE /* PhotoPickerStaging.swift in Sources */,
+				AA0400052CA45674006654EE /* PhotoPickerStagingTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -5,14 +5,19 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
-import subprocess
 import sys
 from pathlib import Path
 
 
 REPO = Path(__file__).resolve().parent.parent
-SKIP_DIRS = {".git", "target", "node_modules", "__pycache__", ".venv", "venv"}
+SKIP_DIRS = {
+    ".cache", ".cxx", ".expo", ".expo-shared", ".git", ".gradle", ".idea",
+    ".npm", ".nyc_output", ".opencode", ".scratch", ".terraform", ".venv", ".vscode",
+    ".yarn", "__pycache__", "Pods", "DerivedData", "build", "captures", "coverage",
+    "dist", "metro-cache", "node_modules", "target", "venv", "xcuserdata",
+}
 _SA = "service_" + "account"
 _PK = "private_" + "key"
 _PEM = re.compile("-----BEGIN " + r"(?:RSA |EC |DSA |OPENSSH |ENCRYPTED )?PRIVATE KEY-----")
@@ -20,34 +25,15 @@ RULE_PEM = "private-key"
 RULE_SA = "google-service-account"
 
 
-def _git_files(root: Path) -> list[Path] | None:
-    proc = subprocess.run(
-        ["git", "-C", str(root), "ls-files", "-z"],
-        capture_output=True,
-        check=False,
-    )
-    if proc.returncode != 0:
-        return None
-    names = [n.decode("utf-8", "surrogateescape") for n in proc.stdout.split(b"\0") if n]
-    return [root / name for name in names]
-
-
 def _walk(root: Path) -> list[Path]:
     out: list[Path] = []
-    for path in root.rglob("*"):
-        if not path.is_file():
-            continue
-        if any(part in SKIP_DIRS for part in path.parts):
-            continue
-        out.append(path)
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [name for name in dirnames if name not in SKIP_DIRS]
+        out.extend(Path(dirpath) / name for name in filenames)
     return out
 
 
 def iter_scan_files(root: Path) -> list[Path]:
-    if (root / ".git").exists():
-        tracked = _git_files(root)
-        if tracked is not None:
-            return tracked
     return _walk(root)
 
 

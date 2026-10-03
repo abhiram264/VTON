@@ -12,6 +12,8 @@ public class NotificationDeliveryConfiguration {
 	private String fcmBaseUrl = "https://fcm.googleapis.com";
 	private String projectId = "";
 	private String accessToken = "";
+	private String serviceAccountJson = "";
+	private boolean allowStaticAccessToken = false;
 	private int maxAttempts = 10;
 	private int minRetrySeconds = 10;
 	private int ttlHours = 24;
@@ -40,11 +42,40 @@ public class NotificationDeliveryConfiguration {
 		this.accessToken = accessToken;
 	}
 
+	/**
+	 * Google service-account JSON used to mint short-lived access tokens (C20). When
+	 * present it is the production credential source and {@link #getAccessToken()} is
+	 * ignored.
+	 */
+	public String getServiceAccountJson() {
+		return this.serviceAccountJson;
+	}
+
+	public void setServiceAccountJson(String serviceAccountJson) {
+		this.serviceAccountJson = serviceAccountJson;
+	}
+
+	/**
+	 * Explicit opt-in for the pasted static token. Defaults to {@code false} so a
+	 * short-lived pasted value is never the production credential; local runs and tests
+	 * must ask for it deliberately.
+	 */
+	public boolean isAllowStaticAccessToken() {
+		return this.allowStaticAccessToken;
+	}
+
+	public void setAllowStaticAccessToken(boolean allowStaticAccessToken) {
+		this.allowStaticAccessToken = allowStaticAccessToken;
+	}
+
 	public int getMaxAttempts() {
 		return this.maxAttempts;
 	}
 
 	public void setMaxAttempts(int maxAttempts) {
+		if (maxAttempts < 1) {
+			throw new IllegalArgumentException("maxAttempts must be >= 1");
+		}
 		this.maxAttempts = maxAttempts;
 	}
 
@@ -53,6 +84,9 @@ public class NotificationDeliveryConfiguration {
 	}
 
 	public void setMinRetrySeconds(int minRetrySeconds) {
+		if (minRetrySeconds < 1) {
+			throw new IllegalArgumentException("minRetrySeconds must be >= 1");
+		}
 		this.minRetrySeconds = minRetrySeconds;
 	}
 
@@ -61,6 +95,9 @@ public class NotificationDeliveryConfiguration {
 	}
 
 	public void setTtlHours(int ttlHours) {
+		if (ttlHours < 1) {
+			throw new IllegalArgumentException("ttlHours must be >= 1");
+		}
 		this.ttlHours = ttlHours;
 	}
 

@@ -137,6 +137,18 @@ OWNED_EXACT = {
     "src/screens/StartupScreen.tsx": SHELL_STARTUP,
 }
 
+MANAGED_PATHS = (
+    "App.tsx",
+    *OWNED_EXACT,
+    "__tests__/App.test.tsx",
+    ".prettierignore",
+    "jest.config.js",
+    "package.json",
+    "app.json",
+    "tsconfig.json",
+    ".git",
+)
+
 REQUIRED_SCRIPTS = {
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
@@ -155,7 +167,7 @@ RNTL_PACKAGE = "@testing-library/react-native"
 RNTL_VERSION = "14.0.1"
 RENDERER_PACKAGE = "test-renderer"
 
-APPLICATION_ID_RE = re.compile(r'applicationId\s+["\']([^"\']+)["\']')
+APPLICATION_ID_RE = re.compile(r'applicationId\s*(?:=\s*)?["\']([^"\']+)["\']')
 BUNDLE_ID_RE = re.compile(r"PRODUCT_BUNDLE_IDENTIFIER\s*=\s*([^;]+);")
 
 
@@ -178,6 +190,15 @@ def _write_text(path: Path, text: str) -> None:
 def _rel(root: Path, path: Path) -> str:
     return path.resolve().relative_to(root.resolve()).as_posix()
 
+
+
+def _has_symlink_component(root: Path, rel: str) -> bool:
+    current = root
+    for part in rel.split("/"):
+        current /= part
+        if current.is_symlink():
+            return True
+    return False
 
 def _tool(name: str) -> str:
     found = shutil.which(name)
@@ -351,6 +372,7 @@ def _complete(mobile: Path, pkg: dict | None) -> bool:
         "__tests__/App.test.tsx",
         ".prettierignore",
         "package.json",
+        "app.json",
         "tsconfig.json",
     )
     if any(not (mobile / rel).is_file() for rel in required):
@@ -384,10 +406,19 @@ def _complete(mobile: Path, pkg: dict | None) -> bool:
 
 def _classify(root: Path) -> tuple[str, list[str]]:
     mobile = root / "mobile"
+    if mobile.is_symlink():
+        return STATE_COLLISION, ["mobile"]
     if not mobile.exists():
         return STATE_ABSENT, []
     if not mobile.is_dir():
         return STATE_COLLISION, ["mobile"]
+    collisions = [
+        f"mobile/{rel}"
+        for rel in MANAGED_PATHS
+        if _has_symlink_component(root, f"mobile/{rel}")
+    ]
+    if collisions:
+        return STATE_COLLISION, collisions
     files = _substantive_files(mobile)
     if not files:
         return STATE_EMPTY, []
@@ -434,12 +465,12 @@ def _ensure_tsconfig(mobile: Path, *, overwrite_conditions: bool) -> None:
         compiler = {}
         data["compilerOptions"] = compiler
     changed = False
-    if "strict" not in compiler or overwrite_conditions:
-        if compiler.get("strict") is not True:
-            compiler["strict"] = True
-            changed = True
-    if overwrite_conditions or "customConditions" not in compiler:
-        if compiler.get("customConditions") != ["react-native-strict-api"]:
+    if compiler.get("strict") is not True:
+        compiler["strict"] = True
+        changed = True
+    conditions = compiler.get("customConditions")
+    if overwrite_conditions or not isinstance(conditions, list) or "react-native-strict-api" not in conditions:
+        if conditions != ["react-native-strict-api"]:
             compiler["customConditions"] = ["react-native-strict-api"]
             changed = True
     if changed or not path.is_file():
@@ -487,12 +518,16 @@ def _drop_rtr(mobile: Path, pkg: dict | None) -> None:
         _run([_tool("npm"), "uninstall", *drop], mobile)
 
 
-def _apply_display_name(mobile: Path) -> None:
+def _apply_display_name(mobile: Path, *, overwrite: bool = False) -> None:
     path = mobile / "app.json"
-    data = _load_json(path)
-    if data is not None and data.get("displayName") != APP_TITLE:
-        data["displayName"] = APP_TITLE
-        _dump_json(path, data)
+    if not path.is_file():
+        data = {"name": PROJECT_NAME, "displayName": APP_TITLE}
+    else:
+        data = _load_json(path) or {"name": PROJECT_NAME}
+        if not overwrite:
+            return
+    data["displayName"] = APP_TITLE
+    _dump_json(path, data)
     strings = mobile / "android" / "app" / "src" / "main" / "res" / "values" / "strings.xml"
     if strings.is_file():
         text = strings.read_text(encoding="utf-8")
@@ -605,7 +640,7 @@ def _generate(root: Path) -> None:
     env["CI"] = "1"
     _run(cmd, root, env=env)
     _apply_shell(mobile, overwrite=True)
-    _apply_display_name(mobile)
+    _apply_display_name(mobile, overwrite=True)
     _ensure_tsconfig(mobile, overwrite_conditions=True)
     pkg = _patch_package(mobile, greenfield=True)
     prod, dev, exact = _missing_packages(pkg)
@@ -622,6 +657,7 @@ def _generate(root: Path) -> None:
 
 def _reconcile_partial(mobile: Path) -> None:
     _apply_shell(mobile, overwrite=False)
+    _apply_display_name(mobile)
     _ensure_tsconfig(mobile, overwrite_conditions=False)
     pkg = _patch_package(mobile, greenfield=False)
     prod, dev, exact = _missing_packages(pkg)

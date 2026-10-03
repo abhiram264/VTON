@@ -183,10 +183,14 @@ describe('ShareImportResolver', () => {
     const importPostIndex = fetchMock.mock.calls.findIndex(
       (call) => requestUrl(call[0]).endsWith('/share/imports'),
     );
+    const releaseOrder = releaseStagedImage.mock.invocationCallOrder[0];
+    const importPostOrder = fetchMock.mock.invocationCallOrder[importPostIndex];
+    expect(releaseOrder).toBeGreaterThan(fetchMock.mock.invocationCallOrder[3]);
+    expect(releaseOrder).toBeLessThan(importPostOrder);
     expect(importPostIndex).toBeGreaterThan(0);
   });
 
-  it('releases once and sends no import POST when upload completion fails', async () => {
+  it('preserves the staged image on retryable upload completion failure and sends no import POST', async () => {
     fetchMock
       .mockImplementationOnce(() => stagedFileFetch('image/jpeg'))
       .mockResolvedValueOnce(ticketResponse())
@@ -197,11 +201,50 @@ describe('ShareImportResolver', () => {
       resolver(imagePayload, new AbortController().signal),
     ).rejects.toThrow();
 
-    expect(releaseStagedImage).toHaveBeenCalledTimes(1);
+    expect(releaseStagedImage).not.toHaveBeenCalled();
     const importPost = fetchMock.mock.calls.find(
       (call) => requestUrl(call[0]).endsWith('/share/imports'),
     );
     expect(importPost).toBeUndefined();
+  });
+
+  test.each([400, 415, 422])(
+    'releases staged media for terminal upload status %s',
+    async status => {
+      fetchMock
+        .mockImplementationOnce(() => stagedFileFetch('image/jpeg'))
+        .mockResolvedValueOnce(ticketResponse())
+        .mockResolvedValueOnce(emptyResponse(200))
+        .mockResolvedValueOnce(emptyResponse(status));
+      const resolver = makeResolver(fetchMock, {releaseStagedImage});
+
+      await expect(
+        resolver(imagePayload, new AbortController().signal),
+      ).rejects.toThrow();
+      expect(releaseStagedImage).toHaveBeenCalledTimes(1);
+      expect(
+        fetchMock.mock.calls.some(call => requestUrl(call[0]).endsWith('/share/imports')),
+      ).toBe(false);
+    },
+  );
+
+  it('maps unsupported staged media to a terminal typed error and releases once', async () => {
+    fetchMock.mockImplementationOnce(() =>
+      fileResponse(PHOTO_BYTES, 'application/octet-stream'),
+    );
+    const resolver = makeResolver(fetchMock, {releaseStagedImage});
+
+    await expect(
+      resolver(
+        { kind: 'image', localImageUri: 'file:///photo.bin' },
+        new AbortController().signal,
+      ),
+    ).rejects.toMatchObject({
+      name: 'ApiProblemError',
+      code: 'UNSUPPORTED_STAGED_IMAGE_TYPE',
+    });
+    expect(releaseStagedImage).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
   it('replays the retained uploadId on retry without re-reading or re-uploading', async () => {
     fetchMock
@@ -248,7 +291,54 @@ describe('ShareImportResolver', () => {
     expect(releaseStagedImage).toHaveBeenCalledTimes(1);
   });
 
-  it('releases once and sends no import POST when the upload ticket PUT fails', async () => {
+  it('replays durable upload identity and Idempotency-Key across retry after response loss', async () => {
+    fetchMock
+      .mockImplementationOnce(() => stagedFileFetch('image/jpeg'))
+      .mockResolvedValueOnce(ticketResponse())
+      .mockResolvedValueOnce(emptyResponse(200))
+      .mockResolvedValueOnce(emptyResponse(200))
+      .mockRejectedValueOnce(new Error('Network response lost'))
+      .mockResolvedValueOnce(jsonResponse(201, {
+        importId: IMPORT_ID,
+        status: 'READY',
+      }));
+    const resolver = makeResolver(fetchMock, {releaseStagedImage});
+    const signal = new AbortController().signal;
+
+    await expect(resolver(imagePayload, signal)).rejects.toThrow('Network response lost');
+
+    const result = await resolver(imagePayload, signal);
+    expect(result).toEqual({importId: IMPORT_ID, status: 'READY'});
+
+    // 1 staged read + 3 upload calls + 2 import POSTs (initial failed POST + retry POST) = 6 calls
+    expect(fetchMock).toHaveBeenCalledTimes(6);
+
+    const stagedReads = fetchMock.mock.calls.filter(
+      (call) => requestUrl(call[0]) === LOCAL_URI,
+    );
+    expect(stagedReads).toHaveLength(1);
+
+    const importPosts = fetchMock.mock.calls.filter(
+      (call) => requestUrl(call[0]).endsWith('/share/imports'),
+    );
+    expect(importPosts).toHaveLength(2);
+    expect(JSON.parse(importPosts[0][1].body)).toEqual({
+      kind: 'IMAGE',
+      uploadId: UPLOAD_ID,
+    });
+    expect(JSON.parse(importPosts[1][1].body)).toEqual({
+      kind: 'IMAGE',
+      uploadId: UPLOAD_ID,
+    });
+
+    const keys = importPosts.map(
+      (call) => call[1].headers['Idempotency-Key'],
+    );
+    expect(keys[0]).toBe(keys[1]);
+    expect(releaseStagedImage).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves the staged image on retryable upload ticket PUT failure', async () => {
     fetchMock
       .mockImplementationOnce(() => stagedFileFetch('image/jpeg'))
       .mockResolvedValueOnce(ticketResponse())
@@ -257,10 +347,10 @@ describe('ShareImportResolver', () => {
     await expect(
       resolver(imagePayload, new AbortController().signal),
     ).rejects.toThrow('Upload failed');
-    expect(releaseStagedImage).toHaveBeenCalledTimes(1);
+    expect(releaseStagedImage).not.toHaveBeenCalled();
   });
 
-  it('releases once and sends no import POST when the ticket initiate fails', async () => {
+  it('preserves the staged image on retryable ticket initiate failure', async () => {
     fetchMock
       .mockImplementationOnce(() => stagedFileFetch('image/jpeg'))
       .mockResolvedValueOnce(emptyResponse(500));
@@ -268,8 +358,20 @@ describe('ShareImportResolver', () => {
     await expect(
       resolver(imagePayload, new AbortController().signal),
     ).rejects.toThrow();
-    expect(releaseStagedImage).toHaveBeenCalledTimes(1);
+    expect(releaseStagedImage).not.toHaveBeenCalled();
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('releases the staged image once when aborted before upload', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const resolver = makeResolver(fetchMock, {releaseStagedImage});
+    await expect(
+      resolver(imagePayload, controller.signal),
+    ).rejects.toThrow('Aborted');
+    expect(releaseStagedImage).toHaveBeenCalledTimes(1);
+    expect(releaseStagedImage).toHaveBeenCalledWith(LOCAL_URI);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('never releases anything in the URL-only flow', async () => {

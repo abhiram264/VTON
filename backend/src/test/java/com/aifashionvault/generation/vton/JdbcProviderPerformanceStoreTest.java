@@ -17,6 +17,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -271,6 +272,34 @@ class JdbcProviderPerformanceStoreTest {
 		assertThat(store.snapshot(fullWindowQuery()).rows()).isEqualTo(firstRows);
 		assertThat(countDailyRows()).isEqualTo(firstRowCount);
 		assertThat(sumSampleCounts()).isEqualTo(firstSampleSum);
+	}
+
+	@Test
+	void failedReplacementInsertPreservesPriorRollup() {
+		seedTwoDayMatrix();
+		store.recompute(WINDOW_START, WINDOW_END);
+		List<ProviderPerformanceRow> priorRows = store.snapshot(fullWindowQuery()).rows();
+
+		UUID userId = insertUser();
+		UUID jobId = insertJob(userId);
+		insertAttempt(jobId, 1, "provider-b", "m1", null, DAY_ONE, 100, "SUCCESS",
+			"FINAL", null, new BigDecimal("-1.00"), "USD");
+
+		assertThatThrownBy(() -> store.recompute(WINDOW_START, WINDOW_END))
+			.isInstanceOf(DataIntegrityViolationException.class);
+		assertThat(store.snapshot(fullWindowQuery()).rows()).isEqualTo(priorRows);
+	}
+	@Test
+	void v024RejectsInvalidProviderAggregateCounts() {
+		assertThatThrownBy(() -> jdbc.update(
+			"INSERT INTO generation_provider_performance_daily "
+				+ "(provider_key, model_or_mode, category, bucket_day, currency_key, sample_count, "
+				+ "technical_success_count, quality_evaluated_count, quality_approved_count, fidelity_axis_sum, "
+				+ "fidelity_sample_count, latency_sum_ms, latency_sample_count, known_cost_total, known_cost_count, "
+				+ "last_recomputed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			"invalid-provider", "m", "tops", java.sql.Date.valueOf(DAY_ONE.atZone(ZoneOffset.UTC).toLocalDate()), "USD",
+			0L, -1L, 0L, 0L, BigDecimal.ZERO, 0L, 0L, 0L, null, 0L, Timestamp.from(NOW)))
+			.isInstanceOf(DataIntegrityViolationException.class);
 	}
 
 	@Test

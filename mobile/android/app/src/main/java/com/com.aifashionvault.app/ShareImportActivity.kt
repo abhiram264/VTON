@@ -12,9 +12,7 @@ import com.aifashionvault.app.share.ShareImageStager
 import com.aifashionvault.app.share.ShareInputResolver
 import com.aifashionvault.app.share.SharePayload
 import com.aifashionvault.app.share.ShareRuntime
-import java.io.File
 import java.io.FileOutputStream
-import java.util.UUID
 
 /**
  * Non-RN share receiver. Advertised for ACTION_SEND text/plain and image MIME (manifest). It
@@ -35,29 +33,43 @@ import java.util.UUID
 class ShareImportActivity : Activity() {
 
   @Volatile private var staging = false
+  @Volatile private var workState = ShareReceiverLifecycle.WorkState.UNFINISHED
   private var finished = false
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
-    if (!ShareReceiverLifecycle.shouldProcessIntent(savedInstanceState != null)) {
-      // Recreation (config change or process restore) of an already-handled intent:
-      // re-processing would double-store and double-launch the handoff. Any in-flight
-      // staging job belonged to the destroyed instance; its terminal steps are
-      // suppressed there (see ShareReceiverLifecycle.terminalStepSuppressed).
+    val restoredWork =
+        savedInstanceState?.getString(STATE_WORK)?.let { value ->
+          runCatching { ShareReceiverLifecycle.WorkState.valueOf(value) }.getOrNull()
+        }
+    if (savedInstanceState != null && restoredWork == null) {
+      failAndFinish(ShareInputResolver.Reason.NO_VALID_CONTENT)
+      return
+    }
+    if (!ShareReceiverLifecycle.shouldProcessIntent(restoredWork)) {
+      if (restoredWork == ShareReceiverLifecycle.WorkState.UNFINISHED) {
+        fail(ShareInputResolver.Reason.NO_VALID_CONTENT)
+      }
       finishOnce()
       return
     }
     handleIntent(intent)
   }
 
+  override fun onSaveInstanceState(outState: Bundle) {
+    outState.putString(STATE_WORK, workState.name)
+    super.onSaveInstanceState(outState)
+  }
+
   override fun onNewIntent(intent: Intent) {
     super.onNewIntent(intent)
-    setIntent(intent)
-    if (staging) {
-      // A staging job owns this instance's grant; a second intent must not double-launch.
+    if (!ShareReceiverLifecycle.shouldAcceptNewIntent(isStaging = staging)) {
+      // Preserve A: do not replace the grant-bearing first intent. B has no durable queue or
+      // acknowledgement seam, so reject it explicitly until the cross-language protocol lands.
       fail(ShareInputResolver.Reason.NOT_SEND_ACTION)
       return
     }
+    setIntent(intent)
     handleIntent(intent)
   }
 
@@ -67,27 +79,33 @@ class ShareImportActivity : Activity() {
       failAndFinish(ShareInputResolver.Reason.NOT_SEND_ACTION)
       return
     }
-    val streamUri = extractStreamUri(intent)
-    val clipUris = extractClipUris(intent)
-    val resolution =
-        ShareInputResolver.resolve(
-            ShareInputResolver.Inputs(
-                action = intent.action,
-                text = intent.getCharSequenceExtra(Intent.EXTRA_TEXT),
-                streamUri = streamUri,
-                clipUris = clipUris,
-            ))
-    when (resolution) {
-      is ShareInputResolver.Resolution.Rejected -> failAndFinish(resolution.reason)
-      is ShareInputResolver.Resolution.Accepted -> {
-        val url = resolution.url
-        val imageUri = resolution.imageUri
-        when {
-          imageUri != null && url != null -> stageAndStore(imageUri, url)
-          imageUri != null -> stageAndStore(imageUri, null)
-          url != null -> store(SharePayload.Url(url, senderPackage(intent)))
+    try {
+      val streamUri = extractStreamUri(intent)
+      val clipUris = extractClipUris(intent)
+      val resolution =
+          ShareInputResolver.resolve(
+              ShareInputResolver.Inputs(
+                  action = intent.action,
+                  text = intent.getCharSequenceExtra(Intent.EXTRA_TEXT),
+                  streamUri = streamUri,
+                  clipUris = clipUris,
+                  clipItemCount = intent.clipData?.itemCount ?: 0,
+              ))
+      when (resolution) {
+        is ShareInputResolver.Resolution.Rejected -> failAndFinish(resolution.reason)
+        is ShareInputResolver.Resolution.Accepted -> {
+          val url = resolution.url
+          val imageUri = resolution.imageUri
+          when {
+            imageUri != null && url != null -> stageAndStore(imageUri, url)
+            imageUri != null -> stageAndStore(imageUri, null)
+            url != null -> store(SharePayload.Url(url, senderPackage(intent)))
+          }
         }
       }
+    } catch (_: Exception) {
+      // Exported activities receive cross-process extras; malformed parcelables must not crash.
+      failAndFinish(ShareInputResolver.Reason.NO_VALID_CONTENT)
     }
   }
 
@@ -104,7 +122,13 @@ class ShareImportActivity : Activity() {
       // A ClipData with no MIME types cannot carry a grant-aware share; ignore it.
       return emptyList()
     }
-    return (0 until clip.itemCount).mapNotNull { i -> clip.getItemAt(i)?.uri?.toString() }
+    val uris = ArrayList<String>(2)
+    for (i in 0 until clip.itemCount) {
+      val uri = clip.getItemAt(i)?.uri ?: continue
+      uris.add(uri.toString())
+      if (uris.size == 2) break
+    }
+    return uris
   }
 
   /**
@@ -124,7 +148,7 @@ class ShareImportActivity : Activity() {
     // Background dispatcher: header inspection and copying never run on the UI thread. The
     // activity must stay alive (no finish) while this runs so the read grant is still valid.
     ShareRuntime.stagingExecutor.execute {
-      val stagedFile = File(cacheDir, "share-staging/${UUID.randomUUID()}")
+      val stagedFile = ShareRuntime.newStagedFile(applicationContext)
       try {
         stagedFile.parentFile?.mkdirs()
         val source = resolveSourceStream(contentUri)
@@ -148,19 +172,16 @@ class ShareImportActivity : Activity() {
                 // Terminal steps on the UI thread.
                 runOnUiThread {
                   if (terminalStepSuppressed()) {
-                    // Orphaned instance (destroyed mid-staging): never launch a handoff
-                    // from it; delete the staged file. The pending entry is reclaimed by
-                    // TTL cleanup.
-                    stagedFile.delete()
+                    // Keep the stored metadata and its staged bytes paired. This receiver has no
+                    // durable claim/ack seam from which a destroyed instance could safely relaunch.
                     return@runOnUiThread
                   }
                   try {
                     launchHandoff(put.pending.shareId)
                   } catch (_: Exception) {
-                    // Launch failure still finishes the receiver; the staged file must
-                    // not leak.
-                    stagedFile.delete()
+                    // Preserve the durable metadata/file pair for a future recovery policy.
                   }
+                  workState = ShareReceiverLifecycle.WorkState.COMPLETED
                   finishOnce()
                 }
               }
@@ -200,6 +221,7 @@ class ShareImportActivity : Activity() {
         } catch (_: Exception) {
           // Launch failure still finishes the receiver.
         }
+        workState = ShareReceiverLifecycle.WorkState.COMPLETED
         finishOnce()
       }
       else -> failAndFinish(ShareInputResolver.Reason.NO_VALID_CONTENT)
@@ -239,6 +261,7 @@ class ShareImportActivity : Activity() {
   private fun finishOnUiThread(reason: ShareInputResolver.Reason) {
     runOnUiThread {
       if (terminalStepSuppressed()) return@runOnUiThread
+      workState = ShareReceiverLifecycle.WorkState.COMPLETED
       fail(reason)
       finishOnce()
     }
@@ -249,6 +272,7 @@ class ShareImportActivity : Activity() {
       ShareReceiverLifecycle.terminalStepSuppressed(isFinishing, isDestroyed)
 
   private fun failAndFinish(reason: ShareInputResolver.Reason) {
+    workState = ShareReceiverLifecycle.WorkState.COMPLETED
     fail(reason)
     finishOnce()
   }
@@ -261,6 +285,7 @@ class ShareImportActivity : Activity() {
   }
 
   companion object {
+    private const val STATE_WORK = "share_work_state"
     const val ACTION_VIEW_HANDOFF = "android.intent.action.VIEW"
   }
 }
@@ -268,8 +293,8 @@ class ShareImportActivity : Activity() {
 /**
  * Pure lifecycle decisions for the share receiver, extracted for JVM testing.
  *
- * [shouldProcessIntent] — recreation of an already-handled intent (non-null saved state)
- * must not re-process it; only a genuinely fresh delivery does.
+ * [shouldProcessIntent] — only a genuinely fresh delivery may be processed. Restored unfinished
+ * work fails closed; restored completed work finishes without a duplicate handoff.
  *
  * [terminalStepSuppressed] — terminal UI steps (toast, finish, handoff launch) must not run
  * on a finishing/destroyed instance: they would crash or launch a handoff from an orphaned
@@ -277,7 +302,14 @@ class ShareImportActivity : Activity() {
  */
 object ShareReceiverLifecycle {
 
-  fun shouldProcessIntent(hasSavedInstanceState: Boolean): Boolean = !hasSavedInstanceState
+  enum class WorkState { UNFINISHED, COMPLETED }
+
+  fun shouldProcessIntent(restoredWork: WorkState?): Boolean = restoredWork == null
+
+  fun shouldAcceptNewIntent(isStaging: Boolean): Boolean = !isStaging
+
+  fun shouldFailRestoredWork(restoredWork: WorkState): Boolean =
+      restoredWork == WorkState.UNFINISHED
 
   fun terminalStepSuppressed(isFinishing: Boolean, isDestroyed: Boolean): Boolean =
       isFinishing || isDestroyed

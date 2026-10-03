@@ -23,6 +23,7 @@ import java.util.UUID
  */
 class PendingShareStore(
     private val metaDir: File,
+    private val stagingDir: File = metaDir.parentFile ?: metaDir,
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
 
@@ -42,12 +43,16 @@ class PendingShareStore(
     data object NotFound : ConsumeResult
 
     data object Expired : ConsumeResult
-
     data object InvalidPayload : ConsumeResult
   }
 
   init {
     metaDir.mkdirs()
+    cleanupTempFiles()
+  }
+
+  private fun cleanupTempFiles() {
+    metaDir.listFiles { file -> file.isFile && file.name.endsWith(".tmp") }?.forEach { it.delete() }
   }
 
   fun newShareId(): String = UUID.randomUUID().toString()
@@ -58,7 +63,10 @@ class PendingShareStore(
    */
   @Synchronized
   fun put(payload: SharePayload): PutResult {
-    if (!SharePayloadValidator.isValid(payload)) return PutResult.InvalidPayload
+    if (!SharePayloadValidator.isValid(payload) || !isWithinStaging(payload)) {
+      return PutResult.InvalidPayload
+    }
+    cleanupTempFiles()
     purgeExpired()
     val entries = listEntries()
     if (entries.size >= ShareLimits.MAX_PENDING_SHARES) return PutResult.StoreFull
@@ -83,29 +91,26 @@ class PendingShareStore(
     if (shareId == null || !isCanonicalUuid(shareId)) return ConsumeResult.InvalidShareId
     purgeExpired()
     val metaFile = fileFor(shareId)
-    if (!metaFile.exists()) {
-      return if (isCanonicalUuid(shareId)) ConsumeResult.NotFound else ConsumeResult.InvalidShareId
-    }
-    val pending =
-        PendingShareCodec.decode(metaFile.readText())
-            ?: run {
-              // Unparseable entry: treat as invalid payload but still remove it.
-              metaFile.delete()
-              return ConsumeResult.InvalidPayload
-            }
-    if (!SharePayloadValidator.isValid(pending.payload)) {
+    if (!metaFile.exists()) return ConsumeResult.NotFound
+    val pending = readPending(metaFile) ?: run {
       metaFile.delete()
       return ConsumeResult.InvalidPayload
     }
-    if (clock() - pending.createdAtEpochMillis > ShareLimits.PENDING_SHARE_TTL_MS) {
-      // Expired between purge and read; clean up now.
+    if (!isCanonicalUuid(pending.shareId) || pending.shareId != shareId) {
       metaFile.delete()
-      stagedFileFor(pending.payload)?.delete()
+      return ConsumeResult.InvalidPayload
+    }
+    if (pending.createdAtEpochMillis > clock() ||
+        !SharePayloadValidator.isValid(pending.payload) ||
+        !isWithinStaging(pending.payload)) {
+      deleteEntry(metaFile, pending)
+      return ConsumeResult.InvalidPayload
+    }
+    if (clock() - pending.createdAtEpochMillis > ShareLimits.PENDING_SHARE_TTL_MS) {
+      deleteEntry(metaFile, pending)
       return ConsumeResult.Expired
     }
-    if (!metaFile.delete()) {
-      return ConsumeResult.NotFound
-    }
+    if (!metaFile.delete()) return ConsumeResult.NotFound
     return ConsumeResult.Consumed(pending)
   }
 
@@ -116,30 +121,71 @@ class PendingShareStore(
     var purged = 0
     val files = metaDir.listFiles { f -> f.isFile && f.name.endsWith(".json") } ?: emptyArray()
     for (metaFile in files) {
-      val pending = PendingShareCodec.decode(metaFile.readText()) ?: continue
-      if (now - pending.createdAtEpochMillis > ShareLimits.PENDING_SHARE_TTL_MS) {
-        stagedFileFor(pending.payload)?.delete()
-        if (metaFile.delete()) purged++
+      val pending = readPending(metaFile) ?: continue
+      val fileShareId = metaFile.name.removeSuffix(".json")
+      if (!isValidEntry(pending, fileShareId, now)) continue
+      if (now - pending.createdAtEpochMillis > ShareLimits.PENDING_SHARE_TTL_MS &&
+          deleteEntry(metaFile, pending)) {
+        purged++
       }
     }
     return purged
   }
 
+  @Synchronized
+  fun isStagedFileReferenced(uri: String?): Boolean {
+    val target = StagedImagePaths.stagedFile(stagingDir, uri) ?: return false
+    purgeExpired()
+    return listEntries().any { stagedFileFor(it.payload)?.canonicalFile == target }
+  }
+
   fun size(): Int = listEntries().size
 
   private fun listEntries(): List<PendingShare> {
+    val now = clock()
     val files = metaDir.listFiles { f -> f.isFile && f.name.endsWith(".json") } ?: return emptyList()
-    return files.mapNotNull { PendingShareCodec.decode(it.readText()) }
+    return files.mapNotNull { metaFile ->
+      val pending = readPending(metaFile) ?: return@mapNotNull null
+      val fileShareId = metaFile.name.removeSuffix(".json")
+      pending.takeIf { isValidEntry(it, fileShareId, now) }
+    }
+  }
+
+  private fun readPending(metaFile: File): PendingShare? =
+      try {
+        PendingShareCodec.decode(metaFile.readText())
+      } catch (_: Exception) {
+        null
+      }
+
+  private fun isValidEntry(pending: PendingShare, expectedShareId: String, now: Long): Boolean =
+      isCanonicalUuid(pending.shareId) &&
+          pending.shareId == expectedShareId &&
+          pending.createdAtEpochMillis <= now
+
+  private fun deleteEntry(metaFile: File, pending: PendingShare): Boolean {
+    val stagedFile = stagedFileFor(pending.payload)
+    if (stagedFile != null && !stagedFile.delete() && stagedFile.exists()) return false
+    return metaFile.delete()
   }
 
   private fun fileFor(shareId: String) = File(metaDir, "$shareId.json")
 
-  private fun stagedFileFor(payload: SharePayload): File? =
+  private fun isWithinStaging(payload: SharePayload): Boolean =
       when (payload) {
-        is SharePayload.Image -> File(java.net.URI(payload.localImageUri).path)
-        is SharePayload.ImageUrl -> File(java.net.URI(payload.localImageUri).path)
-        is SharePayload.Url -> null
+        is SharePayload.Url -> true
+        is SharePayload.Image -> stagedFileFor(payload) != null
+        is SharePayload.ImageUrl -> stagedFileFor(payload) != null
       }
+
+  private fun stagedFileFor(payload: SharePayload): File? {
+    val localImageUri = when (payload) {
+      is SharePayload.Url -> return null
+      is SharePayload.Image -> payload.localImageUri
+      is SharePayload.ImageUrl -> payload.localImageUri
+    }
+    return StagedImagePaths.stagedFile(stagingDir, localImageUri)
+  }
 }
 
 

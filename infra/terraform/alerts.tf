@@ -1,9 +1,22 @@
 # Terraform code only — apply prohibited for slice-68.
+resource "terraform_data" "region_availability_zones" {
+  input = var.aws_region
+
+  lifecycle {
+    precondition {
+      condition = length(var.availability_zones) >= 2 && alltrue([
+        for zone in var.availability_zones : can(regex("${var.aws_region}[a-z]$", zone))
+      ])
+      error_message = "availability_zones must contain at least two zones belonging to aws_region."
+    }
+  }
+}
 
 module "alerts" {
   source = "../alerts"
 
   environment                 = var.environment
+  metric_namespace            = var.metric_namespace
   alb_arn_suffix              = aws_lb.api.arn_suffix
   alb_target_group_arn_suffix = aws_lb_target_group.api.arn_suffix
   ecs_cluster_name            = aws_ecs_cluster.vault.name
@@ -12,10 +25,10 @@ module "alerts" {
   generation_queue_name       = aws_sqs_queue.generation_work.name
   media_bucket_name           = aws_s3_bucket.temp.id
 
-  # Operators set severity email lists at apply time (spec default).
-  operator_emails_p0 = []
-  operator_emails_p1 = []
-  operator_emails_p2 = []
+  # Optional operator email subscriptions; empty defaults create no email subscription.
+  operator_emails_p0 = var.operator_emails_p0
+  operator_emails_p1 = var.operator_emails_p1
+  operator_emails_p2 = var.operator_emails_p2
 
   # Verbatim from ShareImportConfiguration resolver registrations.
   source_resolver_ids = ["SHARED_IMAGE", "GENERIC_OPEN_GRAPH", "GENERIC_URL"]

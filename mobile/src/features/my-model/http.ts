@@ -1,4 +1,8 @@
 import type { AvatarApiConfig } from './types';
+// A hung socket must not hang the caller forever, so every request is
+// bounded. AbortController + setTimeout only: no new dependency.
+const REQUEST_TIMEOUT_MS = 30_000;
+
 
 export type UploadTicket = {
   id: string;
@@ -49,34 +53,62 @@ export async function apiRequest(
   if (token) {
     headers.Authorization = `Bearer ${token}`;
   }
-  return fetch(`${config.baseUrl.replace(/\/+$/, '')}${path}`, {
-    method: init.method,
-    headers,
-    body: init.body,
-  });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    return await fetch(`${config.baseUrl.replace(/\/+$/, '')}${path}`, {
+      method: init.method,
+      headers,
+      body: init.body,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new Error(`Request timed out after ${REQUEST_TIMEOUT_MS}ms: ${path}`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
-async function readJson(response: Response): Promise<unknown> {
-  if (response.status === 204) {
-    return null;
+async function extractProblemCode(response: Response): Promise<string | null> {
+  try {
+    const contentType = response.headers?.get?.('content-type') ?? '';
+    if (contentType && !contentType.includes('application/json') && !contentType.includes('+json')) {
+      return null;
+    }
+    const payload = await response.json();
+    if (payload !== null && typeof payload === 'object' && 'code' in payload) {
+      const code = payload.code;
+      if (typeof code === 'string') {
+        return code;
+      }
+    }
+  } catch {
+    // Body is empty or unparsable non-JSON
   }
-  return response.json();
+  return null;
 }
 
 export async function requireOk(response: Response): Promise<unknown> {
-  const payload = await readJson(response);
   if (response.ok) {
-    return payload;
+    if (response.status === 204) {
+      return null;
+    }
+    return response.json();
   }
-  if (
-    payload !== null &&
-    typeof payload === 'object' &&
-    'code' in payload &&
-    typeof (payload as { code: unknown }).code === 'string'
-  ) {
-    throw new ApiProblemError((payload as { code: string }).code);
+
+  const problemCode = await extractProblemCode(response);
+  if (problemCode) {
+    throw new ApiProblemError(problemCode);
   }
-  throw new Error('Request failed');
+
+  if (response.status === 401) {
+    throw new ApiProblemError('UNAUTHORIZED');
+  }
+
+  throw new ApiProblemError(`HTTP_${response.status}`);
 }
 
 // Shared initiate -> direct private PUT -> complete upload path. Media bytes

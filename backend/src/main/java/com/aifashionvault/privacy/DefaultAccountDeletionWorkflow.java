@@ -54,15 +54,16 @@ public final class DefaultAccountDeletionWorkflow implements AccountDeletionWork
 		AccountDeletionStatus status = held.status();
 		while (status.nextStep() != AccountDeletionStep.COMPLETE) {
 			AccountDeletionStep step = status.nextStep();
+			PrivacyDeletionPort port = ports.get(step);
 			try {
-				ports.get(step).execute(owner);
-				status = store.advance(status.workflowId(), held.token(), step, NEXT.get(step), clock.instant());
+				port.execute(owner);
 			}
 			catch (RuntimeException failure) {
 				String safeCode = failure instanceof PrivacyDeletionException privacyFailure
 						? privacyFailure.safeCode() : "PRIVACY_STEP_FAILED";
 				return store.fail(status.workflowId(), held.token(), step, safeCode, clock.instant());
 			}
+			status = store.advance(status.workflowId(), held.token(), step, NEXT.get(step), clock.instant());
 		}
 		return status;
 	}

@@ -10,13 +10,13 @@ import { Linking, NativeModules } from 'react-native';
 import ShareImportScreen from '../src/screens/ShareImportScreen';
 import type { ShareImportResolver } from '../src/features/share/importTypes';
 import type { ShareImportResponse } from '../src/features/share/importTypes';
+import { ApiProblemError } from '../src/features/my-model/http';
 import { validateSharePayload } from '../src/features/share/types';
+import { startShareLinkHandling } from '../src/features/share/linkHandler';
 
 // Lowercase canonical UUIDs per the frozen handoff URI seam. linkHandler
 // remembers consumed ids for the process lifetime (spec dedupe), so every
 // routing test draws fresh ids via freshShareId() to stay order-independent.
-const SHARE_ID_A = '3f2504e0-4f89-11d3-9a0c-0305e82c3301';
-const SHARE_ID_B = 'b1d3e4a5-6c7f-4a2b-9d8e-0f1a2b3c4d5e';
 let shareIdCounter = 0;
 function freshShareId(): string {
   shareIdCounter += 1;
@@ -121,9 +121,8 @@ function ticketResponse(): Promise<Response> {
 }
 
 beforeEach(() => {
-  // Routing tests must stay on the preparing surface: keep any in-flight
-  // import request pending forever instead of letting it reject into a
-  // failure view. Flow tests below replace this with their fetchMock.
+  // Routing tests use the mounted fail-closed API config; do not fabricate
+  // configured credentials or a pending authenticated request.
   globalThis.fetch = (() => new Promise<Response>(() => {})) as typeof fetch;
   urlListeners.length = 0;
   linkHandlerListeners.length = 0;
@@ -133,9 +132,17 @@ beforeEach(() => {
       if (eventType !== 'url') return { remove: () => undefined };
       urlListeners.push(listener);
       const stack = new Error().stack ?? '';
-      if (stack.includes('useLinking')) return { remove: () => undefined };
-      linkHandlerListeners.push(listener);
-      return { remove: () => undefined };
+      if (!stack.includes('useLinking')) {
+        linkHandlerListeners.push(listener);
+      }
+      return {
+        remove: () => {
+          const urlIndex = urlListeners.indexOf(listener);
+          if (urlIndex >= 0) urlListeners.splice(urlIndex, 1);
+          const linkIndex = linkHandlerListeners.indexOf(listener);
+          if (linkIndex >= 0) linkHandlerListeners.splice(linkIndex, 1);
+        },
+      };
     },
   );
   getInitialURLMock.mockReset();
@@ -151,10 +158,11 @@ afterEach(() => {
 
 describe('share handoff routing', () => {
   test('cold start registers the url listener before resolving the initial URL, consumes once, and navigates once', async () => {
+    const shareId = freshShareId();
     let listenersAtInitialUrl = -1;
     getInitialURLMock.mockImplementation(async () => {
       listenersAtInitialUrl = linkHandlerListeners.length;
-      return handoffUri(SHARE_ID_A);
+      return handoffUri(shareId);
     });
     consumeShareMock().mockResolvedValue({
       ok: true,
@@ -162,18 +170,19 @@ describe('share handoff routing', () => {
     });
 
     await render(<App />);
-    expect(await screen.findByText('Preparing shared item')).toBeTruthy();
+    expect(await screen.findByText('Could not prepare the shared item')).toBeTruthy();
 
     // Ordering property: our linkHandler listener was registered before the
     // initial URL was resolved (exactly one — @react-navigation's inert
     // useLinking subscription is excluded).
     expect(listenersAtInitialUrl).toBe(1);
     expect(consumeShareMock()).toHaveBeenCalledTimes(1);
-    expect(consumeShareMock()).toHaveBeenCalledWith(SHARE_ID_A);
-    expect(screen.getAllByText('Preparing shared item')).toHaveLength(1);
+    expect(consumeShareMock()).toHaveBeenCalledWith(shareId);
+    expect(screen.getAllByText('Could not prepare the shared item')).toHaveLength(1);
   });
 
   test('warm start handles the url event and routes the image_url payload to ShareImport', async () => {
+    const shareId = freshShareId();
     consumeShareMock().mockResolvedValue({
       ok: true,
       payload: {
@@ -184,15 +193,17 @@ describe('share handoff routing', () => {
     });
 
     await render(<App />);
+    await waitFor(() => expect(linkHandlerListeners).toHaveLength(1));
     expect(screen.queryByText('Preparing shared item')).toBeNull();
 
     await act(async () => {
-      emitLink(handoffUri(SHARE_ID_B));
+      emitLink(handoffUri(shareId));
     });
+    await flush();
     expect(await screen.findByText('Preparing shared item')).toBeTruthy();
 
     expect(consumeShareMock()).toHaveBeenCalledTimes(1);
-    expect(consumeShareMock()).toHaveBeenCalledWith(SHARE_ID_B);
+    expect(consumeShareMock()).toHaveBeenCalledWith(shareId);
   });
 
   test('concurrent duplicate delivery consumes and navigates at most once, and replay is ignored', async () => {
@@ -210,14 +221,14 @@ describe('share handoff routing', () => {
     });
     await waitFor(() => expect(consumeShareMock()).toHaveBeenCalledTimes(1));
     resolveConsume({ ok: true, payload: { kind: 'url', url: SOURCE_URL } });
-    expect(await screen.findByText('Preparing shared item')).toBeTruthy();
+    expect(await screen.findByText('Could not prepare the shared item')).toBeTruthy();
     await act(async () => {
       emitLink(handoffUri(shareId));
     });
     await flush();
 
     expect(consumeShareMock()).toHaveBeenCalledTimes(1);
-    expect(screen.getAllByText('Preparing shared item')).toHaveLength(1);
+    expect(screen.getAllByText('Could not prepare the shared item')).toHaveLength(1);
   });
 
   test('two distinct share ids are kept distinct and each consumes once', async () => {
@@ -239,30 +250,33 @@ describe('share handoff routing', () => {
     await act(async () => {
       emitLink(handoffUri(idA));
     });
-    expect(await screen.findByText('Preparing shared item')).toBeTruthy();
+    expect(await screen.findByText('Could not prepare the shared item')).toBeTruthy();
 
     await act(async () => {
       emitLink(handoffUri(idB));
     });
     await waitFor(() => expect(consumeShareMock()).toHaveBeenCalledTimes(2));
+    await flush();
 
     expect(consumeShareMock()).toHaveBeenCalledTimes(2);
     expect(consumeShareMock().mock.calls).toEqual([[idA], [idB]]);
+    expect(await screen.findByText('Preparing shared item')).toBeTruthy();
   });
 
   test('malformed, noncanonical, and query-carrying links never reach the native bridge or route state', async () => {
+    const shareId = freshShareId();
     await render(<App />);
 
     await act(async () => {
       emitLink(handoffUri('not-a-uuid'));
-      emitLink(handoffUri(SHARE_ID_A.toUpperCase()));
-      emitLink(`${handoffUri(SHARE_ID_A)}/extra`);
+      emitLink(handoffUri(shareId.toUpperCase()));
+      emitLink(`${handoffUri(shareId)}/extra`);
       emitLink(
-        `${handoffUri(SHARE_ID_A)}?url=${encodeURIComponent(SOURCE_URL)}`,
+        `${handoffUri(shareId)}?url=${encodeURIComponent(SOURCE_URL)}`,
       );
-      emitLink(`aifashionvault://other/${SHARE_ID_A}`);
+      emitLink(`aifashionvault://other/${shareId}`);
       emitLink('aifashionvault://share-import/');
-      emitLink(`https://example.invalid/share-import/${SHARE_ID_A}`);
+      emitLink(`https://example.invalid/share-import/${shareId}`);
     });
     await flush();
 
@@ -293,9 +307,10 @@ describe('share handoff routing', () => {
   test('a typed consume failure stays on the current screen without reconstructing or replaying data', async () => {
     consumeShareMock().mockResolvedValue({ ok: false, code: 'share_expired' });
 
+    const shareId = freshShareId();
     await render(<App />);
     await act(async () => {
-      emitLink(handoffUri(SHARE_ID_A));
+      emitLink(handoffUri(shareId));
     });
     await flush();
 
@@ -328,6 +343,45 @@ describe('share handoff routing', () => {
     expect(consumeShareMock()).toHaveBeenCalledTimes(4);
   });
 
+  test('remount updates link callbacks without replacing the active subscription', async () => {
+    const oldNavigate = jest.fn();
+    const oldLookNavigate = jest.fn();
+    const newNavigate = jest.fn();
+    const newLookNavigate = jest.fn();
+    consumeShareMock().mockResolvedValue({
+      ok: true,
+      payload: { kind: 'url', url: SOURCE_URL },
+    });
+
+    const stopOld = startShareLinkHandling(oldNavigate, oldLookNavigate);
+    const stopNew = startShareLinkHandling(newNavigate, newLookNavigate);
+    try {
+      stopOld();
+      const shareId = freshShareId();
+      await act(async () => {
+        emitLink(handoffUri(shareId));
+      });
+      await flush();
+
+      expect(consumeShareMock()).toHaveBeenCalledWith(shareId);
+      expect(newNavigate).toHaveBeenCalledWith('ShareImport', {
+        payload: { kind: 'url', url: SOURCE_URL },
+      });
+      expect(oldNavigate).not.toHaveBeenCalled();
+      expect(linkHandlerListeners).toHaveLength(1);
+
+      await act(async () => {
+        emitLink(handoffUri(shareId));
+      });
+      await flush();
+      expect(consumeShareMock()).toHaveBeenCalledTimes(1);
+      expect(newNavigate).toHaveBeenCalledTimes(1);
+    } finally {
+      stopNew();
+      stopOld();
+    }
+  });
+
   test('no diagnostics emit shared URLs, URIs, share ids, or payload data', async () => {
     const logSpy = jest.spyOn(console, 'log');
     const infoSpy = jest.spyOn(console, 'info');
@@ -349,6 +403,7 @@ describe('share handoff routing', () => {
     const idA = freshShareId();
     const idB = freshShareId();
     await render(<App />);
+    await waitFor(() => expect(linkHandlerListeners).toHaveLength(1));
     await act(async () => {
       emitLink(handoffUri(idA));
     });
@@ -356,6 +411,7 @@ describe('share handoff routing', () => {
       emitLink(handoffUri(idB));
     });
     await waitFor(() => expect(consumeShareMock()).toHaveBeenCalledTimes(2));
+    await flush();
     expect(await screen.findByText('Preparing shared item')).toBeTruthy();
 
     const emitted = [logSpy, infoSpy, warnSpy, errorSpy]
@@ -488,6 +544,213 @@ describe('ShareImportScreen flow', () => {
     );
   }
 
+  function preview(id = IMPORT_ID) {
+    return {
+      importId: id,
+      previewUrl: `${BASE_URL}/share/imports/${id}/preview.png`,
+      previewExpiresAt: '2026-10-03T00:05:00Z',
+      sourceTitle: 'Linen Shirt',
+      sourceSiteName: 'example.invalid',
+    };
+  }
+
+  test('READY previews the item, sends owner corrections, and never claims saved before persistence', async () => {
+    const confirmed = {
+      id: 'vault-item-1',
+      sourceReferenceId: 'source-ref-1',
+      createdAt: '2026-10-03T00:00:00Z',
+    };
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(201, ready()))
+      .mockResolvedValueOnce(jsonResponse(200, preview()))
+      .mockResolvedValueOnce(jsonResponse(201, confirmed));
+    const view = await render(
+      <ShareImportScreen payload={{ kind: 'url', url: SOURCE_URL }} api={api()} />,
+    );
+    expect(await view.findByText('Shared item ready')).toBeTruthy();
+
+    // The owner-scoped preview is shown, with its safe source metadata.
+    const image = await view.findByLabelText('Shared item preview');
+    expect(image.props.source.uri).toBe(
+      `${BASE_URL}/share/imports/${IMPORT_ID}/preview.png`,
+    );
+    expect(view.getByText('Linen Shirt')).toBeTruthy();
+    expect(view.getByText('example.invalid')).toBeTruthy();
+
+    // Corrected metadata is editable before the item is persisted.
+    await act(async () => {
+      fireEvent.changeText(view.getByLabelText('Item name'), '  Blue Shirt  ');
+    });
+    await act(async () => {
+      fireEvent.press(view.getByLabelText('TOP'));
+    });
+
+    await act(async () => {
+      fireEvent.press(await view.findByText('Save to Vault'));
+    });
+
+    // Persistence goes through the mounted confirm route, bound to the
+    // resolved importId — never by replaying resolution — and carries only the
+    // corrections the owner actually made (the name is trimmed).
+    const confirmPosts = fetchMock.mock.calls.filter(call =>
+      requestUrl(call[0]).endsWith(`/share/imports/${IMPORT_ID}/confirm`),
+    );
+    expect(confirmPosts).toHaveLength(1);
+    expect(confirmPosts[0][1].method).toBe('POST');
+    expect(JSON.parse(confirmPosts[0][1].body)).toEqual({
+      name: 'Blue Shirt',
+      category: 'TOP',
+    });
+    // Only the persisted confirm response may present the saved state.
+    expect(await view.findByText('Saved to your Vault')).toBeTruthy();
+    // One share still creates at most one import: the save path never POSTs
+    // /share/imports again.
+    expect(
+      fetchMock.mock.calls.filter(call =>
+        requestUrl(call[0]).endsWith('/share/imports'),
+      ),
+    ).toHaveLength(1);
+    expect(view.queryByText(/https?:\/\//)).toBeNull();
+  });
+
+  test('a preview failure does not block saving the resolved item', async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(201, ready()))
+      .mockRejectedValueOnce(new Error('preview unavailable'))
+      .mockResolvedValueOnce(
+        jsonResponse(201, {id: 'vault-item-1', sourceReferenceId: 'source-ref-1'}),
+      );
+    const view = await render(
+      <ShareImportScreen payload={{ kind: 'url', url: SOURCE_URL }} api={api()} />,
+    );
+    expect(await view.findByText('Shared item ready')).toBeTruthy();
+    expect(view.queryByLabelText('Shared item preview')).toBeNull();
+
+    await act(async () => {
+      fireEvent.press(await view.findByText('Save to Vault'));
+    });
+    expect(await view.findByText('Saved to your Vault')).toBeTruthy();
+    // No correction was made, so the confirm request carries no body.
+    const confirm = fetchMock.mock.calls.find(call =>
+      requestUrl(call[0]).endsWith(`/share/imports/${IMPORT_ID}/confirm`),
+    );
+    expect(confirm?.[1].body).toBeUndefined();
+  });
+
+  test('choosing a collection sends exactly that one collectionId, and a second choice replaces it', async () => {
+    // The picker parses the real CollectionsController representation, so the
+    // fixture carries the fields the route actually returns.
+    const collections = [
+      {
+        id: 'col-1',
+        name: 'Work',
+        createdAt: '2026-09-01T00:00:00Z',
+        updatedAt: '2026-09-01T00:00:00Z',
+        items: [],
+      },
+      {
+        id: 'col-2',
+        name: 'Weekend',
+        createdAt: '2026-09-01T00:00:00Z',
+        updatedAt: '2026-09-01T00:00:00Z',
+        items: [],
+      },
+    ];
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = requestUrl(input);
+      if (url.endsWith('/share/imports')) {
+        return jsonResponse(201, ready());
+      }
+      if (url.endsWith(`/share/imports/${IMPORT_ID}/preview`)) {
+        return jsonResponse(200, preview());
+      }
+      if (url.endsWith('/collections')) {
+        return jsonResponse(200, collections);
+      }
+      if (url.endsWith(`/share/imports/${IMPORT_ID}/confirm`)) {
+        return jsonResponse(201, {
+          id: 'vault-item-1',
+          sourceReferenceId: 'source-ref-1',
+        });
+      }
+      return Promise.reject(new Error(`unexpected request: ${url}`));
+    });
+    const view = await render(
+      <ShareImportScreen payload={{ kind: 'url', url: SOURCE_URL }} api={api()} />,
+    );
+    expect(await view.findByText('Shared item ready')).toBeTruthy();
+
+    // The picker fetches on reveal, so an untouched screen issues no
+    // collections request at all.
+    expect(
+      fetchMock.mock.calls.filter(call => requestUrl(call[0]).endsWith('/collections')),
+    ).toHaveLength(0);
+
+    await act(async () => {
+      fireEvent.press(await view.findByText('Add to a collection'));
+    });
+    expect(await view.findByLabelText('Membership Work')).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.press(view.getByLabelText('Membership Work'));
+    });
+    await act(async () => {
+      fireEvent.press(view.getByLabelText('Membership Weekend'));
+    });
+
+    await act(async () => {
+      fireEvent.press(await view.findByText('Save to Vault'));
+    });
+
+    // The confirm contract takes one collectionId; the later choice wins
+    // instead of the first being silently kept or both being dropped.
+    const confirm = fetchMock.mock.calls.find(call =>
+      requestUrl(call[0]).endsWith(`/share/imports/${IMPORT_ID}/confirm`),
+    );
+    expect(JSON.parse(confirm?.[1].body)).toEqual({collectionId: 'col-2'});
+  });
+
+  test('a transient confirm failure keeps READY and a retry converges on one saved item', async () => {
+    const confirmed = {id: 'vault-item-1', sourceReferenceId: 'source-ref-1'};
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(201, ready()))
+      .mockResolvedValueOnce(jsonResponse(200, preview()))
+      .mockRejectedValueOnce(new Error('network down'))
+      .mockResolvedValueOnce(jsonResponse(201, confirmed));
+    const view = await render(
+      <ShareImportScreen payload={{ kind: 'url', url: SOURCE_URL }} api={api()} />,
+    );
+    expect(await view.findByText('Shared item ready')).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.press(await view.findByText('Save to Vault'));
+    });
+    // A failed confirm must not claim the item was kept.
+    expect(await view.findByText('Could not save this item to your Vault. Try again.')).toBeTruthy();
+    expect(view.queryByText('Saved to your Vault')).toBeNull();
+
+    await act(async () => {
+      fireEvent.press(await view.findByText('Save to Vault'));
+    });
+    expect(await view.findByText('Saved to your Vault')).toBeTruthy();
+
+    // Both attempts targeted the SAME importId: the server derives saved-item
+    // identity from (owner, import), so a lost-response retry cannot create a
+    // second item — and no new import was created either.
+    const confirmPaths = fetchMock.mock.calls
+      .map(call => requestUrl(call[0]))
+      .filter(url => url.includes('/confirm'));
+    expect(confirmPaths).toEqual([
+      `${BASE_URL}/share/imports/${IMPORT_ID}/confirm`,
+      `${BASE_URL}/share/imports/${IMPORT_ID}/confirm`,
+    ]);
+    expect(
+      fetchMock.mock.calls.filter(call =>
+        requestUrl(call[0]).endsWith('/share/imports'),
+      ),
+    ).toHaveLength(1);
+  });
+
   test('URL payload renders READY with the exact URL request mapping', async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(201, ready()));
     const view = await render(
@@ -550,7 +813,7 @@ describe('ShareImportScreen flow', () => {
     });
   });
 
-  test('upload failure releases the staged image once, sends no import POST, and offers retry', async () => {
+  test('retryable upload failure preserves the staged image and exposes Try Again without chooser actions', async () => {
     (NativeModules as unknown as Record<string, unknown>).ShareHandoff = {
       consumeShare: jest.fn(),
       releaseStagedImage: jest.fn(),
@@ -566,16 +829,17 @@ describe('ShareImportScreen flow', () => {
         api={api()}
       />,
     );
-    expect(await view.findByText('Try Again')).toBeTruthy();
+    expect(await view.findByText('Could not prepare the shared item')).toBeTruthy();
     expect(view.queryByText('Choose Screenshot')).toBeNull();
+    expect(view.getByText('Try Again')).toBeTruthy();
+    expect(view.queryByText('Upload Image')).toBeNull();
 
     const release = (
       NativeModules as unknown as {
         ShareHandoff: { releaseStagedImage: jest.Mock };
       }
     ).ShareHandoff.releaseStagedImage;
-    expect(release).toHaveBeenCalledTimes(1);
-    expect(release).toHaveBeenCalledWith(STAGED_URI);
+    expect(release).not.toHaveBeenCalled();
     expect(importPostCall()).toBeUndefined();
   });
 
@@ -589,7 +853,7 @@ describe('ShareImportScreen flow', () => {
       "We found the product link, but couldn't reliably extract the item image.",
     );
     expect(body).toBeTruthy();
-    expect(body.props.accessibilityLiveRegion).toBe('polite');
+    expect(body.parent?.props.accessibilityLiveRegion).toBe('polite');
     expect(view.getByText('Choose Screenshot')).toBeTruthy();
     expect(view.getByText('Upload Image')).toBeTruthy();
     expect(view.queryByText('Try Again')).toBeNull();
@@ -659,7 +923,7 @@ describe('ShareImportScreen flow', () => {
     // busy cleared; pressing earlier would be swallowed by the guard.
     await waitFor(() =>
       expect(
-        view.getByText('Could not attach that image. Try another one.'),
+        view.getByText('Could not prepare the shared item'),
       ).toBeTruthy(),
     );
 
@@ -693,6 +957,22 @@ describe('ShareImportScreen flow', () => {
 
     expect(view.getByText('Add a photo to continue')).toBeTruthy();
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  test('HTTP 5xx exposes retryable Try Again without chooser actions', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(503, null));
+    const view = await render(
+      <ShareImportScreen
+        payload={{ kind: 'url', url: SOURCE_URL }}
+        api={api()}
+      />,
+    );
+
+    expect(await view.findByText('Could not prepare the shared item')).toBeTruthy();
+    expect(view.getByText('This looks temporary. Try again.')).toBeTruthy();
+    expect(view.getByText('Try Again')).toBeTruthy();
+    expect(view.queryByText('Choose Screenshot')).toBeNull();
+    expect(view.queryByText('Upload Image')).toBeNull();
   });
 
   test('FAILED_RETRYABLE offers retry alongside screenshot and upload recovery for resolver outage; retry re-invokes the resolver', async () => {
@@ -779,6 +1059,63 @@ describe('ShareImportScreen flow', () => {
     // replay under the same key rather than mint a second resolver.
     expect(secondKey).toBe(firstKey);
   });
+  test('image payload transient import rejection releases staged media and exposes Try Again without chooser actions', async () => {
+    (NativeModules as unknown as Record<string, unknown>).ShareHandoff = {
+      consumeShare: jest.fn(),
+      releaseStagedImage: jest.fn(),
+    };
+    fetchMock
+      .mockImplementationOnce(() => fileResponse(PHOTO_BYTES, 'image/png'))
+      .mockResolvedValueOnce(ticketResponse())
+      .mockResolvedValueOnce(emptyResponse(200))
+      .mockResolvedValueOnce(emptyResponse(200))
+      .mockResolvedValueOnce(
+        jsonResponse(503, {
+          code: 'DEPENDENCY_UNAVAILABLE',
+        }),
+      )
+
+    const view = await render(
+      <ShareImportScreen
+        payload={{ kind: 'image', localImageUri: STAGED_URI }}
+        api={api()}
+      />,
+    );
+    expect(await view.findByText('Could not prepare the shared item')).toBeTruthy();
+    expect(view.getByText('Try Again')).toBeTruthy();
+    expect(view.queryByText('Choose Screenshot')).toBeNull();
+    expect(view.queryByText('Upload Image')).toBeNull();
+
+    const importPosts = fetchMock.mock.calls.filter(
+      call =>
+        requestUrl(call[0]).endsWith('/share/imports') &&
+        call[1]?.method === 'POST',
+    );
+    expect(importPosts).toHaveLength(1);
+    expect(JSON.parse(importPosts[0][1].body)).toEqual({
+      kind: 'IMAGE',
+      uploadId: UPLOAD_ID,
+    });
+
+    const [firstKey] = importPosts.map(call => call[1].headers['Idempotency-Key']);
+    expect(typeof firstKey).toBe('string');
+    expect(firstKey.length).toBeGreaterThan(0);
+
+    // Exactly one upload ticket initiated across initial attempt and retry
+    const ticketPosts = fetchMock.mock.calls.filter(
+      call =>
+        requestUrl(call[0]) === `${BASE_URL}/uploads` && call[1]?.method === 'POST',
+    );
+    expect(ticketPosts).toHaveLength(1);
+
+    const release = (
+      NativeModules as unknown as {
+        ShareHandoff: { releaseStagedImage: jest.Mock };
+      }
+    ).ShareHandoff.releaseStagedImage;
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(release).toHaveBeenCalledWith(STAGED_URI);
+  });
 
   test('recovery attach returning 202 RESOLVING does not show READY', async () => {
     fetchMock
@@ -824,6 +1161,45 @@ describe('ShareImportScreen flow', () => {
     ).toBeTruthy();
     expect(view.queryByText('Try Again')).toBeNull();
     expect(view.queryByText('Choose Screenshot')).toBeNull();
+  });
+
+  // C23: an expired session must not be reported as an unsupported share, and
+  // must not send the user round in circles by telling them to re-share.
+  test('an expired session is reported as a session problem with no re-share advice', async () => {
+    const resolver = jest.fn(async (): Promise<ShareImportResponse> => {
+      throw new ApiProblemError('UNAUTHORIZED');
+    });
+    const view = await render(
+      <ShareImportScreen
+        payload={{ kind: 'url', url: SOURCE_URL }}
+        resolver={resolver as unknown as ShareImportResolver}
+      />,
+    );
+
+    expect(
+      await view.findByText(
+        'Your session has expired. Sign in again to continue this share.',
+      ),
+    ).toBeTruthy();
+    expect(view.queryByText(/Start a new share from its app/)).toBeNull();
+    expect(view.queryByText('Try Again')).toBeNull();
+    expect(view.queryByText('Choose Screenshot')).toBeNull();
+  });
+
+  test('an unrelated terminal code keeps the generic start-again advice', async () => {
+    const resolver = jest.fn(async (): Promise<ShareImportResponse> => {
+      throw new ApiProblemError('IMPORT_STATE_CONFLICT');
+    });
+    const view = await render(
+      <ShareImportScreen
+        payload={{ kind: 'url', url: SOURCE_URL }}
+        resolver={resolver as unknown as ShareImportResolver}
+      />,
+    );
+
+    expect(
+      await view.findByText('This shared import has already changed. Share the item again from its app.'),
+    ).toBeTruthy();
   });
 
   test('unmount aborts the in-flight resolution via the signal', async () => {

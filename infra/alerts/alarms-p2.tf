@@ -1,6 +1,15 @@
 # Terraform code only — apply prohibited for slice-68.
 
 # Plan §68 P2 Condition 1: Single retailer/source import degraded
+#
+# SEARCH, not metric{} blocks: SourceResolverMetrics.record publishes
+# share.import.resolver.outcome with tags {resolver, status, reason}
+# (SourceResolverMetrics.java:86-89), so a metric{} block naming {resolver,
+# status} matches no published series (reason is always present). SEARCH filters
+# resolver AND status while aggregating over reason — the failure ratio over
+# every reason the publisher emits. Status domain verified:
+# ResolutionResult status names plus the literal "EXCEPTION"
+# (SourceResolverMetrics.java:70,:76).
 resource "aws_cloudwatch_metric_alarm" "import_resolver_degraded" {
   for_each = toset(var.source_resolver_ids)
 
@@ -16,46 +25,36 @@ resource "aws_cloudwatch_metric_alarm" "import_resolver_degraded" {
 
   metric_query {
     id          = "e1"
-    expression  = "m1/m2"
+    expression  = "IF(m2>0, (m1+m3)/m2, 0)"
     label       = "Resolver ${each.key} Failure Ratio"
     return_data = true
   }
 
   metric_query {
-    id          = "m1"
-    return_data = false
-
-    metric {
-      metric_name = "share.import.resolver.outcome.count"
-      namespace   = var.metric_namespace
-      period      = 3600
-      stat        = "Sum"
-
-      dimensions = {
-        resolver = each.key
-        status   = var.resolver_failure_status
-      }
-    }
+    id         = "m1"
+    expression = "SEARCH('{${var.metric_namespace}} share.import.resolver.outcome', 'Sum', 3600, { resolver = \"${each.key}\", status = \"${var.resolver_failure_status}\" })"
   }
 
   metric_query {
-    id          = "m2"
-    return_data = false
+    id         = "m3"
+    expression = "SEARCH('{${var.metric_namespace}} share.import.resolver.outcome', 'Sum', 3600, { resolver = \"${each.key}\", status = \"EXCEPTION\" })"
+  }
 
-    metric {
-      metric_name = "share.import.resolver.outcome.count"
-      namespace   = var.metric_namespace
-      period      = 3600
-      stat        = "Sum"
-
-      dimensions = {
-        resolver = each.key
-      }
-    }
+  metric_query {
+    id         = "m2"
+    expression = "SEARCH('{${var.metric_namespace}} share.import.resolver.outcome', 'Sum', 3600, { resolver = \"${each.key}\" })"
   }
 }
 
 # Plan §68 P2 Condition 2: Single garment category quality degraded
+#
+# SEARCH, not metric{} blocks: generation.quality publishes the full tag set
+# {policy_version, decision, reason_code, category} (GenerationMetrics.java:168-173),
+# so a metric{} block naming {decision, category} can never match. SEARCH filters
+# decision AND category while aggregating over policy_version and reason_code —
+# the per-category reject ratio over the whole population the publisher emits,
+# which is exactly what this alarm means. var.garment_categories values are
+# validated canonical category values (GenerationMetrics.java:621-634).
 resource "aws_cloudwatch_metric_alarm" "category_quality_degraded" {
   for_each = toset(var.garment_categories)
 
@@ -77,53 +76,17 @@ resource "aws_cloudwatch_metric_alarm" "category_quality_degraded" {
   }
 
   metric_query {
-    id          = "q1"
-    return_data = false
-
-    metric {
-      metric_name = "generation.quality.count"
-      namespace   = var.metric_namespace
-      period      = 3600
-      stat        = "Sum"
-
-      dimensions = {
-        decision = "RETRY"
-        category = each.key
-      }
-    }
+    id         = "q1"
+    expression = "SEARCH('{${var.metric_namespace}} generation.quality', 'Sum', 3600, { decision = \"RETRY\", category = \"${each.key}\" })"
   }
 
   metric_query {
-    id          = "q2"
-    return_data = false
-
-    metric {
-      metric_name = "generation.quality.count"
-      namespace   = var.metric_namespace
-      period      = 3600
-      stat        = "Sum"
-
-      dimensions = {
-        decision = "FAIL"
-        category = each.key
-      }
-    }
+    id         = "q2"
+    expression = "SEARCH('{${var.metric_namespace}} generation.quality', 'Sum', 3600, { decision = \"FAIL\", category = \"${each.key}\" })"
   }
 
   metric_query {
-    id          = "q3"
-    return_data = false
-
-    metric {
-      metric_name = "generation.quality.count"
-      namespace   = var.metric_namespace
-      period      = 3600
-      stat        = "Sum"
-
-      dimensions = {
-        decision = "PASS"
-        category = each.key
-      }
-    }
+    id         = "q3"
+    expression = "SEARCH('{${var.metric_namespace}} generation.quality', 'Sum', 3600, { decision = \"PASS\", category = \"${each.key}\" })"
   }
 }

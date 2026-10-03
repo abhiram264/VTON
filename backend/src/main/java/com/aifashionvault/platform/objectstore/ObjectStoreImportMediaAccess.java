@@ -3,7 +3,6 @@ package com.aifashionvault.platform.objectstore;
 import java.io.InputStream;
 import java.util.Optional;
 
-import software.amazon.awssdk.services.s3.model.S3Exception;
 
 import com.aifashionvault.importer.ImportMediaAccess;
 import com.aifashionvault.shared.StorageKey;
@@ -40,7 +39,10 @@ public final class ObjectStoreImportMediaAccess implements ImportMediaAccess {
 		if (uploadId == null) {
 			throw new IllegalArgumentException("uploadId is required");
 		}
-		throw new UnsupportedOperationException("findVerifiedUpload requires an owner; use the overload");
+		if (this.ownerId == null) {
+			throw new IllegalArgumentException("ownerId is required");
+		}
+		return findVerifiedUpload(this.ownerId, uploadId);
 	}
 
 	public Optional<VerifiedImage> findVerifiedUpload(UserId ownerId, UploadId uploadId) {
@@ -88,7 +90,10 @@ public final class ObjectStoreImportMediaAccess implements ImportMediaAccess {
 
 	@Override
 	public ClaimOutcome claimVerifiedUpload(VerifiedImage upload, StorageKey destination) {
-		throw new UnsupportedOperationException("claimVerifiedUpload requires an owner; use the overload");
+		if (this.ownerId == null) {
+			throw new IllegalArgumentException("ownerId is required");
+		}
+		return claimVerifiedUpload(this.ownerId, upload, destination);
 	}
 
 	public ClaimOutcome claimVerifiedUpload(UserId ownerId, VerifiedImage upload, StorageKey destination) {
@@ -116,6 +121,9 @@ public final class ObjectStoreImportMediaAccess implements ImportMediaAccess {
 			return ClaimOutcome.CLAIMED;
 		}
 		if (result instanceof ClaimResult.Replay) {
+			// M03 follow-up: consuming staging on verified replay prevents
+			// orphaned staging objects when the destination was already claimed.
+			consumeStaging(source);
 			return ClaimOutcome.REPLAYED;
 		}
 		return ClaimOutcome.CONFLICT;
@@ -140,10 +148,10 @@ public final class ObjectStoreImportMediaAccess implements ImportMediaAccess {
 		if (destination == null) {
 			throw new IllegalArgumentException("destination is required");
 		}
-		if (contentLength < 0) {
-			throw new IllegalArgumentException("contentLength must not be negative");
+		if (contentLength <= 0) {
+			throw new IllegalArgumentException("contentLength must be positive");
 		}
-		String normalized = ImageMediaPolicy.requireDeclaration(contentType, Math.max(contentLength, 1L));
+		String normalized = ImageMediaPolicy.requireDeclaration(contentType, contentLength);
 		if (writer == null || ownerId == null) {
 			throw new IllegalStateException("publishing fetched images requires an owner-scoped adapter");
 		}
@@ -156,19 +164,23 @@ public final class ObjectStoreImportMediaAccess implements ImportMediaAccess {
 		if (key == null) {
 			throw new IllegalArgumentException("key is required");
 		}
+		ObjectRef target = new ObjectRef(StorageDomain.VAULT, key.value());
 		try {
-			store.delete(new ObjectRef(StorageDomain.VAULT, key.value()));
+			store.delete(target);
+		}
+		catch (ObjectStoreExceptions.StagedObjectMissingException ex) {
+			// Already absent is an idempotent delete success.
 		}
 		catch (ObjectStoreExceptions.ObjectStoreUnavailableException ex) {
-			// best-effort publish cleanup: never mask the retryable publish failure
+			// Re-throw typed provider failure so callers (e.g. M03 account media purge)
+			// observe the failure and retain retryable records.
+			throw ex;
 		}
-		catch (S3Exception ex) {
-			// store.delete rethrows service-side S3 failures raw; publish
-			// cleanup must stay best-effort and typed
-			throw new ObjectStoreExceptions.ObjectStoreUnavailableException("object store is unavailable");
+		catch (RuntimeException ex) {
+			throw new ObjectStoreExceptions.ObjectStoreUnavailableException(
+					"object store is unavailable during delete");
 		}
 	}
-
 	private static String claimMarker(UserId ownerId, StorageKey destination) {
 		return "import:" + ownerId.value() + ":" + destination.value();
 	}

@@ -5,6 +5,7 @@ import type {
   LocalPhoto,
 } from './types';
 import { apiRequest, rejectDataUri, requireOk, uploadMedia } from './http';
+import { productionApiConfig } from '../../config/apiConfig';
 
 function matchHeader(revision: number): string {
   return `"${revision}"`;
@@ -23,20 +24,53 @@ function normalizeContentType(value: string | null, uri: string): string {
 }
 
 function parseAvatar(value: unknown): AvatarResource {
-  if (value === null || typeof value !== 'object') {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error('Invalid avatar response');
   }
   const row = value as Record<string, unknown>;
+
+  if (
+    typeof row.id !== 'string' ||
+    row.id.trim().length === 0 ||
+    typeof row.imageId !== 'string' ||
+    row.imageId.trim().length === 0 ||
+    typeof row.revision !== 'number' ||
+    !Number.isInteger(row.revision) ||
+    row.revision < 1 ||
+    typeof row.width !== 'number' ||
+    !Number.isInteger(row.width) ||
+    row.width <= 0 ||
+    typeof row.height !== 'number' ||
+    !Number.isInteger(row.height) ||
+    row.height <= 0 ||
+    (row.mediaType !== 'image/jpeg' && row.mediaType !== 'image/png') ||
+    typeof row.displayUrl !== 'string' ||
+    row.displayUrl.trim().length === 0 ||
+    typeof row.displayExpiresAt !== 'string' ||
+    row.displayExpiresAt.trim().length === 0 ||
+    Number.isNaN(Date.parse(row.displayExpiresAt))
+  ) {
+    throw new Error('Invalid avatar response');
+  }
+
+  if (
+    row.warnings !== undefined &&
+    (!Array.isArray(row.warnings) ||
+      !row.warnings.every(item => typeof item === 'string'))
+  ) {
+    throw new Error('Invalid avatar response');
+  }
+
   return {
-    id: String(row.id),
-    imageId: String(row.imageId),
-    revision: Number(row.revision),
-    width: Number(row.width),
-    height: Number(row.height),
-    mediaType: String(row.mediaType),
-    displayUrl: String(row.displayUrl),
-    displayExpiresAt: String(row.displayExpiresAt),
-    warnings: Array.isArray(row.warnings) ? row.warnings.map(String) : [],
+    id: row.id,
+    imageId: row.imageId,
+    revision: row.revision,
+    width: row.width,
+    height: row.height,
+    mediaType: row.mediaType,
+    displayUrl: row.displayUrl,
+    displayExpiresAt: row.displayExpiresAt,
+    warnings: Array.isArray(row.warnings) ? [...row.warnings] : [],
   };
 }
 
@@ -113,7 +147,4 @@ export function createAvatarApi(config: AvatarApiConfig): AvatarApi {
   };
 }
 
-export const avatarApi = createAvatarApi({
-  baseUrl: '',
-  getAccessToken: () => null,
-});
+export const avatarApi = createAvatarApi(productionApiConfig);
