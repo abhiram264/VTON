@@ -7,6 +7,10 @@ import { vaultApi } from '../features/vault/vaultApi';
 import { avatarApi } from '../features/my-model/avatarApi';
 import { generationApi, pollGeneration } from '../features/generation/generationApi';
 import type { CoarseGenerationPhase } from '../features/generation/types';
+import {
+  CONSENT_REQUIRED_BODY,
+  CONSENT_REQUIRED_CODE,
+} from '../features/generation/failureContract';
 
 type Props = {
   studioSessionId?: string;
@@ -364,7 +368,14 @@ export default function StudioScreen({ studioSessionId, sourceLookId, selectedVa
       });
       if (!isCurrent()) return;
       if (completed.status === 'FAILED') {
-        setNotice(`Generation failed${completed.failureCode ? ` (${completed.failureCode})` : ''}. Try again.`);
+        // The consent gate is not a transient failure: "Try again" cannot
+        // succeed until the user grants the transfer consent, so it gets the
+        // remedy instead of the raw reason code plus retry advice.
+        setNotice(
+          completed.failureCode === CONSENT_REQUIRED_CODE
+            ? CONSENT_REQUIRED_BODY
+            : `Generation failed${completed.failureCode ? ` (${completed.failureCode})` : ''}. Try again.`,
+        );
       } else if (!completed.lookId) {
         setNotice('Generation completed without a Look. Try again.');
       } else {

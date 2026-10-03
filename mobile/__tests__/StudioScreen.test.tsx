@@ -7,6 +7,7 @@ import { pollGeneration } from '../src/features/generation/generationApi';
 import type { GenerationResource } from '../src/features/generation/types';
 import * as featureFlags from '../src/config/featureFlags';
 import { ApiProblemError } from '../src/features/my-model/http';
+import { CONSENT_REQUIRED_BODY } from '../src/features/generation/failureContract';
 
 jest.mock('../src/features/studio/studioApi', () => ({
   ...jest.requireActual('../src/features/studio/studioApi'),
@@ -471,4 +472,30 @@ test('a transient draft-load failure keeps the connection wording', async () => 
   expect(
     await screen.findByText('Could not load your Studio draft. Check the connection and try again.'),
   ).toBeTruthy();
+});
+
+// The consent gate is not a transient failure: a raw reason code plus "Try
+// again" would send the user round in circles.
+test('a consent refusal in Studio names the remedy instead of a raw code and retry', async () => {
+  jest.mocked(studioApi.get).mockResolvedValue({ sessionId: 'session-1', updatedAt: '2026-10-03T00:00:00Z', itemIds: ['item-top'] });
+  jest.mocked(vaultApi.list).mockResolvedValue([
+    { id: 'item-top', name: 'Blue shirt', category: 'TOP', createdAt: '2026-10-01T00:00:00Z' },
+  ] as never);
+  jest.mocked(studioApi.generate).mockResolvedValue(acceptedGeneration);
+  jest.mocked(pollGeneration).mockResolvedValue({
+    ...acceptedGeneration,
+    status: 'FAILED',
+    phase: 'FAILED',
+    failureCode: 'CONSENT_REQUIRED',
+  });
+
+  await render(
+    <StudioScreen studioSessionId="session-1" onAddFromVault={noop} onAvatar={noop} onOpenLook={noop} onProfile={noop} />,
+  );
+
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Generate' })).toBeEnabled());
+  fireEvent.press(screen.getByRole('button', { name: 'Generate' }));
+
+  expect(await screen.findByText(CONSENT_REQUIRED_BODY)).toBeTruthy();
+  expect(screen.queryByText(/Generation failed \(CONSENT_REQUIRED\)/)).toBeNull();
 });
