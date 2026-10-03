@@ -27,6 +27,8 @@ import type {
 import {
   ACTION_CHOOSE_ANOTHER_PHOTO,
   ACTION_TRY_AGAIN,
+  CONSENT_REQUIRED_BODY,
+  CONSENT_REQUIRED_CODE,
   OUTAGE_BODY,
   OUTAGE_TITLE,
   QUALITY_FAILURE_BODY,
@@ -367,6 +369,17 @@ export default function GenerateScreen({
         setNotice(
           REJECTION_NOTICES[result.code ?? ''] ?? 'That image cannot be used.',
         );
+        return;
+      }
+      if (result.code === CONSENT_REQUIRED_CODE) {
+        // The consent gate refused the transfer. Retrying cannot fix that, and
+        // offering it as a retry would both mislead the user and mint a NEW
+        // chargeable request for a refusal that will repeat. The notice names
+        // the remedy and where it lives; onMissingModel is the existing route
+        // to the My Model screen, which hosts the consent controls.
+        setChargeableRetry(false);
+        setNotice(CONSENT_REQUIRED_BODY);
+        onMissingModel?.();
         return;
       }
       if (result.code === 'QUALITY_REJECTED') {

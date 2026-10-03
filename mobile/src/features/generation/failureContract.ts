@@ -7,6 +7,22 @@ export const AVATAR_FAILURE_BODY =
 export const EXTRACTION_FAILURE_BODY =
   "We found the product link, but couldn't reliably extract the item image.";
 
+/**
+ * The server's consent-gate terminal reason. The provider-transfer boundary
+ * refuses to read or transfer media without an active third-party AI transfer
+ * consent, and reports it as this terminal reason rather than a generic
+ * failure — so the client must not answer it with "try again", which would
+ * fail identically and, worse, would be a NEW chargeable request.
+ */
+export const CONSENT_REQUIRED_CODE = 'CONSENT_REQUIRED';
+
+/**
+ * Names the remedy and where it lives. The consent controls are on the My
+ * Model surface, so the notice points there instead of at a retry.
+ */
+export const CONSENT_REQUIRED_BODY =
+  'Your consent for third-party AI transfer is not active, so this Look was not created. Turn it on under Consent in My Model, then try again.';
+
 export const ACTION_TRY_AGAIN = 'Try Again';
 export const ACTION_CHOOSE_ANOTHER_PHOTO = 'Choose Another Photo';
 export const ACTION_CHOOSE_SCREENSHOT = 'Choose Screenshot';
