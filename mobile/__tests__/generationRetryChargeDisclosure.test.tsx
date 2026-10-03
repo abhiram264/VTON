@@ -11,6 +11,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-
 import GenerateScreen from '../src/screens/GenerateScreen';
 import {
   ACTION_TRY_AGAIN,
+  CONSENT_REQUIRED_BODY,
   RETRY_NEW_CHARGE_NOTICE,
   RETRY_RESUMES_ACCEPTED_NOTICE,
 } from '../src/features/generation/failureContract';
@@ -204,6 +205,26 @@ describe('retry charge disclosure', () => {
     // ...whose only retry re-saves to the Vault and starts no generation.
     expect(screen.getByRole('button', { name: ACTION_TRY_AGAIN })).toBeTruthy();
     expect(screen.queryByText(RETRY_NEW_CHARGE_NOTICE)).toBeNull();
+  });
+
+  test('a consent refusal names the remedy and is not offered as a chargeable retry', async () => {
+    const onMissingModel = jest.fn();
+    const picker = jest.fn().mockResolvedValue(PHOTO_A);
+    globalThis.fetch = jest.fn(terminalFailureFetch('CONSENT_REQUIRED')) as unknown as typeof fetch;
+
+    await render(<GenerateScreen picker={picker} onMissingModel={onMissingModel} />);
+    await act(async () => {
+      fireEvent.press(
+        screen.getByRole('button', { name: 'Choose product photo' }),
+      );
+    });
+
+    expect(await screen.findByText(CONSENT_REQUIRED_BODY)).toBeTruthy();
+    // Retrying cannot fix a missing consent, so the chargeable-retry framing
+    // must be absent, and the user is taken to where the consent lives.
+    expect(screen.queryByText(RETRY_NEW_CHARGE_NOTICE)).toBeNull();
+    expect(screen.queryByText('Could not create the look. Try again.')).toBeNull();
+    expect(onMissingModel).toHaveBeenCalledTimes(1);
   });
 
   test('resuming an accepted generation says it is not a new request', async () => {
